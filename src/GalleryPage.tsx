@@ -1,5 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import "./GalleryPage.css";
+
+interface PhotoCommentRecord {
+  id: string;
+  photoId: string;
+  displayName: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+  viewerOwned: boolean;
+}
 
 interface PhotoRecord {
   id: string;
@@ -11,6 +22,7 @@ interface PhotoRecord {
   imageUrl: string;
   heartCount: number;
   viewerHearted: boolean;
+  comments: PhotoCommentRecord[];
 }
 
 interface GalleryEvent {
@@ -27,6 +39,10 @@ interface GalleryResponse {
 interface HeartResponse {
   hearted: boolean;
   heartCount: number;
+}
+
+interface CommentResponse {
+  comment: PhotoCommentRecord;
 }
 
 interface ErrorResponse {
@@ -48,6 +64,7 @@ function getOrCreateVisitorToken(): string {
   }
 
   const token = crypto.randomUUID();
+
   window.localStorage.setItem(VISITOR_TOKEN_KEY, token);
 
   return token;
@@ -61,7 +78,7 @@ async function getErrorMessage(response: Response): Promise<string> {
       return body.error;
     }
   } catch {
-    // Use the fallback below.
+    // Use the fallback message below.
   }
 
   return `Request failed with status ${response.status}.`;
@@ -69,15 +86,28 @@ async function getErrorMessage(response: Response): Promise<string> {
 
 function GalleryPage({ shareToken }: GalleryPageProps) {
   const [visitorToken] = useState(getOrCreateVisitorToken);
+
   const [displayName, setDisplayName] = useState(
     () => window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
   );
+
   const [gallery, setGallery] = useState<GalleryResponse | null>(null);
+
   const [loadError, setLoadError] = useState<string | null>(null);
+
   const [actionError, setActionError] = useState<string | null>(null);
+
   const [isLoading, setIsLoading] = useState(true);
+
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+
   const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
+
+  const [commentText, setCommentText] = useState("");
+
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+
+  const [commentActionId, setCommentActionId] = useState<string | null>(null);
 
   const selectedPhoto =
     gallery?.photos.find((photo) => photo.id === selectedPhotoId) ?? null;
@@ -130,27 +160,45 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     };
   }, [shareToken, visitorToken]);
 
+  async function resolveDisplayName(): Promise<string | null> {
+    const existingName = displayName.trim();
+
+    if (existingName) {
+      return existingName;
+    }
+
+    const enteredName = window.prompt("What should the photographer call you?");
+
+    if (enteredName === null) {
+      return null;
+    }
+
+    const resolvedName = enteredName.trim();
+
+    if (resolvedName.length === 0 || resolvedName.length > 80) {
+      setActionError("Your name must be between 1 and 80 characters.");
+
+      return null;
+    }
+
+    window.localStorage.setItem(DISPLAY_NAME_KEY, resolvedName);
+
+    setDisplayName(resolvedName);
+
+    return resolvedName;
+  }
+
   async function toggleHeart(photo: PhotoRecord): Promise<void> {
     let resolvedDisplayName = displayName.trim();
 
-    if (!photo.viewerHearted && !resolvedDisplayName) {
-      const enteredName = window.prompt(
-        "What should the photographer call you?",
-      );
+    if (!photo.viewerHearted) {
+      const resolvedName = await resolveDisplayName();
 
-      if (enteredName === null) {
+      if (!resolvedName) {
         return;
       }
 
-      resolvedDisplayName = enteredName.trim();
-
-      if (resolvedDisplayName.length === 0 || resolvedDisplayName.length > 80) {
-        setActionError("Your name must be between 1 and 80 characters.");
-        return;
-      }
-
-      window.localStorage.setItem(DISPLAY_NAME_KEY, resolvedDisplayName);
-      setDisplayName(resolvedDisplayName);
+      resolvedDisplayName = resolvedName;
     }
 
     setTogglingPhotoId(photo.id);
@@ -217,10 +265,237 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     }
   }
 
+  async function submitComment(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+
+    if (!selectedPhoto) {
+      return;
+    }
+
+    const trimmedComment = commentText.trim();
+
+    if (trimmedComment.length === 0 || trimmedComment.length > 1000) {
+      setActionError("Your comment must be between 1 and 1000 characters.");
+
+      return;
+    }
+
+    const resolvedDisplayName = await resolveDisplayName();
+
+    if (!resolvedDisplayName) {
+      return;
+    }
+
+    setIsSubmittingComment(true);
+    setActionError(null);
+
+    try {
+      const response = await fetch(
+        `/api/galleries/${encodeURIComponent(
+          shareToken,
+        )}/photos/${encodeURIComponent(selectedPhoto.id)}/comments`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-PickPic-Visitor": visitorToken,
+          },
+          body: JSON.stringify({
+            displayName: resolvedDisplayName,
+            body: trimmedComment,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const responseBody = (await response.json()) as CommentResponse;
+
+      setGallery((currentGallery) => {
+        if (!currentGallery) {
+          return currentGallery;
+        }
+
+        return {
+          ...currentGallery,
+          photos: currentGallery.photos.map((photo) =>
+            photo.id === selectedPhoto.id
+              ? {
+                  ...photo,
+                  comments: [...photo.comments, responseBody.comment],
+                }
+              : photo,
+          ),
+        };
+      });
+
+      setCommentText("");
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to add your comment.",
+      );
+    } finally {
+      setIsSubmittingComment(false);
+    }
+  }
+
+  async function editComment(comment: PhotoCommentRecord): Promise<void> {
+    if (!selectedPhoto || !comment.viewerOwned) {
+      return;
+    }
+
+    const enteredBody = window.prompt("Edit your comment:", comment.body);
+
+    if (enteredBody === null) {
+      return;
+    }
+
+    const body = enteredBody.trim();
+
+    if (body.length === 0 || body.length > 1000) {
+      setActionError("Your comment must be between 1 and 1000 characters.");
+
+      return;
+    }
+
+    setCommentActionId(comment.id);
+    setActionError(null);
+
+    try {
+      const response = await fetch(
+        `/api/galleries/${encodeURIComponent(
+          shareToken,
+        )}/photos/${encodeURIComponent(
+          selectedPhoto.id,
+        )}/comments/${encodeURIComponent(comment.id)}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            "X-PickPic-Visitor": visitorToken,
+          },
+          body: JSON.stringify({ body }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const responseBody = (await response.json()) as CommentResponse;
+
+      setGallery((currentGallery) => {
+        if (!currentGallery) {
+          return currentGallery;
+        }
+
+        return {
+          ...currentGallery,
+          photos: currentGallery.photos.map((photo) =>
+            photo.id === selectedPhoto.id
+              ? {
+                  ...photo,
+                  comments: photo.comments.map((currentComment) =>
+                    currentComment.id === comment.id
+                      ? responseBody.comment
+                      : currentComment,
+                  ),
+                }
+              : photo,
+          ),
+        };
+      });
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to edit your comment.",
+      );
+    } finally {
+      setCommentActionId(null);
+    }
+  }
+
+  async function deleteComment(comment: PhotoCommentRecord): Promise<void> {
+    if (!selectedPhoto || !comment.viewerOwned) {
+      return;
+    }
+
+    const shouldDelete = window.confirm("Delete this comment?");
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setCommentActionId(comment.id);
+    setActionError(null);
+
+    try {
+      const response = await fetch(
+        `/api/galleries/${encodeURIComponent(
+          shareToken,
+        )}/photos/${encodeURIComponent(
+          selectedPhoto.id,
+        )}/comments/${encodeURIComponent(comment.id)}`,
+        {
+          method: "DELETE",
+          headers: {
+            "X-PickPic-Visitor": visitorToken,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setGallery((currentGallery) => {
+        if (!currentGallery) {
+          return currentGallery;
+        }
+
+        return {
+          ...currentGallery,
+          photos: currentGallery.photos.map((photo) =>
+            photo.id === selectedPhoto.id
+              ? {
+                  ...photo,
+                  comments: photo.comments.filter(
+                    (currentComment) => currentComment.id !== comment.id,
+                  ),
+                }
+              : photo,
+          ),
+        };
+      });
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to delete your comment.",
+      );
+    } finally {
+      setCommentActionId(null);
+    }
+  }
+
+  function closeLightbox(): void {
+    setSelectedPhotoId(null);
+    setCommentText("");
+    setActionError(null);
+  }
+
   if (isLoading) {
     return (
       <main className="gallery-message">
         <span className="gallery-brand">PickPic</span>
+
         <h1>Loading gallery…</h1>
       </main>
     );
@@ -232,7 +507,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         <a className="gallery-brand" href="/">
           PickPic
         </a>
+
         <h1>Gallery unavailable</h1>
+
         <p>{loadError ?? "This gallery could not be found."}</p>
       </main>
     );
@@ -247,11 +524,14 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
         <div className="gallery-heading">
           <p className="gallery-label">Shared gallery</p>
+
           <h1>{gallery.event.title}</h1>
+
           <p>
             {gallery.photos.length}{" "}
             {gallery.photos.length === 1 ? "photo" : "photos"}
           </p>
+
           <p className="gallery-instructions">
             Heart a photo to request that the photographer edit it.
           </p>
@@ -262,6 +542,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         {actionError && (
           <div className="gallery-action-error" role="alert">
             <span>{actionError}</span>
+
             <button type="button" onClick={() => setActionError(null)}>
               Dismiss
             </button>
@@ -271,6 +552,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         {gallery.photos.length === 0 ? (
           <div className="gallery-empty">
             <h2>No photos yet</h2>
+
             <p>The photographer is still preparing this gallery.</p>
           </div>
         ) : (
@@ -308,6 +590,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                     }
                   >
                     <span aria-hidden="true">♥</span>
+
                     <span>{photo.heartCount}</span>
                   </button>
                 </article>
@@ -327,7 +610,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           <button
             className="lightbox-backdrop"
             type="button"
-            onClick={() => setSelectedPhotoId(null)}
+            onClick={closeLightbox}
             aria-label="Close image"
           />
 
@@ -335,7 +618,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             <button
               className="lightbox-close"
               type="button"
-              onClick={() => setSelectedPhotoId(null)}
+              onClick={closeLightbox}
               aria-label="Close image"
             >
               ×
@@ -361,14 +644,91 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 aria-pressed={selectedPhoto.viewerHearted}
               >
                 <span aria-hidden="true">♥</span>
+
                 <span>
                   {selectedPhoto.viewerHearted
                     ? "Edit requested"
                     : "Request edit"}
                 </span>
+
                 <span>{selectedPhoto.heartCount}</span>
               </button>
             </div>
+
+            <section className="photo-comments">
+              <h2>Comments and edit notes</h2>
+
+              {selectedPhoto.comments.length === 0 ? (
+                <p className="no-comments">No comments yet.</p>
+              ) : (
+                <div className="comment-list">
+                  {selectedPhoto.comments.map((comment) => (
+                    <article key={comment.id}>
+                      <div className="comment-heading">
+                        <strong>{comment.displayName}</strong>
+
+                        {comment.viewerOwned && (
+                          <div className="comment-actions">
+                            <button
+                              type="button"
+                              disabled={commentActionId === comment.id}
+                              onClick={() => void editComment(comment)}
+                            >
+                              Edit
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={commentActionId === comment.id}
+                              onClick={() => void deleteComment(comment)}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <p>{comment.body}</p>
+
+                      {comment.updatedAt !== comment.createdAt && (
+                        <small>Edited</small>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              <form
+                className="comment-form"
+                onSubmit={(event) => void submitComment(event)}
+              >
+                <label htmlFor={`comment-${selectedPhoto.id}`}>
+                  Leave a comment or edit note
+                </label>
+
+                <textarea
+                  id={`comment-${selectedPhoto.id}`}
+                  value={commentText}
+                  onChange={(event) => setCommentText(event.target.value)}
+                  maxLength={1000}
+                  placeholder="For example: Can you remove the stain from my shirt?"
+                  disabled={isSubmittingComment}
+                />
+
+                <div className="comment-form-footer">
+                  <span>{commentText.length}/1000</span>
+
+                  <button
+                    type="submit"
+                    disabled={
+                      isSubmittingComment || commentText.trim().length === 0
+                    }
+                  >
+                    {isSubmittingComment ? "Posting…" : "Post comment"}
+                  </button>
+                </div>
+              </form>
+            </section>
           </div>
         </div>
       )}

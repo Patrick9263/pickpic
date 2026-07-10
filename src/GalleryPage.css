@@ -258,6 +258,121 @@
     background: #f7edf1;
 }
 
+.lightbox-content {
+    max-height: 94vh;
+    overflow-y: auto;
+}
+
+.photo-comments {
+    background: #171717;
+    color: #ffffff;
+    padding: 18px 0 4px;
+}
+
+.photo-comments h2 {
+    font-size: 1rem;
+    margin: 0 0 12px;
+}
+
+.no-comments {
+    color: #aaa69f !important;
+    margin: 0 0 16px !important;
+    text-align: left !important;
+}
+
+.comment-list {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.comment-list article {
+    background: rgb(255 255 255 / 9%);
+    border-radius: 9px;
+    padding: 10px 12px;
+}
+
+.comment-list strong {
+    font-size: 0.75rem;
+}
+
+.comment-list p {
+    color: #ffffff;
+    line-height: 1.45;
+    margin: 4px 0 0;
+    text-align: left;
+}
+
+.comment-form {
+    display: grid;
+    gap: 8px;
+}
+
+.comment-form label {
+    font-size: 0.8rem;
+    font-weight: 700;
+}
+
+.comment-form textarea {
+    background: rgb(255 255 255 / 10%);
+    border: 1px solid rgb(255 255 255 / 20%);
+    border-radius: 9px;
+    color: #ffffff;
+    font: inherit;
+    min-height: 84px;
+    padding: 10px;
+    resize: vertical;
+}
+
+.comment-form textarea:focus {
+    border-color: #ffffff;
+    outline: none;
+}
+
+.comment-form-footer {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+}
+
+.comment-form-footer span {
+    color: #aaa69f;
+    font-size: 0.7rem;
+}
+
+.comment-heading {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.comment-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.comment-actions button {
+    background: transparent;
+    border: 0;
+    color: #d4c9ff;
+    font-size: 0.72rem;
+    padding: 2px;
+}
+
+.comment-actions button:hover:not(:disabled) {
+    background: transparent;
+    color: #ffffff;
+    text-decoration: underline;
+}
+
+.comment-list small {
+    color: #aaa69f;
+    display: block;
+    font-size: 0.68rem;
+    margin-top: 5px;
+}
+
 @media (max-width: 560px) {
     .gallery-photo-card {
         margin-bottom: 6px;

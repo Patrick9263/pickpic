@@ -20,6 +20,7 @@ interface PhotoRecord {
   createdAt: string;
   imageUrl: string;
   heartCount: number;
+  comments: PhotoCommentRecord[];
 }
 
 interface EventsResponse {
@@ -40,6 +41,15 @@ interface CreatePhotoResponse {
 
 interface ErrorResponse {
   error?: string;
+}
+
+interface PhotoCommentRecord {
+  id: string;
+  photoId: string;
+  displayName: string;
+  body: string;
+  createdAt: string;
+  resolvedAt: string | null;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
@@ -467,7 +477,8 @@ function DashboardPage() {
                   const isUploading = uploadingEventId === eventRecord.id;
                   const photos = photosByEvent[eventRecord.id] ?? [];
                   const editRequestCount = photos.filter(
-                    (photo) => photo.heartCount > 0,
+                    (photo) =>
+                      photo.heartCount > 0 || photo.comments.length > 0,
                   ).length;
 
                   return (
@@ -551,7 +562,23 @@ function DashboardPage() {
                                   {" · "}
                                   {photo.heartCount}{" "}
                                   {photo.heartCount === 1 ? "heart" : "hearts"}
+                                  {" · "}
+                                  {photo.comments.length}{" "}
+                                  {photo.comments.length === 1
+                                    ? "comment"
+                                    : "comments"}
                                 </small>
+
+                                {photo.comments.length > 0 && (
+                                  <div className="dashboard-comments">
+                                    {photo.comments.map((comment) => (
+                                      <blockquote key={comment.id}>
+                                        <strong>{comment.displayName}</strong>
+                                        <span>{comment.body}</span>
+                                      </blockquote>
+                                    ))}
+                                  </div>
+                                )}
 
                                 <div className="photo-actions">
                                   {photo.heartCount > 0 && (
