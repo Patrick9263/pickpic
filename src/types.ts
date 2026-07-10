@@ -1,10 +1,5 @@
 export type EventStatus =
-  | "draft"
-  | "uploading"
-  | "ready"
-  | "editing"
-  | "completed"
-  | "archived";
+  "draft" | "uploading" | "ready" | "editing" | "completed" | "archived";
 
 export interface EventRecord {
   id: string;

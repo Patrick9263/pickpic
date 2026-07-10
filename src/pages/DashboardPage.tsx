@@ -28,6 +28,14 @@ interface CreatePhotoResponse {
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 
+async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
+  const body = await fetchJson<PhotosResponse>(
+    `/api/events/${encodeURIComponent(eventId)}/photos`,
+  );
+
+  return body.photos;
+}
+
 function DashboardPage() {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [photosByEvent, setPhotosByEvent] = useState<
@@ -46,14 +54,6 @@ function DashboardPage() {
   const [resolvingCommentId, setResolvingCommentId] = useState<string | null>(
     null,
   );
-
-  async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
-    const body = await fetchJson<PhotosResponse>(
-      `/api/events/${encodeURIComponent(eventId)}/photos`,
-    );
-
-    return body.photos;
-  }
 
   const loadEvents = useCallback(async (): Promise<void> => {
     setIsLoading(true);

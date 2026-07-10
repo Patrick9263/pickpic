@@ -1,11 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { GalleryPhotoRecord, ViewerPhotoCommentRecord } from "../types";
+import type {
+  EventStatus,
+  GalleryPhotoRecord,
+  ViewerPhotoCommentRecord,
+} from "../types";
 import { fetchJson } from "../api";
 import "../styles/GalleryPage.css";
 
 interface GalleryEvent {
   title: string;
-  status: string;
+  status: EventStatus;
   createdAt: string;
 }
 
