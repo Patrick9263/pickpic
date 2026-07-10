@@ -8,7 +8,8 @@
 	"main": "worker/index.ts",
 	"compatibility_date": "2026-07-10",
 	"assets": {
-		"not_found_handling": "single-page-application"
+		"not_found_handling": "single-page-application",
+		"run_worker_first": ["/api/*"]
 	},
 	"observability": {
 		"enabled": true
@@ -22,6 +23,12 @@
 			"binding": "DB",
 			"database_name": "pickpic-db",
 			"database_id": "d31cb43a-46d6-478c-b0cd-81e3df2f0d94"
+		}
+	],
+	"r2_buckets": [
+		{
+			"bucket_name": "pickpic-photos",
+			"binding": "pickpic_photos"
 		}
 	]
 	/**
