@@ -1,29 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import "./GalleryPage.css";
-
-interface PhotoCommentRecord {
-  id: string;
-  photoId: string;
-  displayName: string;
-  body: string;
-  createdAt: string;
-  updatedAt: string;
-  resolvedAt: string | null;
-  viewerOwned: boolean;
-}
-
-interface PhotoRecord {
-  id: string;
-  eventId: string;
-  originalFilename: string;
-  contentType: string;
-  byteSize: number;
-  createdAt: string;
-  imageUrl: string;
-  heartCount: number;
-  viewerHearted: boolean;
-  comments: PhotoCommentRecord[];
-}
+import "../styles/GalleryPage.css";
+import type { PhotoCommentRecord, PhotoRecord } from "../types";
 
 interface GalleryEvent {
   title: string;

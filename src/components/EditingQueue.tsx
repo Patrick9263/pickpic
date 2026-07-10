@@ -1,31 +1,5 @@
-import "./EditingQueue.css";
-
-interface EventRecord {
-  id: string;
-  title: string;
-}
-
-interface PhotoCommentRecord {
-  id: string;
-  photoId: string;
-  displayName: string;
-  body: string;
-  createdAt: string;
-  updatedAt: string;
-  resolvedAt: string | null;
-}
-
-interface PhotoRecord {
-  id: string;
-  eventId: string;
-  originalFilename: string;
-  contentType: string;
-  byteSize: number;
-  createdAt: string;
-  imageUrl: string;
-  heartCount: number;
-  comments: PhotoCommentRecord[];
-}
+import "../styles/EditingQueue.css";
+import type { EventRecord, PhotoCommentRecord, PhotoRecord } from "../types";
 
 interface EditingQueueProps {
   events: EventRecord[];
