@@ -24,6 +24,7 @@ interface PhotoRecord {
   createdAt: string;
   imageUrl: string;
   heartCount: number;
+  comments: PhotoCommentRecord[];
 }
 
 interface PhotoRow {
@@ -50,7 +51,8 @@ interface PublicGalleryEventRow extends PublicGalleryEvent {
   id: string;
 }
 
-interface PublicPhotoRecord extends PhotoRecord {
+interface PublicPhotoRecord extends Omit<PhotoRecord, "comments"> {
+  comments: PublicPhotoCommentRecord[];
   viewerHearted: boolean;
 }
 
@@ -74,6 +76,33 @@ interface HeartedPhotoRow {
 
 interface HeartCountRow {
   heartCount: number;
+}
+
+interface CommentRequestBody {
+  displayName?: unknown;
+  body?: unknown;
+}
+
+interface PhotoCommentRecord {
+  id: string;
+  photoId: string;
+  displayName: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt: string | null;
+}
+
+interface UpdateCommentRequestBody {
+  body?: unknown;
+}
+
+interface PublicPhotoCommentRecord extends PhotoCommentRecord {
+  viewerOwned: boolean;
+}
+
+interface CommentRow extends PhotoCommentRecord {
+  visitorToken: string;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
@@ -119,11 +148,15 @@ function getVisitorToken(request: Request): string | null {
   return token;
 }
 
-function toPhotoRecord(row: PhotoRow): PhotoRecord {
+function toPhotoRecord(
+  row: PhotoRow,
+  comments: PhotoCommentRecord[] = [],
+): PhotoRecord {
   return {
     ...row,
     heartCount: Number(row.heartCount ?? 0),
     imageUrl: `/api/photos/${encodeURIComponent(row.id)}/image`,
+    comments,
   };
 }
 
@@ -336,6 +369,7 @@ async function createPhoto(
     createdAt,
     imageUrl: `/api/photos/${encodeURIComponent(photoId)}/image`,
     heartCount: 0,
+    comments: [],
   };
 
   return jsonResponse({ photo }, 201);
@@ -373,8 +407,15 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
     .bind(eventId)
     .all<PhotoRow>();
 
+  const commentsByPhoto = await getCommentsByPhoto(env, eventId);
+
   return jsonResponse({
-    photos: result.results.map(toPhotoRecord),
+    photos: result.results.map((row) =>
+      toPhotoRecord(
+        row,
+        (commentsByPhoto.get(row.id) ?? []).map(toPhotoCommentRecord),
+      ),
+    ),
   });
 }
 
@@ -517,6 +558,7 @@ async function getPublicGallery(
     .bind(event.id)
     .all<PhotoRow>();
 
+  const commentsByPhoto = await getCommentsByPhoto(env, event.id);
   const visitorToken = getVisitorToken(request);
   const heartedPhotoIds = new Set<string>();
 
@@ -547,10 +589,17 @@ async function getPublicGallery(
       createdAt: event.createdAt,
     },
     photos: photoResult.results.map((row) => {
-      const photo = toPhotoRecord(row);
+      const commentRows = commentsByPhoto.get(row.id) ?? [];
+
+      const photo = toPhotoRecord(row, commentRows.map(toPhotoCommentRecord));
 
       return {
         ...photo,
+        comments: commentRows.map((comment) => ({
+          ...toPhotoCommentRecord(comment),
+          viewerOwned:
+            visitorToken !== null && comment.visitorToken === visitorToken,
+        })),
         viewerHearted: heartedPhotoIds.has(photo.id),
       };
     }),
@@ -639,44 +688,12 @@ async function addHeart(
 
   const now = new Date().toISOString();
 
-  await env.DB.prepare(
-    `
-      INSERT INTO gallery_visitors (
-        id,
-        event_id,
-        visitor_token,
-        display_name,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(event_id, visitor_token)
-      DO UPDATE SET
-        display_name = excluded.display_name,
-        updated_at = excluded.updated_at
-    `,
-  )
-    .bind(
-      crypto.randomUUID(),
-      galleryPhoto.eventId,
-      visitorToken,
-      displayName,
-      now,
-      now,
-    )
-    .run();
-
-  const visitor = await env.DB.prepare(
-    `
-      SELECT id
-      FROM gallery_visitors
-      WHERE
-        event_id = ?
-        AND visitor_token = ?
-    `,
-  )
-    .bind(galleryPhoto.eventId, visitorToken)
-    .first<VisitorRow>();
+  const visitor = await upsertGalleryVisitor(
+    env,
+    galleryPhoto.eventId,
+    visitorToken,
+    displayName,
+  );
 
   if (!visitor) {
     return jsonResponse(
@@ -785,6 +802,347 @@ async function clearPhotoHearts(env: Env, photoId: string): Promise<Response> {
   });
 }
 
+async function upsertGalleryVisitor(
+  env: Env,
+  eventId: string,
+  visitorToken: string,
+  displayName: string,
+): Promise<VisitorRow | null> {
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO gallery_visitors (
+        id,
+        event_id,
+        visitor_token,
+        display_name,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id, visitor_token)
+      DO UPDATE SET
+        display_name = excluded.display_name,
+        updated_at = excluded.updated_at
+    `,
+  )
+    .bind(crypto.randomUUID(), eventId, visitorToken, displayName, now, now)
+    .run();
+
+  return env.DB.prepare(
+    `
+      SELECT id
+      FROM gallery_visitors
+      WHERE
+        event_id = ?
+        AND visitor_token = ?
+    `,
+  )
+    .bind(eventId, visitorToken)
+    .first<VisitorRow>();
+}
+
+async function getCommentsByPhoto(
+  env: Env,
+  eventId: string,
+): Promise<Map<string, CommentRow[]>> {
+  const result = await env.DB.prepare(
+    `
+      SELECT
+        c.id,
+        c.photo_id AS photoId,
+        v.display_name AS displayName,
+        v.visitor_token AS visitorToken,
+        c.body,
+        c.created_at AS createdAt,
+        c.updated_at AS updatedAt,
+        c.resolved_at AS resolvedAt
+      FROM comments c
+      INNER JOIN gallery_visitors v
+        ON v.id = c.visitor_id
+      INNER JOIN photos p
+        ON p.id = c.photo_id
+      WHERE p.event_id = ?
+      ORDER BY c.created_at ASC
+    `,
+  )
+    .bind(eventId)
+    .all<CommentRow>();
+
+  const commentsByPhoto = new Map<string, CommentRow[]>();
+
+  for (const comment of result.results) {
+    const comments = commentsByPhoto.get(comment.photoId) ?? [];
+    comments.push(comment);
+    commentsByPhoto.set(comment.photoId, comments);
+  }
+
+  return commentsByPhoto;
+}
+
+async function addComment(
+  request: Request,
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  let requestBody: CommentRequestBody;
+
+  try {
+    requestBody = await request.json<CommentRequestBody>();
+  } catch {
+    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  }
+
+  if (
+    typeof requestBody.displayName !== "string" ||
+    typeof requestBody.body !== "string"
+  ) {
+    return jsonResponse({ error: "Your name and comment are required." }, 400);
+  }
+
+  const displayName = requestBody.displayName.trim();
+  const commentBody = requestBody.body.trim();
+
+  if (displayName.length === 0 || displayName.length > 80) {
+    return jsonResponse(
+      { error: "Your name must be between 1 and 80 characters." },
+      400,
+    );
+  }
+
+  if (commentBody.length === 0 || commentBody.length > 1000) {
+    return jsonResponse(
+      { error: "Your comment must be between 1 and 1000 characters." },
+      400,
+    );
+  }
+
+  const galleryPhoto = await findGalleryPhoto(env, shareToken, photoId);
+
+  if (!galleryPhoto) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const visitor = await upsertGalleryVisitor(
+    env,
+    galleryPhoto.eventId,
+    visitorToken,
+    displayName,
+  );
+
+  if (!visitor) {
+    return jsonResponse(
+      { error: "The visitor identity could not be saved." },
+      500,
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  const comment: PublicPhotoCommentRecord = {
+    id: crypto.randomUUID(),
+    photoId,
+    displayName,
+    body: commentBody,
+    createdAt: now,
+    updatedAt: now,
+    resolvedAt: null,
+    viewerOwned: true,
+  };
+
+  await env.DB.prepare(
+    `
+      INSERT INTO comments (
+        id,
+        photo_id,
+        visitor_id,
+        body,
+        created_at,
+        updated_at,
+        resolved_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, NULL)
+    `,
+  )
+    .bind(
+      comment.id,
+      photoId,
+      visitor.id,
+      comment.body,
+      comment.createdAt,
+      comment.updatedAt,
+    )
+    .run();
+
+  return jsonResponse({ comment }, 201);
+}
+
+function toPhotoCommentRecord(row: CommentRow): PhotoCommentRecord {
+  return {
+    id: row.id,
+    photoId: row.photoId,
+    displayName: row.displayName,
+    body: row.body,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    resolvedAt: row.resolvedAt,
+  };
+}
+
+async function findOwnedGalleryComment(
+  env: Env,
+  shareToken: string,
+  photoId: string,
+  commentId: string,
+  visitorToken: string,
+): Promise<PhotoCommentRecord | null> {
+  return env.DB.prepare(
+    `
+      SELECT
+        c.id,
+        c.photo_id AS photoId,
+        v.display_name AS displayName,
+        c.body,
+        c.created_at AS createdAt,
+        c.updated_at AS updatedAt,
+        c.resolved_at AS resolvedAt
+      FROM comments c
+      INNER JOIN gallery_visitors v
+        ON v.id = c.visitor_id
+      INNER JOIN photos p
+        ON p.id = c.photo_id
+      INNER JOIN events e
+        ON e.id = p.event_id
+      WHERE
+        c.id = ?
+        AND c.photo_id = ?
+        AND e.share_token = ?
+        AND v.visitor_token = ?
+    `,
+  )
+    .bind(commentId, photoId, shareToken, visitorToken)
+    .first<PhotoCommentRecord>();
+}
+
+async function updateComment(
+  request: Request,
+  env: Env,
+  shareToken: string,
+  photoId: string,
+  commentId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  let requestBody: UpdateCommentRequestBody;
+
+  try {
+    requestBody = await request.json<UpdateCommentRequestBody>();
+  } catch {
+    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  }
+
+  if (typeof requestBody.body !== "string") {
+    return jsonResponse({ error: "A comment is required." }, 400);
+  }
+
+  const body = requestBody.body.trim();
+
+  if (body.length === 0 || body.length > 1000) {
+    return jsonResponse(
+      {
+        error: "Your comment must be between 1 and 1000 characters.",
+      },
+      400,
+    );
+  }
+
+  const existingComment = await findOwnedGalleryComment(
+    env,
+    shareToken,
+    photoId,
+    commentId,
+    visitorToken,
+  );
+
+  if (!existingComment) {
+    return jsonResponse({ error: "Comment not found." }, 404);
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      UPDATE comments
+      SET
+        body = ?,
+        updated_at = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(body, updatedAt, commentId)
+    .run();
+
+  const comment: PublicPhotoCommentRecord = {
+    ...existingComment,
+    body,
+    updatedAt,
+    viewerOwned: true,
+  };
+
+  return jsonResponse({ comment });
+}
+
+async function deleteComment(
+  request: Request,
+  env: Env,
+  shareToken: string,
+  photoId: string,
+  commentId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  const existingComment = await findOwnedGalleryComment(
+    env,
+    shareToken,
+    photoId,
+    commentId,
+    visitorToken,
+  );
+
+  if (!existingComment) {
+    return jsonResponse({ error: "Comment not found." }, 404);
+  }
+
+  await env.DB.prepare(
+    `
+      DELETE FROM comments
+      WHERE id = ?
+    `,
+  )
+    .bind(commentId)
+    .run();
+
+  return jsonResponse({
+    deletedCommentId: commentId,
+  });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -876,6 +1234,41 @@ export default {
       const photoId = decodeURIComponent(photoHeartsMatch[1]);
 
       return clearPhotoHearts(env, photoId);
+    }
+
+    const galleryCommentMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/comments\/([^/]+)$/,
+    );
+
+    if (galleryCommentMatch) {
+      const shareToken = decodeURIComponent(galleryCommentMatch[1]);
+      const photoId = decodeURIComponent(galleryCommentMatch[2]);
+      const commentId = decodeURIComponent(galleryCommentMatch[3]);
+
+      if (request.method === "PUT") {
+        return updateComment(request, env, shareToken, photoId, commentId);
+      }
+
+      if (request.method === "DELETE") {
+        return deleteComment(request, env, shareToken, photoId, commentId);
+      }
+
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const galleryCommentsMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/comments$/,
+    );
+
+    if (galleryCommentsMatch) {
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const shareToken = decodeURIComponent(galleryCommentsMatch[1]);
+      const photoId = decodeURIComponent(galleryCommentsMatch[2]);
+
+      return addComment(request, env, shareToken, photoId);
     }
 
     const publicGalleryMatch = url.pathname.match(

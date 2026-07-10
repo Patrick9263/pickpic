@@ -456,6 +456,33 @@ button:disabled {
   text-decoration: underline;
 }
 
+.dashboard-comments {
+  display: grid;
+  gap: 7px;
+  margin-top: 5px;
+}
+
+.dashboard-comments blockquote {
+  background: #ffffff;
+  border-left: 3px solid #7358d3;
+  border-radius: 0 7px 7px 0;
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 8px 10px;
+}
+
+.dashboard-comments strong {
+  color: #4d4942;
+  font-size: 0.72rem;
+}
+
+.dashboard-comments span {
+  color: #625f58;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;
