@@ -434,6 +434,28 @@ button:disabled {
   text-decoration: underline;
 }
 
+.photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.clear-hearts-button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #5d45b7;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 0;
+}
+
+.clear-hearts-button:hover:not(:disabled) {
+  background: transparent;
+  color: #423185;
+  text-decoration: underline;
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;

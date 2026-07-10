@@ -61,7 +61,7 @@
     border: 0;
     border-radius: 12px;
     display: block;
-    margin: 0 0 12px;
+    margin: 0;
     overflow: hidden;
     padding: 0;
     width: 100%;
@@ -163,6 +163,120 @@
     right: 0;
     top: -52px;
     width: 42px;
+}
+
+.gallery-instructions {
+    font-size: 0.9rem;
+    margin-top: 8px !important;
+}
+
+.gallery-photo-card {
+    break-inside: avoid;
+    margin: 0 0 12px;
+    position: relative;
+}
+
+.gallery-heart-button {
+    align-items: center;
+    backdrop-filter: blur(8px);
+    background: rgb(20 20 20 / 72%);
+    border: 1px solid rgb(255 255 255 / 20%);
+    border-radius: 999px;
+    bottom: 10px;
+    color: #ffffff;
+    display: flex;
+    gap: 5px;
+    min-width: 54px;
+    padding: 8px 11px;
+    position: absolute;
+    right: 10px;
+}
+
+.gallery-heart-button:hover:not(:disabled) {
+    background: rgb(20 20 20 / 88%);
+}
+
+.gallery-heart-button-active {
+    background: #ffffff;
+    color: #a43858;
+}
+
+.gallery-heart-button-active:hover:not(:disabled) {
+    background: #f7edf1;
+}
+
+.gallery-action-error {
+    align-items: center;
+    background: #fff1f0;
+    border: 1px solid #f0c2be;
+    border-radius: 12px;
+    color: #8b2921;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding: 14px 16px;
+}
+
+.gallery-action-error button {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    padding: 4px;
+    text-decoration: underline;
+}
+
+.lightbox-footer {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    margin-top: 10px;
+}
+
+.lightbox-footer p {
+    margin: 0;
+    text-align: left;
+}
+
+.lightbox-heart-button {
+    align-items: center;
+    background: rgb(255 255 255 / 14%);
+    border: 1px solid rgb(255 255 255 / 25%);
+    border-radius: 999px;
+    color: #ffffff;
+    display: flex;
+    gap: 7px;
+    white-space: nowrap;
+}
+
+.lightbox-heart-button-active {
+    background: #ffffff;
+    color: #a43858;
+}
+
+.lightbox-heart-button-active:hover:not(:disabled) {
+    background: #f7edf1;
+}
+
+@media (max-width: 560px) {
+    .gallery-photo-card {
+        margin-bottom: 6px;
+    }
+
+    .gallery-heart-button {
+        bottom: 7px;
+        right: 7px;
+    }
+
+    .lightbox-footer {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .lightbox-heart-button {
+        justify-content: center;
+        width: 100%;
+    }
 }
 
 @media (max-width: 900px) {

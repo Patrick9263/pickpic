@@ -9,6 +9,8 @@ interface PhotoRecord {
   byteSize: number;
   createdAt: string;
   imageUrl: string;
+  heartCount: number;
+  viewerHearted: boolean;
 }
 
 interface GalleryEvent {
@@ -22,12 +24,33 @@ interface GalleryResponse {
   photos: PhotoRecord[];
 }
 
+interface HeartResponse {
+  hearted: boolean;
+  heartCount: number;
+}
+
 interface ErrorResponse {
   error?: string;
 }
 
 interface GalleryPageProps {
   shareToken: string;
+}
+
+const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
+const DISPLAY_NAME_KEY = "pickpic-display-name";
+
+function getOrCreateVisitorToken(): string {
+  const storedToken = window.localStorage.getItem(VISITOR_TOKEN_KEY);
+
+  if (storedToken) {
+    return storedToken;
+  }
+
+  const token = crypto.randomUUID();
+  window.localStorage.setItem(VISITOR_TOKEN_KEY, token);
+
+  return token;
 }
 
 async function getErrorMessage(response: Response): Promise<string> {
@@ -45,21 +68,35 @@ async function getErrorMessage(response: Response): Promise<string> {
 }
 
 function GalleryPage({ shareToken }: GalleryPageProps) {
+  const [visitorToken] = useState(getOrCreateVisitorToken);
+  const [displayName, setDisplayName] = useState(
+    () => window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
+  );
   const [gallery, setGallery] = useState<GalleryResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedPhoto, setSelectedPhoto] = useState<PhotoRecord | null>(null);
+  const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
+  const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
+
+  const selectedPhoto =
+    gallery?.photos.find((photo) => photo.id === selectedPhotoId) ?? null;
 
   useEffect(() => {
     let isCancelled = false;
 
     async function loadGallery(): Promise<void> {
       setIsLoading(true);
-      setError(null);
+      setLoadError(null);
 
       try {
         const response = await fetch(
           `/api/galleries/${encodeURIComponent(shareToken)}`,
+          {
+            headers: {
+              "X-PickPic-Visitor": visitorToken,
+            },
+          },
         );
 
         if (!response.ok) {
@@ -73,7 +110,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         }
       } catch (caughtError) {
         if (!isCancelled) {
-          setError(
+          setLoadError(
             caughtError instanceof Error
               ? caughtError.message
               : "Unable to load this gallery.",
@@ -91,7 +128,94 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     return () => {
       isCancelled = true;
     };
-  }, [shareToken]);
+  }, [shareToken, visitorToken]);
+
+  async function toggleHeart(photo: PhotoRecord): Promise<void> {
+    let resolvedDisplayName = displayName.trim();
+
+    if (!photo.viewerHearted && !resolvedDisplayName) {
+      const enteredName = window.prompt(
+        "What should the photographer call you?",
+      );
+
+      if (enteredName === null) {
+        return;
+      }
+
+      resolvedDisplayName = enteredName.trim();
+
+      if (resolvedDisplayName.length === 0 || resolvedDisplayName.length > 80) {
+        setActionError("Your name must be between 1 and 80 characters.");
+        return;
+      }
+
+      window.localStorage.setItem(DISPLAY_NAME_KEY, resolvedDisplayName);
+      setDisplayName(resolvedDisplayName);
+    }
+
+    setTogglingPhotoId(photo.id);
+    setActionError(null);
+
+    try {
+      const method = photo.viewerHearted ? "DELETE" : "PUT";
+
+      const response = await fetch(
+        `/api/galleries/${encodeURIComponent(
+          shareToken,
+        )}/photos/${encodeURIComponent(photo.id)}/heart`,
+        {
+          method,
+          headers: {
+            "X-PickPic-Visitor": visitorToken,
+            ...(method === "PUT"
+              ? {
+                  "Content-Type": "application/json",
+                }
+              : {}),
+          },
+          body:
+            method === "PUT"
+              ? JSON.stringify({
+                  displayName: resolvedDisplayName,
+                })
+              : undefined,
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const body = (await response.json()) as HeartResponse;
+
+      setGallery((currentGallery) => {
+        if (!currentGallery) {
+          return currentGallery;
+        }
+
+        return {
+          ...currentGallery,
+          photos: currentGallery.photos.map((currentPhoto) =>
+            currentPhoto.id === photo.id
+              ? {
+                  ...currentPhoto,
+                  viewerHearted: body.hearted,
+                  heartCount: body.heartCount,
+                }
+              : currentPhoto,
+          ),
+        };
+      });
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to update this edit request.",
+      );
+    } finally {
+      setTogglingPhotoId(null);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -102,14 +226,14 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     );
   }
 
-  if (error || !gallery) {
+  if (loadError || !gallery) {
     return (
       <main className="gallery-message">
         <a className="gallery-brand" href="/">
           PickPic
         </a>
         <h1>Gallery unavailable</h1>
-        <p>{error ?? "This gallery could not be found."}</p>
+        <p>{loadError ?? "This gallery could not be found."}</p>
       </main>
     );
   }
@@ -128,10 +252,22 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             {gallery.photos.length}{" "}
             {gallery.photos.length === 1 ? "photo" : "photos"}
           </p>
+          <p className="gallery-instructions">
+            Heart a photo to request that the photographer edit it.
+          </p>
         </div>
       </header>
 
       <main className="gallery-content">
+        {actionError && (
+          <div className="gallery-action-error" role="alert">
+            <span>{actionError}</span>
+            <button type="button" onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {gallery.photos.length === 0 ? (
           <div className="gallery-empty">
             <h2>No photos yet</h2>
@@ -139,21 +275,44 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </div>
         ) : (
           <div className="gallery-grid">
-            {gallery.photos.map((photo) => (
-              <button
-                className="gallery-photo-button"
-                type="button"
-                key={photo.id}
-                onClick={() => setSelectedPhoto(photo)}
-                aria-label={`Open ${photo.originalFilename}`}
-              >
-                <img
-                  src={photo.imageUrl}
-                  alt={photo.originalFilename}
-                  loading="lazy"
-                />
-              </button>
-            ))}
+            {gallery.photos.map((photo) => {
+              const isToggling = togglingPhotoId === photo.id;
+
+              return (
+                <article className="gallery-photo-card" key={photo.id}>
+                  <button
+                    className="gallery-photo-button"
+                    type="button"
+                    onClick={() => setSelectedPhotoId(photo.id)}
+                    aria-label={`Open ${photo.originalFilename}`}
+                  >
+                    <img
+                      src={photo.imageUrl}
+                      alt={photo.originalFilename}
+                      loading="lazy"
+                    />
+                  </button>
+
+                  <button
+                    className={`gallery-heart-button ${
+                      photo.viewerHearted ? "gallery-heart-button-active" : ""
+                    }`}
+                    type="button"
+                    disabled={isToggling}
+                    onClick={() => void toggleHeart(photo)}
+                    aria-pressed={photo.viewerHearted}
+                    aria-label={
+                      photo.viewerHearted
+                        ? `Remove edit request for ${photo.originalFilename}`
+                        : `Request an edit of ${photo.originalFilename}`
+                    }
+                  >
+                    <span aria-hidden="true">♥</span>
+                    <span>{photo.heartCount}</span>
+                  </button>
+                </article>
+              );
+            })}
           </div>
         )}
       </main>
@@ -168,7 +327,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           <button
             className="lightbox-backdrop"
             type="button"
-            onClick={() => setSelectedPhoto(null)}
+            onClick={() => setSelectedPhotoId(null)}
             aria-label="Close image"
           />
 
@@ -176,10 +335,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             <button
               className="lightbox-close"
               type="button"
-              onClick={() => setSelectedPhoto(null)}
+              onClick={() => setSelectedPhotoId(null)}
               aria-label="Close image"
             >
-              x
+              ×
             </button>
 
             <img
@@ -187,7 +346,29 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               alt={selectedPhoto.originalFilename}
             />
 
-            <p>{selectedPhoto.originalFilename}</p>
+            <div className="lightbox-footer">
+              <p>{selectedPhoto.originalFilename}</p>
+
+              <button
+                className={`lightbox-heart-button ${
+                  selectedPhoto.viewerHearted
+                    ? "lightbox-heart-button-active"
+                    : ""
+                }`}
+                type="button"
+                disabled={togglingPhotoId === selectedPhoto.id}
+                onClick={() => void toggleHeart(selectedPhoto)}
+                aria-pressed={selectedPhoto.viewerHearted}
+              >
+                <span aria-hidden="true">♥</span>
+                <span>
+                  {selectedPhoto.viewerHearted
+                    ? "Edit requested"
+                    : "Request edit"}
+                </span>
+                <span>{selectedPhoto.heartCount}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
