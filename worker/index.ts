@@ -2,6 +2,10 @@ interface CreateEventBody {
   title?: unknown;
 }
 
+interface HeartRequestBody {
+  displayName?: unknown;
+}
+
 interface EventRecord {
   id: string;
   title: string;
@@ -19,6 +23,7 @@ interface PhotoRecord {
   byteSize: number;
   createdAt: string;
   imageUrl: string;
+  heartCount: number;
 }
 
 interface PhotoRow {
@@ -28,6 +33,7 @@ interface PhotoRow {
   contentType: string;
   byteSize: number;
   createdAt: string;
+  heartCount: number;
 }
 
 interface StoredPhotoRow {
@@ -44,9 +50,30 @@ interface PublicGalleryEventRow extends PublicGalleryEvent {
   id: string;
 }
 
+interface PublicPhotoRecord extends PhotoRecord {
+  viewerHearted: boolean;
+}
+
 interface PublicGalleryResponse {
   event: PublicGalleryEvent;
-  photos: PhotoRecord[];
+  photos: PublicPhotoRecord[];
+}
+
+interface GalleryPhotoRow {
+  photoId: string;
+  eventId: string;
+}
+
+interface VisitorRow {
+  id: string;
+}
+
+interface HeartedPhotoRow {
+  photoId: string;
+}
+
+interface HeartCountRow {
+  heartCount: number;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
@@ -82,9 +109,20 @@ function getFilename(request: Request): string | null {
   }
 }
 
+function getVisitorToken(request: Request): string | null {
+  const token = request.headers.get("X-PickPic-Visitor")?.trim();
+
+  if (!token || token.length < 20 || token.length > 100) {
+    return null;
+  }
+
+  return token;
+}
+
 function toPhotoRecord(row: PhotoRow): PhotoRecord {
   return {
     ...row,
+    heartCount: Number(row.heartCount ?? 0),
     imageUrl: `/api/photos/${encodeURIComponent(row.id)}/image`,
   };
 }
@@ -297,60 +335,10 @@ async function createPhoto(
     byteSize: storedObject.size,
     createdAt,
     imageUrl: `/api/photos/${encodeURIComponent(photoId)}/image`,
+    heartCount: 0,
   };
 
   return jsonResponse({ photo }, 201);
-}
-
-async function getPublicGallery(
-  env: Env,
-  shareToken: string,
-): Promise<Response> {
-  const event = await env.DB.prepare(
-    `
-      SELECT
-        id,
-        title,
-        status,
-        created_at AS createdAt
-      FROM events
-      WHERE share_token = ?
-    `,
-  )
-    .bind(shareToken)
-    .first<PublicGalleryEventRow>();
-
-  if (!event) {
-    return jsonResponse({ error: "Gallery not found." }, 404);
-  }
-
-  const photoResult = await env.DB.prepare(
-    `
-      SELECT
-        id,
-        event_id AS eventId,
-        original_filename AS originalFilename,
-        content_type AS contentType,
-        byte_size AS byteSize,
-        created_at AS createdAt
-      FROM photos
-      WHERE event_id = ?
-      ORDER BY created_at ASC
-    `,
-  )
-    .bind(event.id)
-    .all<PhotoRow>();
-
-  const response: PublicGalleryResponse = {
-    event: {
-      title: event.title,
-      status: event.status,
-      createdAt: event.createdAt,
-    },
-    photos: photoResult.results.map(toPhotoRecord),
-  };
-
-  return jsonResponse(response);
 }
 
 async function listPhotos(env: Env, eventId: string): Promise<Response> {
@@ -361,15 +349,25 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
   const result = await env.DB.prepare(
     `
       SELECT
-        id,
-        event_id AS eventId,
-        original_filename AS originalFilename,
-        content_type AS contentType,
-        byte_size AS byteSize,
-        created_at AS createdAt
-      FROM photos
-      WHERE event_id = ?
-      ORDER BY created_at DESC
+        p.id,
+        p.event_id AS eventId,
+        p.original_filename AS originalFilename,
+        p.content_type AS contentType,
+        p.byte_size AS byteSize,
+        p.created_at AS createdAt,
+        COUNT(h.photo_id) AS heartCount
+      FROM photos p
+      LEFT JOIN hearts h
+        ON h.photo_id = p.id
+      WHERE p.event_id = ?
+      GROUP BY
+        p.id,
+        p.event_id,
+        p.original_filename,
+        p.content_type,
+        p.byte_size,
+        p.created_at
+      ORDER BY p.created_at DESC
     `,
   )
     .bind(eventId)
@@ -436,10 +434,6 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
-  /*
-   * Delete the R2 object first. R2 deletion is safe to retry, so if the
-   * subsequent database operation fails, the entire request can be retried.
-   */
   try {
     await env.pickpic_photos.delete(photo.storageKey);
   } catch {
@@ -470,6 +464,324 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
 
   return jsonResponse({
     deletedPhotoId: photoId,
+  });
+}
+
+async function getPublicGallery(
+  request: Request,
+  env: Env,
+  shareToken: string,
+): Promise<Response> {
+  const event = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        title,
+        status,
+        created_at AS createdAt
+      FROM events
+      WHERE share_token = ?
+    `,
+  )
+    .bind(shareToken)
+    .first<PublicGalleryEventRow>();
+
+  if (!event) {
+    return jsonResponse({ error: "Gallery not found." }, 404);
+  }
+
+  const photoResult = await env.DB.prepare(
+    `
+      SELECT
+        p.id,
+        p.event_id AS eventId,
+        p.original_filename AS originalFilename,
+        p.content_type AS contentType,
+        p.byte_size AS byteSize,
+        p.created_at AS createdAt,
+        COUNT(h.photo_id) AS heartCount
+      FROM photos p
+      LEFT JOIN hearts h
+        ON h.photo_id = p.id
+      WHERE p.event_id = ?
+      GROUP BY
+        p.id,
+        p.event_id,
+        p.original_filename,
+        p.content_type,
+        p.byte_size,
+        p.created_at
+      ORDER BY p.created_at ASC
+    `,
+  )
+    .bind(event.id)
+    .all<PhotoRow>();
+
+  const visitorToken = getVisitorToken(request);
+  const heartedPhotoIds = new Set<string>();
+
+  if (visitorToken) {
+    const heartResult = await env.DB.prepare(
+      `
+        SELECT h.photo_id AS photoId
+        FROM hearts h
+        INNER JOIN gallery_visitors v
+          ON v.id = h.visitor_id
+        WHERE
+          v.event_id = ?
+          AND v.visitor_token = ?
+      `,
+    )
+      .bind(event.id, visitorToken)
+      .all<HeartedPhotoRow>();
+
+    for (const row of heartResult.results) {
+      heartedPhotoIds.add(row.photoId);
+    }
+  }
+
+  const response: PublicGalleryResponse = {
+    event: {
+      title: event.title,
+      status: event.status,
+      createdAt: event.createdAt,
+    },
+    photos: photoResult.results.map((row) => {
+      const photo = toPhotoRecord(row);
+
+      return {
+        ...photo,
+        viewerHearted: heartedPhotoIds.has(photo.id),
+      };
+    }),
+  };
+
+  return jsonResponse(response);
+}
+
+async function findGalleryPhoto(
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<GalleryPhotoRow | null> {
+  return env.DB.prepare(
+    `
+      SELECT
+        p.id AS photoId,
+        p.event_id AS eventId
+      FROM photos p
+      INNER JOIN events e
+        ON e.id = p.event_id
+      WHERE
+        p.id = ?
+        AND e.share_token = ?
+    `,
+  )
+    .bind(photoId, shareToken)
+    .first<GalleryPhotoRow>();
+}
+
+async function getHeartCount(env: Env, photoId: string): Promise<number> {
+  const result = await env.DB.prepare(
+    `
+      SELECT COUNT(*) AS heartCount
+      FROM hearts
+      WHERE photo_id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<HeartCountRow>();
+
+  return Number(result?.heartCount ?? 0);
+}
+
+async function addHeart(
+  request: Request,
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  let body: HeartRequestBody;
+
+  try {
+    body = await request.json<HeartRequestBody>();
+  } catch {
+    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  }
+
+  if (typeof body.displayName !== "string") {
+    return jsonResponse(
+      { error: "Enter your name before requesting an edit." },
+      400,
+    );
+  }
+
+  const displayName = body.displayName.trim();
+
+  if (displayName.length === 0 || displayName.length > 80) {
+    return jsonResponse(
+      { error: "Your name must be between 1 and 80 characters." },
+      400,
+    );
+  }
+
+  const galleryPhoto = await findGalleryPhoto(env, shareToken, photoId);
+
+  if (!galleryPhoto) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO gallery_visitors (
+        id,
+        event_id,
+        visitor_token,
+        display_name,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id, visitor_token)
+      DO UPDATE SET
+        display_name = excluded.display_name,
+        updated_at = excluded.updated_at
+    `,
+  )
+    .bind(
+      crypto.randomUUID(),
+      galleryPhoto.eventId,
+      visitorToken,
+      displayName,
+      now,
+      now,
+    )
+    .run();
+
+  const visitor = await env.DB.prepare(
+    `
+      SELECT id
+      FROM gallery_visitors
+      WHERE
+        event_id = ?
+        AND visitor_token = ?
+    `,
+  )
+    .bind(galleryPhoto.eventId, visitorToken)
+    .first<VisitorRow>();
+
+  if (!visitor) {
+    return jsonResponse(
+      { error: "The visitor identity could not be saved." },
+      500,
+    );
+  }
+
+  await env.DB.prepare(
+    `
+      INSERT INTO hearts (
+        photo_id,
+        visitor_id,
+        created_at
+      )
+      VALUES (?, ?, ?)
+      ON CONFLICT(photo_id, visitor_id)
+      DO NOTHING
+    `,
+  )
+    .bind(photoId, visitor.id, now)
+    .run();
+
+  return jsonResponse({
+    hearted: true,
+    heartCount: await getHeartCount(env, photoId),
+  });
+}
+
+async function removeHeart(
+  request: Request,
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  const galleryPhoto = await findGalleryPhoto(env, shareToken, photoId);
+
+  if (!galleryPhoto) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const visitor = await env.DB.prepare(
+    `
+      SELECT id
+      FROM gallery_visitors
+      WHERE
+        event_id = ?
+        AND visitor_token = ?
+    `,
+  )
+    .bind(galleryPhoto.eventId, visitorToken)
+    .first<VisitorRow>();
+
+  if (visitor) {
+    await env.DB.prepare(
+      `
+        DELETE FROM hearts
+        WHERE
+          photo_id = ?
+          AND visitor_id = ?
+      `,
+    )
+      .bind(photoId, visitor.id)
+      .run();
+  }
+
+  return jsonResponse({
+    hearted: false,
+    heartCount: await getHeartCount(env, photoId),
+  });
+}
+
+async function clearPhotoHearts(env: Env, photoId: string): Promise<Response> {
+  const photo = await env.DB.prepare(
+    `
+      SELECT id
+      FROM photos
+      WHERE id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<{ id: string }>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  await env.DB.prepare(
+    `
+      DELETE FROM hearts
+      WHERE photo_id = ?
+    `,
+  )
+    .bind(photoId)
+    .run();
+
+  return jsonResponse({
+    photoId,
+    heartCount: 0,
   });
 }
 
@@ -533,6 +845,39 @@ export default {
       return deletePhoto(env, photoId);
     }
 
+    const galleryHeartMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/heart$/,
+    );
+
+    if (galleryHeartMatch) {
+      const shareToken = decodeURIComponent(galleryHeartMatch[1]);
+      const photoId = decodeURIComponent(galleryHeartMatch[2]);
+
+      if (request.method === "PUT") {
+        return addHeart(request, env, shareToken, photoId);
+      }
+
+      if (request.method === "DELETE") {
+        return removeHeart(request, env, shareToken, photoId);
+      }
+
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoHeartsMatch = url.pathname.match(
+      /^\/api\/photos\/([^/]+)\/hearts$/,
+    );
+
+    if (photoHeartsMatch) {
+      if (request.method !== "DELETE") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const photoId = decodeURIComponent(photoHeartsMatch[1]);
+
+      return clearPhotoHearts(env, photoId);
+    }
+
     const publicGalleryMatch = url.pathname.match(
       /^\/api\/galleries\/([^/]+)$/,
     );
@@ -544,7 +889,7 @@ export default {
 
       const shareToken = decodeURIComponent(publicGalleryMatch[1]);
 
-      return getPublicGallery(env, shareToken);
+      return getPublicGallery(request, env, shareToken);
     }
 
     if (url.pathname.startsWith("/api/")) {

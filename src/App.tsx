@@ -19,6 +19,7 @@ interface PhotoRecord {
   byteSize: number;
   createdAt: string;
   imageUrl: string;
+  heartCount: number;
 }
 
 interface EventsResponse {
@@ -90,6 +91,9 @@ function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
+  const [clearingHeartsPhotoId, setClearingHeartsPhotoId] = useState<
+    string | null
+  >(null);
 
   async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
     const response = await fetch(
@@ -314,6 +318,57 @@ function DashboardPage() {
     }
   }
 
+  async function handleClearHearts(
+    eventId: string,
+    photo: PhotoRecord,
+  ): Promise<void> {
+    const shouldClear = window.confirm(
+      `Clear all ${photo.heartCount} ${
+        photo.heartCount === 1 ? "heart" : "hearts"
+      } from "${photo.originalFilename}"?`,
+    );
+
+    if (!shouldClear) {
+      return;
+    }
+
+    setClearingHeartsPhotoId(photo.id);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/photos/${encodeURIComponent(photo.id)}/hearts`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventId]: (currentPhotos[eventId] ?? []).map((currentPhoto) =>
+          currentPhoto.id === photo.id
+            ? {
+                ...currentPhoto,
+                heartCount: 0,
+              }
+            : currentPhoto,
+        ),
+      }));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to clear the hearts.",
+      );
+    } finally {
+      setClearingHeartsPhotoId(null);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -411,6 +466,9 @@ function DashboardPage() {
                   const wasCopied = copiedEventId === eventRecord.id;
                   const isUploading = uploadingEventId === eventRecord.id;
                   const photos = photosByEvent[eventRecord.id] ?? [];
+                  const editRequestCount = photos.filter(
+                    (photo) => photo.heartCount > 0,
+                  ).length;
 
                   return (
                     <article className="event-card" key={eventRecord.id}>
@@ -434,7 +492,7 @@ function DashboardPage() {
 
                         <div>
                           <dt>Edit requests</dt>
-                          <dd>0</dd>
+                          <dd>{editRequestCount}</dd>
                         </div>
                       </dl>
 
@@ -488,23 +546,50 @@ function DashboardPage() {
                                   {photo.originalFilename}
                                 </span>
 
-                                <small>{formatFileSize(photo.byteSize)}</small>
+                                <small>
+                                  {formatFileSize(photo.byteSize)}
+                                  {" · "}
+                                  {photo.heartCount}{" "}
+                                  {photo.heartCount === 1 ? "heart" : "hearts"}
+                                </small>
 
-                                <button
-                                  className="delete-photo-button"
-                                  type="button"
-                                  disabled={deletingPhotoId === photo.id}
-                                  onClick={() =>
-                                    void handleDeletePhoto(
-                                      eventRecord.id,
-                                      photo,
-                                    )
-                                  }
-                                >
-                                  {deletingPhotoId === photo.id
-                                    ? "Deleting…"
-                                    : "Delete"}
-                                </button>
+                                <div className="photo-actions">
+                                  {photo.heartCount > 0 && (
+                                    <button
+                                      className="clear-hearts-button"
+                                      type="button"
+                                      disabled={
+                                        clearingHeartsPhotoId === photo.id
+                                      }
+                                      onClick={() =>
+                                        void handleClearHearts(
+                                          eventRecord.id,
+                                          photo,
+                                        )
+                                      }
+                                    >
+                                      {clearingHeartsPhotoId === photo.id
+                                        ? "Clearing…"
+                                        : "Clear hearts"}
+                                    </button>
+                                  )}
+
+                                  <button
+                                    className="delete-photo-button"
+                                    type="button"
+                                    disabled={deletingPhotoId === photo.id}
+                                    onClick={() =>
+                                      void handleDeletePhoto(
+                                        eventRecord.id,
+                                        photo,
+                                      )
+                                    }
+                                  >
+                                    {deletingPhotoId === photo.id
+                                      ? "Deleting…"
+                                      : "Delete"}
+                                  </button>
+                                </div>
                               </div>
                             </article>
                           ))}
