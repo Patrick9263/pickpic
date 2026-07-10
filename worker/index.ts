@@ -355,6 +355,58 @@ async function getPhotoImage(env: Env, photoId: string): Promise<Response> {
   });
 }
 
+async function deletePhoto(env: Env, photoId: string): Promise<Response> {
+  const photo = await env.DB.prepare(
+    `
+      SELECT storage_key AS storageKey
+      FROM photos
+      WHERE id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<StoredPhotoRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  /*
+   * Delete the R2 object first. R2 deletion is safe to retry, so if the
+   * subsequent database operation fails, the entire request can be retried.
+   */
+  try {
+    await env.pickpic_photos.delete(photo.storageKey);
+  } catch {
+    return jsonResponse(
+      { error: "The stored image could not be deleted." },
+      500,
+    );
+  }
+
+  try {
+    await env.DB.prepare(
+      `
+        DELETE FROM photos
+        WHERE id = ?
+      `,
+    )
+      .bind(photoId)
+      .run();
+  } catch {
+    return jsonResponse(
+      {
+        error:
+          "The image was deleted, but its photo record could not be removed. Try again.",
+      },
+      500,
+    );
+  }
+
+  return jsonResponse({
+    deletedPhotoId: photoId,
+  });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -401,6 +453,18 @@ export default {
       const photoId = decodeURIComponent(photoImageMatch[1]);
 
       return getPhotoImage(env, photoId);
+    }
+
+    const photoMatch = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
+
+    if (photoMatch) {
+      if (request.method !== "DELETE") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const photoId = decodeURIComponent(photoMatch[1]);
+
+      return deletePhoto(env, photoId);
     }
 
     if (url.pathname.startsWith("/api/")) {

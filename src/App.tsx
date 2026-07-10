@@ -88,6 +88,7 @@ function App() {
   const [uploadingEventId, setUploadingEventId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
+  const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
 
   async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
     const response = await fetch(
@@ -248,6 +249,50 @@ function App() {
       );
     } finally {
       setUploadingEventId(null);
+    }
+  }
+
+  async function handleDeletePhoto(
+    eventId: string,
+    photo: PhotoRecord,
+  ): Promise<void> {
+    const shouldDelete = window.confirm(
+      `Delete "${photo.originalFilename}" from this event?`,
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setDeletingPhotoId(photo.id);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/photos/${encodeURIComponent(photo.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventId]: (currentPhotos[eventId] ?? []).filter(
+          (currentPhoto) => currentPhoto.id !== photo.id,
+        ),
+      }));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to delete the photo.",
+      );
+    } finally {
+      setDeletingPhotoId(null);
     }
   }
 
@@ -441,7 +486,24 @@ function App() {
                                 <span title={photo.originalFilename}>
                                   {photo.originalFilename}
                                 </span>
+
                                 <small>{formatFileSize(photo.byteSize)}</small>
+
+                                <button
+                                  className="delete-photo-button"
+                                  type="button"
+                                  disabled={deletingPhotoId === photo.id}
+                                  onClick={() =>
+                                    void handleDeletePhoto(
+                                      eventRecord.id,
+                                      photo,
+                                    )
+                                  }
+                                >
+                                  {deletingPhotoId === photo.id
+                                    ? "Deleting…"
+                                    : "Delete"}
+                                </button>
                               </div>
                             </article>
                           ))}

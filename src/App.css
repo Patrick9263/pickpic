@@ -417,6 +417,23 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+.delete-photo-button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #a43830;
+  font-size: 0.75rem;
+  font-weight: 700;
+  justify-self: start;
+  padding: 2px 0;
+}
+
+.delete-photo-button:hover:not(:disabled) {
+  background: transparent;
+  color: #76241e;
+  text-decoration: underline;
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;
