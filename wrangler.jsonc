@@ -16,6 +16,13 @@
 	"upload_source_maps": true,
 	"compatibility_flags": [
 		"nodejs_compat"
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "pickpic-db",
+			"database_id": "d31cb43a-46d6-478c-b0cd-81e3df2f0d94"
+		}
 	]
 	/**
 	 * Smart Placement
