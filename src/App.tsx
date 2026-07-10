@@ -1,5 +1,6 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import "./App.css";
+import GalleryPage from "./GalleryPage";
 
 interface EventRecord {
   id: string;
@@ -77,7 +78,7 @@ function formatFileSize(byteSize: number): string {
   return `${(byteSize / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function App() {
+function DashboardPage() {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [photosByEvent, setPhotosByEvent] = useState<
     Record<string, PhotoRecord[]>
@@ -532,6 +533,16 @@ function App() {
       </main>
     </div>
   );
+}
+
+function App() {
+  const galleryMatch = window.location.pathname.match(/^\/g\/([^/]+)\/?$/);
+
+  if (galleryMatch) {
+    return <GalleryPage shareToken={decodeURIComponent(galleryMatch[1])} />;
+  }
+
+  return <DashboardPage />;
 }
 
 export default App;

@@ -34,6 +34,21 @@ interface StoredPhotoRow {
   storageKey: string;
 }
 
+interface PublicGalleryEvent {
+  title: string;
+  status: string;
+  createdAt: string;
+}
+
+interface PublicGalleryEventRow extends PublicGalleryEvent {
+  id: string;
+}
+
+interface PublicGalleryResponse {
+  event: PublicGalleryEvent;
+  photos: PhotoRecord[];
+}
+
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -287,6 +302,57 @@ async function createPhoto(
   return jsonResponse({ photo }, 201);
 }
 
+async function getPublicGallery(
+  env: Env,
+  shareToken: string,
+): Promise<Response> {
+  const event = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        title,
+        status,
+        created_at AS createdAt
+      FROM events
+      WHERE share_token = ?
+    `,
+  )
+    .bind(shareToken)
+    .first<PublicGalleryEventRow>();
+
+  if (!event) {
+    return jsonResponse({ error: "Gallery not found." }, 404);
+  }
+
+  const photoResult = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        event_id AS eventId,
+        original_filename AS originalFilename,
+        content_type AS contentType,
+        byte_size AS byteSize,
+        created_at AS createdAt
+      FROM photos
+      WHERE event_id = ?
+      ORDER BY created_at ASC
+    `,
+  )
+    .bind(event.id)
+    .all<PhotoRow>();
+
+  const response: PublicGalleryResponse = {
+    event: {
+      title: event.title,
+      status: event.status,
+      createdAt: event.createdAt,
+    },
+    photos: photoResult.results.map(toPhotoRecord),
+  };
+
+  return jsonResponse(response);
+}
+
 async function listPhotos(env: Env, eventId: string): Promise<Response> {
   if (!(await eventExists(eventId, env))) {
     return jsonResponse({ error: "Event not found." }, 404);
@@ -465,6 +531,20 @@ export default {
       const photoId = decodeURIComponent(photoMatch[1]);
 
       return deletePhoto(env, photoId);
+    }
+
+    const publicGalleryMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)$/,
+    );
+
+    if (publicGalleryMatch) {
+      if (request.method !== "GET") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const shareToken = decodeURIComponent(publicGalleryMatch[1]);
+
+      return getPublicGallery(env, shareToken);
     }
 
     if (url.pathname.startsWith("/api/")) {
