@@ -1,7 +1,14 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 import EditingQueue from "../components/EditingQueue";
 import type { EventRecord, PhotoCommentRecord, PhotoRecord } from "../types";
 import EventCard from "../components/EventCard";
+import { fetchJson } from "../api";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -19,25 +26,7 @@ interface CreatePhotoResponse {
   photo: PhotoRecord;
 }
 
-interface ErrorResponse {
-  error?: string;
-}
-
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
-
-async function getErrorMessage(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as ErrorResponse;
-
-    if (body.error) {
-      return body.error;
-    }
-  } catch {
-    // Fall through to the generic message.
-  }
-
-  return `Request failed with status ${response.status}.`;
-}
 
 function DashboardPage() {
   const [events, setEvents] = useState<EventRecord[]>([]);
@@ -59,30 +48,19 @@ function DashboardPage() {
   );
 
   async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
-    const response = await fetch(
+    const body = await fetchJson<PhotosResponse>(
       `/api/events/${encodeURIComponent(eventId)}/photos`,
     );
 
-    if (!response.ok) {
-      throw new Error(await getErrorMessage(response));
-    }
-
-    const body = (await response.json()) as PhotosResponse;
     return body.photos;
   }
 
-  async function loadEvents(): Promise<void> {
+  const loadEvents = useCallback(async (): Promise<void> => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await fetch("/api/events");
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
-
-      const body = (await response.json()) as EventsResponse;
+      const body = await fetchJson<EventsResponse>("/api/events");
 
       const photoEntries = await Promise.all(
         body.events.map(async (eventRecord) => {
@@ -102,11 +80,11 @@ function DashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadEvents();
-  }, []);
+  }, [loadEvents]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -122,7 +100,7 @@ function DashboardPage() {
     setError(null);
 
     try {
-      const response = await fetch("/api/events", {
+      const body = await fetchJson<CreateEventResponse>("/api/events", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -131,12 +109,6 @@ function DashboardPage() {
           title: trimmedTitle,
         }),
       });
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
-
-      const body = (await response.json()) as CreateEventResponse;
 
       setEvents((currentEvents) => [body.event, ...currentEvents]);
       setPhotosByEvent((currentPhotos) => ({
@@ -187,7 +159,7 @@ function DashboardPage() {
     setError(null);
 
     try {
-      const response = await fetch(
+      const body = await fetchJson<CreatePhotoResponse>(
         `/api/events/${encodeURIComponent(eventId)}/photos`,
         {
           method: "POST",
@@ -198,12 +170,6 @@ function DashboardPage() {
           body: file,
         },
       );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
-
-      const body = (await response.json()) as CreatePhotoResponse;
 
       setPhotosByEvent((currentPhotos) => ({
         ...currentPhotos,
@@ -236,16 +202,12 @@ function DashboardPage() {
     setError(null);
 
     try {
-      const response = await fetch(
+      await fetchJson<{ deletedPhotoId: string }>(
         `/api/photos/${encodeURIComponent(photo.id)}`,
         {
           method: "DELETE",
         },
       );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
 
       setPhotosByEvent((currentPhotos) => ({
         ...currentPhotos,
@@ -299,16 +261,12 @@ function DashboardPage() {
     setError(null);
 
     try {
-      const response = await fetch(
-        `/api/photos/${encodeURIComponent(photo.id)}/hearts`,
-        {
-          method: "DELETE",
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
+      await fetchJson<{
+        photoId: string;
+        heartCount: number;
+      }>(`/api/photos/${encodeURIComponent(photo.id)}/hearts`, {
+        method: "DELETE",
+      });
 
       setPhotosByEvent((currentPhotos) => ({
         ...currentPhotos,
@@ -342,24 +300,15 @@ function DashboardPage() {
     setError(null);
 
     try {
-      const response = await fetch(
-        `/api/comments/${encodeURIComponent(comment.id)}/resolution`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ resolved }),
-        },
-      );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
-
-      const responseBody = (await response.json()) as {
+      const responseBody = await fetchJson<{
         resolvedAt: string | null;
-      };
+      }>(`/api/comments/${encodeURIComponent(comment.id)}/resolution`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ resolved }),
+      });
 
       setPhotosByEvent((currentPhotos) => ({
         ...currentPhotos,

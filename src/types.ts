@@ -1,8 +1,16 @@
+export type EventStatus =
+  | "draft"
+  | "uploading"
+  | "ready"
+  | "editing"
+  | "completed"
+  | "archived";
+
 export interface EventRecord {
   id: string;
   title: string;
   shareToken: string;
-  status: string;
+  status: EventStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -15,7 +23,6 @@ export interface PhotoCommentRecord {
   createdAt: string;
   updatedAt: string;
   resolvedAt: string | null;
-  viewerOwned: boolean;
 }
 
 export interface ViewerPhotoCommentRecord extends PhotoCommentRecord {
@@ -31,7 +38,6 @@ export interface PhotoRecord {
   createdAt: string;
   imageUrl: string;
   heartCount: number;
-  viewerHearted: boolean;
   comments: PhotoCommentRecord[];
 }
 
