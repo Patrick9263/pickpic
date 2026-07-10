@@ -83,6 +83,16 @@ interface CommentRequestBody {
   body?: unknown;
 }
 
+interface ResolveCommentRequestBody {
+  resolved?: unknown;
+}
+
+interface DashboardCommentRow {
+  id: string;
+  photoId: string;
+  eventId: string;
+}
+
 interface PhotoCommentRecord {
   id: string;
   photoId: string;
@@ -1143,6 +1153,65 @@ async function deleteComment(
   });
 }
 
+async function setCommentResolution(
+  request: Request,
+  env: Env,
+  commentId: string,
+): Promise<Response> {
+  let requestBody: ResolveCommentRequestBody;
+
+  try {
+    requestBody = await request.json<ResolveCommentRequestBody>();
+  } catch {
+    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  }
+
+  if (typeof requestBody.resolved !== "boolean") {
+    return jsonResponse(
+      { error: "The resolved field must be a boolean." },
+      400,
+    );
+  }
+
+  const comment = await env.DB.prepare(
+    `
+      SELECT
+        c.id,
+        c.photo_id AS photoId,
+        p.event_id AS eventId
+      FROM comments c
+      INNER JOIN photos p
+        ON p.id = c.photo_id
+      WHERE c.id = ?
+    `,
+  )
+    .bind(commentId)
+    .first<DashboardCommentRow>();
+
+  if (!comment) {
+    return jsonResponse({ error: "Comment not found." }, 404);
+  }
+
+  const resolvedAt = requestBody.resolved ? new Date().toISOString() : null;
+
+  await env.DB.prepare(
+    `
+      UPDATE comments
+      SET resolved_at = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(resolvedAt, commentId)
+    .run();
+
+  return jsonResponse({
+    commentId,
+    photoId: comment.photoId,
+    eventId: comment.eventId,
+    resolvedAt,
+  });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -1283,6 +1352,20 @@ export default {
       const shareToken = decodeURIComponent(publicGalleryMatch[1]);
 
       return getPublicGallery(request, env, shareToken);
+    }
+
+    const dashboardCommentResolutionMatch = url.pathname.match(
+      /^\/api\/comments\/([^/]+)\/resolution$/,
+    );
+
+    if (dashboardCommentResolutionMatch) {
+      if (request.method !== "PUT") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const commentId = decodeURIComponent(dashboardCommentResolutionMatch[1]);
+
+      return setCommentResolution(request, env, commentId);
     }
 
     if (url.pathname.startsWith("/api/")) {

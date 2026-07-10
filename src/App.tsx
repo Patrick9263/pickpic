@@ -1,6 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import "./App.css";
 import GalleryPage from "./GalleryPage";
+import EditingQueue from "./EditingQueue";
 
 interface EventRecord {
   id: string;
@@ -49,6 +50,7 @@ interface PhotoCommentRecord {
   displayName: string;
   body: string;
   createdAt: string;
+  updatedAt: string;
   resolvedAt: string | null;
 }
 
@@ -104,6 +106,9 @@ function DashboardPage() {
   const [clearingHeartsPhotoId, setClearingHeartsPhotoId] = useState<
     string | null
   >(null);
+  const [resolvingCommentId, setResolvingCommentId] = useState<string | null>(
+    null,
+  );
 
   async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
     const response = await fetch(
@@ -379,6 +384,64 @@ function DashboardPage() {
     }
   }
 
+  async function handleSetCommentResolved(
+    eventId: string,
+    photoId: string,
+    comment: PhotoCommentRecord,
+    resolved: boolean,
+  ): Promise<void> {
+    setResolvingCommentId(comment.id);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/comments/${encodeURIComponent(comment.id)}/resolution`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ resolved }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const responseBody = (await response.json()) as {
+        resolvedAt: string | null;
+      };
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventId]: (currentPhotos[eventId] ?? []).map((photo) =>
+          photo.id === photoId
+            ? {
+                ...photo,
+                comments: photo.comments.map((currentComment) =>
+                  currentComment.id === comment.id
+                    ? {
+                        ...currentComment,
+                        resolvedAt: responseBody.resolvedAt,
+                      }
+                    : currentComment,
+                ),
+              }
+            : photo,
+        ),
+      }));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to update the comment.",
+      );
+    } finally {
+      setResolvingCommentId(null);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -442,6 +505,15 @@ function DashboardPage() {
           </div>
         )}
 
+        <EditingQueue
+          events={events}
+          photosByEvent={photosByEvent}
+          resolvingCommentId={resolvingCommentId}
+          clearingHeartsPhotoId={clearingHeartsPhotoId}
+          onSetCommentResolved={handleSetCommentResolved}
+          onClearHearts={handleClearHearts}
+        />
+
         <section className="events-section">
           <div className="section-heading">
             <div>
@@ -478,7 +550,10 @@ function DashboardPage() {
                   const photos = photosByEvent[eventRecord.id] ?? [];
                   const editRequestCount = photos.filter(
                     (photo) =>
-                      photo.heartCount > 0 || photo.comments.length > 0,
+                      photo.heartCount > 0 ||
+                      photo.comments.some(
+                        (comment) => comment.resolvedAt === null,
+                      ),
                   ).length;
 
                   return (
