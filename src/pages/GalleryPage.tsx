@@ -1,39 +1,21 @@
 import { useEffect, useState, type FormEvent } from "react";
-import "./GalleryPage.css";
-
-interface PhotoCommentRecord {
-  id: string;
-  photoId: string;
-  displayName: string;
-  body: string;
-  createdAt: string;
-  updatedAt: string;
-  resolvedAt: string | null;
-  viewerOwned: boolean;
-}
-
-interface PhotoRecord {
-  id: string;
-  eventId: string;
-  originalFilename: string;
-  contentType: string;
-  byteSize: number;
-  createdAt: string;
-  imageUrl: string;
-  heartCount: number;
-  viewerHearted: boolean;
-  comments: PhotoCommentRecord[];
-}
+import type {
+  EventStatus,
+  GalleryPhotoRecord,
+  ViewerPhotoCommentRecord,
+} from "../types";
+import { fetchJson } from "../api";
+import "../styles/GalleryPage.css";
 
 interface GalleryEvent {
   title: string;
-  status: string;
+  status: EventStatus;
   createdAt: string;
 }
 
 interface GalleryResponse {
   event: GalleryEvent;
-  photos: PhotoRecord[];
+  photos: GalleryPhotoRecord[];
 }
 
 interface HeartResponse {
@@ -42,11 +24,7 @@ interface HeartResponse {
 }
 
 interface CommentResponse {
-  comment: PhotoCommentRecord;
-}
-
-interface ErrorResponse {
-  error?: string;
+  comment: ViewerPhotoCommentRecord;
 }
 
 interface GalleryPageProps {
@@ -70,45 +48,20 @@ function getOrCreateVisitorToken(): string {
   return token;
 }
 
-async function getErrorMessage(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as ErrorResponse;
-
-    if (body.error) {
-      return body.error;
-    }
-  } catch {
-    // Use the fallback message below.
-  }
-
-  return `Request failed with status ${response.status}.`;
-}
-
 function GalleryPage({ shareToken }: GalleryPageProps) {
   const [visitorToken] = useState(getOrCreateVisitorToken);
-
   const [displayName, setDisplayName] = useState(
     () => window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
   );
-
   const [gallery, setGallery] = useState<GalleryResponse | null>(null);
-
   const [loadError, setLoadError] = useState<string | null>(null);
-
   const [actionError, setActionError] = useState<string | null>(null);
-
   const [isLoading, setIsLoading] = useState(true);
-
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
-
   const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
-
   const [commentText, setCommentText] = useState("");
-
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
-
   const [commentActionId, setCommentActionId] = useState<string | null>(null);
-
   const selectedPhoto =
     gallery?.photos.find((photo) => photo.id === selectedPhotoId) ?? null;
 
@@ -120,7 +73,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setLoadError(null);
 
       try {
-        const response = await fetch(
+        const body = await fetchJson<GalleryResponse>(
           `/api/galleries/${encodeURIComponent(shareToken)}`,
           {
             headers: {
@@ -128,12 +81,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             },
           },
         );
-
-        if (!response.ok) {
-          throw new Error(await getErrorMessage(response));
-        }
-
-        const body = (await response.json()) as GalleryResponse;
 
         if (!isCancelled) {
           setGallery(body);
@@ -188,7 +135,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     return resolvedName;
   }
 
-  async function toggleHeart(photo: PhotoRecord): Promise<void> {
+  async function toggleHeart(photo: GalleryPhotoRecord): Promise<void> {
     let resolvedDisplayName = displayName.trim();
 
     if (!photo.viewerHearted) {
@@ -207,7 +154,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     try {
       const method = photo.viewerHearted ? "DELETE" : "PUT";
 
-      const response = await fetch(
+      const body = await fetchJson<HeartResponse>(
         `/api/galleries/${encodeURIComponent(
           shareToken,
         )}/photos/${encodeURIComponent(photo.id)}/heart`,
@@ -229,12 +176,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               : undefined,
         },
       );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
-
-      const body = (await response.json()) as HeartResponse;
 
       setGallery((currentGallery) => {
         if (!currentGallery) {
@@ -292,7 +233,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setActionError(null);
 
     try {
-      const response = await fetch(
+      const responseBody = await fetchJson<CommentResponse>(
         `/api/galleries/${encodeURIComponent(
           shareToken,
         )}/photos/${encodeURIComponent(selectedPhoto.id)}/comments`,
@@ -308,12 +249,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           }),
         },
       );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
-
-      const responseBody = (await response.json()) as CommentResponse;
 
       setGallery((currentGallery) => {
         if (!currentGallery) {
@@ -345,7 +280,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     }
   }
 
-  async function editComment(comment: PhotoCommentRecord): Promise<void> {
+  async function editComment(comment: ViewerPhotoCommentRecord): Promise<void> {
     if (!selectedPhoto || !comment.viewerOwned) {
       return;
     }
@@ -368,7 +303,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setActionError(null);
 
     try {
-      const response = await fetch(
+      const responseBody = await fetchJson<CommentResponse>(
         `/api/galleries/${encodeURIComponent(
           shareToken,
         )}/photos/${encodeURIComponent(
@@ -383,12 +318,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           body: JSON.stringify({ body }),
         },
       );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
-
-      const responseBody = (await response.json()) as CommentResponse;
 
       setGallery((currentGallery) => {
         if (!currentGallery) {
@@ -422,7 +351,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     }
   }
 
-  async function deleteComment(comment: PhotoCommentRecord): Promise<void> {
+  async function deleteComment(
+    comment: ViewerPhotoCommentRecord,
+  ): Promise<void> {
     if (!selectedPhoto || !comment.viewerOwned) {
       return;
     }
@@ -437,7 +368,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setActionError(null);
 
     try {
-      const response = await fetch(
+      await fetchJson<{
+        deletedCommentId: string;
+      }>(
         `/api/galleries/${encodeURIComponent(
           shareToken,
         )}/photos/${encodeURIComponent(
@@ -450,10 +383,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           },
         },
       );
-
-      if (!response.ok) {
-        throw new Error(await getErrorMessage(response));
-      }
 
       setGallery((currentGallery) => {
         if (!currentGallery) {
