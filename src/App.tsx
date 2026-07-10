@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import "./App.css";
 
 interface EventRecord {
@@ -10,17 +10,37 @@ interface EventRecord {
   updatedAt: string;
 }
 
+interface PhotoRecord {
+  id: string;
+  eventId: string;
+  originalFilename: string;
+  contentType: string;
+  byteSize: number;
+  createdAt: string;
+  imageUrl: string;
+}
+
 interface EventsResponse {
   events: EventRecord[];
+}
+
+interface PhotosResponse {
+  photos: PhotoRecord[];
 }
 
 interface CreateEventResponse {
   event: EventRecord;
 }
 
+interface CreatePhotoResponse {
+  photo: PhotoRecord;
+}
+
 interface ErrorResponse {
   error?: string;
 }
+
+const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 
 async function getErrorMessage(response: Response): Promise<string> {
   try {
@@ -49,13 +69,39 @@ function formatDate(value: string): string {
   }).format(date);
 }
 
+function formatFileSize(byteSize: number): string {
+  if (byteSize < 1024 * 1024) {
+    return `${Math.max(1, Math.round(byteSize / 1024))} KB`;
+  }
+
+  return `${(byteSize / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function App() {
   const [events, setEvents] = useState<EventRecord[]>([]);
+  const [photosByEvent, setPhotosByEvent] = useState<
+    Record<string, PhotoRecord[]>
+  >({});
   const [title, setTitle] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [uploadingEventId, setUploadingEventId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
+  const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
+
+  async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
+    const response = await fetch(
+      `/api/events/${encodeURIComponent(eventId)}/photos`,
+    );
+
+    if (!response.ok) {
+      throw new Error(await getErrorMessage(response));
+    }
+
+    const body = (await response.json()) as PhotosResponse;
+    return body.photos;
+  }
 
   async function loadEvents(): Promise<void> {
     setIsLoading(true);
@@ -69,7 +115,16 @@ function App() {
       }
 
       const body = (await response.json()) as EventsResponse;
+
+      const photoEntries = await Promise.all(
+        body.events.map(async (eventRecord) => {
+          const photos = await loadPhotos(eventRecord.id);
+          return [eventRecord.id, photos] as const;
+        }),
+      );
+
       setEvents(body.events);
+      setPhotosByEvent(Object.fromEntries(photoEntries));
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -116,6 +171,10 @@ function App() {
       const body = (await response.json()) as CreateEventResponse;
 
       setEvents((currentEvents) => [body.event, ...currentEvents]);
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [body.event.id]: [],
+      }));
       setTitle("");
     } catch (caughtError) {
       setError(
@@ -125,6 +184,115 @@ function App() {
       );
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function handlePhotoSelection(
+    eventId: string,
+    changeEvent: ChangeEvent<HTMLInputElement>,
+  ): Promise<void> {
+    const file = changeEvent.currentTarget.files?.[0];
+
+    // Allow selecting the same file again after an error.
+    changeEvent.currentTarget.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    const isJpeg =
+      file.type === "image/jpeg" ||
+      file.name.toLowerCase().endsWith(".jpg") ||
+      file.name.toLowerCase().endsWith(".jpeg");
+
+    if (!isJpeg) {
+      setError("PickPic currently supports JPG and JPEG files only.");
+      return;
+    }
+
+    if (file.size > MAX_JPEG_BYTES) {
+      setError("The JPEG must be 25 MB or smaller.");
+      return;
+    }
+
+    setUploadingEventId(eventId);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/events/${encodeURIComponent(eventId)}/photos`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "image/jpeg",
+            "X-File-Name": encodeURIComponent(file.name),
+          },
+          body: file,
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const body = (await response.json()) as CreatePhotoResponse;
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventId]: [body.photo, ...(currentPhotos[eventId] ?? [])],
+      }));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to upload the photo.",
+      );
+    } finally {
+      setUploadingEventId(null);
+    }
+  }
+
+  async function handleDeletePhoto(
+    eventId: string,
+    photo: PhotoRecord,
+  ): Promise<void> {
+    const shouldDelete = window.confirm(
+      `Delete "${photo.originalFilename}" from this event?`,
+    );
+
+    if (!shouldDelete) {
+      return;
+    }
+
+    setDeletingPhotoId(photo.id);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/photos/${encodeURIComponent(photo.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventId]: (currentPhotos[eventId] ?? []).filter(
+          (currentPhoto) => currentPhoto.id !== photo.id,
+        ),
+      }));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to delete the photo.",
+      );
+    } finally {
+      setDeletingPhotoId(null);
     }
   }
 
@@ -160,8 +328,8 @@ function App() {
           <p className="eyebrow">Photographer dashboard</p>
           <h1>Turn your photos into a gallery your friends can help curate.</h1>
           <p className="hero-description">
-            Create an event now. Photo uploads, hearts, comments, and editing
-            requests will be added next.
+            Create an event, upload JPG previews, and prepare a gallery link for
+            sharing.
           </p>
         </section>
 
@@ -240,6 +408,8 @@ function App() {
                 {events.map((eventRecord) => {
                   const shareUrl = `${window.location.origin}/g/${eventRecord.shareToken}`;
                   const wasCopied = copiedEventId === eventRecord.id;
+                  const isUploading = uploadingEventId === eventRecord.id;
+                  const photos = photosByEvent[eventRecord.id] ?? [];
 
                   return (
                     <article className="event-card" key={eventRecord.id}>
@@ -258,7 +428,7 @@ function App() {
                       <dl className="event-stats">
                         <div>
                           <dt>Photos</dt>
-                          <dd>0</dd>
+                          <dd>{photos.length}</dd>
                         </div>
 
                         <div>
@@ -266,6 +436,79 @@ function App() {
                           <dd>0</dd>
                         </div>
                       </dl>
+
+                      <div className="upload-controls">
+                        <input
+                          className="visually-hidden"
+                          id={`photo-upload-${eventRecord.id}`}
+                          type="file"
+                          accept="image/jpeg,.jpg,.jpeg"
+                          disabled={isUploading}
+                          onChange={(event) =>
+                            void handlePhotoSelection(eventRecord.id, event)
+                          }
+                        />
+
+                        <label
+                          className={`upload-button ${
+                            isUploading ? "upload-button-disabled" : ""
+                          }`}
+                          htmlFor={`photo-upload-${eventRecord.id}`}
+                          aria-disabled={isUploading}
+                        >
+                          {isUploading ? "Uploading…" : "Upload JPG"}
+                        </label>
+
+                        <span className="upload-help">
+                          Maximum file size: 25 MB
+                        </span>
+                      </div>
+
+                      {photos.length > 0 && (
+                        <div className="photo-list">
+                          {photos.map((photo) => (
+                            <article className="photo-item" key={photo.id}>
+                              <a
+                                className="photo-thumbnail-link"
+                                href={photo.imageUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                <img
+                                  className="photo-thumbnail"
+                                  src={photo.imageUrl}
+                                  alt={photo.originalFilename}
+                                  loading="lazy"
+                                />
+                              </a>
+
+                              <div className="photo-details">
+                                <span title={photo.originalFilename}>
+                                  {photo.originalFilename}
+                                </span>
+
+                                <small>{formatFileSize(photo.byteSize)}</small>
+
+                                <button
+                                  className="delete-photo-button"
+                                  type="button"
+                                  disabled={deletingPhotoId === photo.id}
+                                  onClick={() =>
+                                    void handleDeletePhoto(
+                                      eventRecord.id,
+                                      photo,
+                                    )
+                                  }
+                                >
+                                  {deletingPhotoId === photo.id
+                                    ? "Deleting…"
+                                    : "Delete"}
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      )}
 
                       <div className="share-link">
                         <span>Gallery link</span>
