@@ -11,6 +11,7 @@ import type {
   FinalPhotoRecord,
   PhotoRecord,
   PhotoWorkflowStatus,
+  UploadBatchProgress,
 } from "../types";
 import EventCard from "../components/EventCard";
 import { fetchJson } from "../api";
@@ -28,7 +29,10 @@ interface CreateEventResponse {
 }
 
 interface CreatePhotoResponse {
-  photo: PhotoRecord;
+  duplicate: boolean;
+  photo?: PhotoRecord;
+  existingPhotoId?: string;
+  duplicateVariant?: "original" | "final";
 }
 
 interface UploadFinalPhotoResponse {
@@ -39,7 +43,6 @@ interface UploadFinalPhotoResponse {
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
-
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 
 async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
@@ -48,6 +51,16 @@ async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
   );
 
   return body.photos;
+}
+
+async function calculateFileSha256(file: File): Promise<string> {
+  const fileData = await file.arrayBuffer();
+
+  const digest = await crypto.subtle.digest("SHA-256", fileData);
+
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 function DashboardPage() {
@@ -71,6 +84,9 @@ function DashboardPage() {
   const [uploadingFinalPhotoId, setUploadingFinalPhotoId] = useState<
     string | null
   >(null);
+  const [uploadProgressByEvent, setUploadProgressByEvent] = useState<
+    Record<string, UploadBatchProgress>
+  >({});
 
   const loadEvents = useCallback(async (): Promise<void> => {
     setIsLoading(true);
@@ -148,58 +164,130 @@ function DashboardPage() {
     eventId: string,
     changeEvent: ChangeEvent<HTMLInputElement>,
   ): Promise<void> {
-    const file = changeEvent.currentTarget.files?.[0];
+    const selectedFiles = Array.from(changeEvent.currentTarget.files ?? []);
 
-    // Allow selecting the same file again after an error.
     changeEvent.currentTarget.value = "";
 
-    if (!file) {
+    if (selectedFiles.length === 0) {
       return;
     }
 
-    const isJpeg =
-      file.type === "image/jpeg" ||
-      file.name.toLowerCase().endsWith(".jpg") ||
-      file.name.toLowerCase().endsWith(".jpeg");
+    const validFiles: File[] = [];
+    let failedCount = 0;
 
-    if (!isJpeg) {
-      setError("PickPic currently supports JPG and JPEG files only.");
+    for (const file of selectedFiles) {
+      const lowerFilename = file.name.toLowerCase();
+
+      const isJpeg =
+        file.type === "image/jpeg" ||
+        lowerFilename.endsWith(".jpg") ||
+        lowerFilename.endsWith(".jpeg");
+
+      if (!isJpeg || file.size > MAX_JPEG_BYTES) {
+        failedCount += 1;
+        continue;
+      }
+
+      validFiles.push(file);
+    }
+
+    if (validFiles.length === 0) {
+      setError(
+        "No valid JPG files were selected. Files must be 25 MB or smaller.",
+      );
       return;
     }
 
-    if (file.size > MAX_JPEG_BYTES) {
-      setError("The JPEG must be 25 MB or smaller.");
-      return;
-    }
+    let uploadedCount = 0;
+    let skippedCount = 0;
 
     setUploadingEventId(eventId);
     setError(null);
 
-    try {
-      const body = await fetchJson<CreatePhotoResponse>(
-        `/api/events/${encodeURIComponent(eventId)}/photos`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "image/jpeg",
-            "X-File-Name": encodeURIComponent(file.name),
-          },
-          body: file,
-        },
-      );
+    setUploadProgressByEvent((currentProgress) => ({
+      ...currentProgress,
+      [eventId]: {
+        total: selectedFiles.length,
+        processed: failedCount,
+        uploaded: 0,
+        skipped: 0,
+        failed: failedCount,
+        currentFilename: null,
+      },
+    }));
 
-      setPhotosByEvent((currentPhotos) => ({
-        ...currentPhotos,
-        [eventId]: [body.photo, ...(currentPhotos[eventId] ?? [])],
+    for (const file of validFiles) {
+      setUploadProgressByEvent((currentProgress) => ({
+        ...currentProgress,
+        [eventId]: {
+          ...currentProgress[eventId],
+          currentFilename: file.name,
+        },
       }));
-    } catch (caughtError) {
+
+      try {
+        const sourceSha256 = await calculateFileSha256(file);
+
+        const body = await fetchJson<CreatePhotoResponse>(
+          `/api/events/${encodeURIComponent(eventId)}/photos`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "image/jpeg",
+              "X-File-Name": encodeURIComponent(file.name),
+              "X-File-SHA256": sourceSha256,
+            },
+            body: file,
+          },
+        );
+
+        if (body.duplicate) {
+          skippedCount += 1;
+        } else if (body.photo) {
+          uploadedCount += 1;
+
+          /*
+           * Add each successful upload immediately so the
+           * dashboard and public gallery can grow progressively.
+           */
+          setPhotosByEvent((currentPhotos) => ({
+            ...currentPhotos,
+            [eventId]: [body.photo!, ...(currentPhotos[eventId] ?? [])],
+          }));
+        } else {
+          throw new Error("The upload response did not contain a photo.");
+        }
+      } catch (caughtError) {
+        failedCount += 1;
+
+        console.error(`Unable to upload ${file.name}:`, caughtError);
+      } finally {
+        setUploadProgressByEvent((currentProgress) => {
+          const existingProgress = currentProgress[eventId];
+
+          return {
+            ...currentProgress,
+            [eventId]: {
+              ...existingProgress,
+              processed: existingProgress.processed + 1,
+              uploaded: uploadedCount,
+              skipped: skippedCount,
+              failed: failedCount,
+              currentFilename: null,
+            },
+          };
+        });
+      }
+    }
+
+    setUploadingEventId(null);
+
+    if (failedCount > 0) {
       setError(
-        caughtError instanceof Error
-          ? caughtError.message
-          : "Unable to upload the photo.",
+        `${failedCount} ${
+          failedCount === 1 ? "file was" : "files were"
+        } not uploaded. Some files may be invalid, too large, or may have encountered an upload error.`,
       );
-    } finally {
-      setUploadingEventId(null);
     }
   }
 
@@ -407,6 +495,7 @@ function DashboardPage() {
     setError(null);
 
     try {
+      const finalSha256 = await calculateFileSha256(file);
       const response = await fetchJson<UploadFinalPhotoResponse>(
         `/api/photos/${encodeURIComponent(photo.id)}/final`,
         {
@@ -414,6 +503,7 @@ function DashboardPage() {
           headers: {
             "Content-Type": "image/jpeg",
             "X-File-Name": encodeURIComponent(file.name),
+            "X-File-SHA256": finalSha256,
           },
           body: file,
         },
@@ -576,6 +666,10 @@ function DashboardPage() {
                       }
                       uploadingFinalPhotoId={uploadingFinalPhotoId}
                       handleFinalPhotoSelection={handleFinalPhotoSelection}
+                      uploadProgress={
+                        uploadProgressByEvent[eventRecord.id] ?? null
+                      }
+                      uploadsDisabled={uploadingEventId !== null}
                     />
                   );
                 })}

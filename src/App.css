@@ -547,6 +547,32 @@ button:disabled {
   font-weight: 700;
 }
 
+.upload-progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.upload-progress progress {
+  accent-color: #7358d3;
+  height: 7px;
+  width: 100%;
+}
+
+.upload-progress span {
+  color: #625f58;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.upload-progress small {
+  color: #8a867e;
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;
