@@ -6,7 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import EditingQueue from "../components/EditingQueue";
-import type { EventRecord, PhotoCommentRecord, PhotoRecord } from "../types";
+import type { EventRecord, PhotoRecord, PhotoWorkflowStatus } from "../types";
 import EventCard from "../components/EventCard";
 import { fetchJson } from "../api";
 
@@ -51,9 +51,9 @@ function DashboardPage() {
   const [clearingHeartsPhotoId, setClearingHeartsPhotoId] = useState<
     string | null
   >(null);
-  const [resolvingCommentId, setResolvingCommentId] = useState<string | null>(
-    null,
-  );
+  const [updatingWorkflowPhotoId, setUpdatingWorkflowPhotoId] = useState<
+    string | null
+  >(null);
 
   const loadEvents = useCallback(async (): Promise<void> => {
     setIsLoading(true);
@@ -290,52 +290,61 @@ function DashboardPage() {
     }
   }
 
-  async function handleSetCommentResolved(
+  async function handleSetPhotoWorkflowStatus(
     eventId: string,
-    photoId: string,
-    comment: PhotoCommentRecord,
-    resolved: boolean,
+    photo: PhotoRecord,
+    workflowStatus: PhotoWorkflowStatus,
   ): Promise<void> {
-    setResolvingCommentId(comment.id);
+    if (workflowStatus === "final" && photo.heartCount > 0) {
+      const shouldContinue = window.confirm(
+        `Mark "${photo.originalFilename}" as final? ` +
+          `This will clear its ${photo.heartCount} current ` +
+          `${photo.heartCount === 1 ? "heart" : "hearts"}.`,
+      );
+
+      if (!shouldContinue) {
+        return;
+      }
+    }
+
+    setUpdatingWorkflowPhotoId(photo.id);
     setError(null);
 
     try {
-      const responseBody = await fetchJson<{
-        resolvedAt: string | null;
-      }>(`/api/comments/${encodeURIComponent(comment.id)}/resolution`, {
+      const response = await fetchJson<{
+        photoId: string;
+        workflowStatus: PhotoWorkflowStatus;
+        heartCount: number;
+      }>(`/api/photos/${encodeURIComponent(photo.id)}/workflow`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ resolved }),
+        body: JSON.stringify({
+          status: workflowStatus,
+        }),
       });
 
       setPhotosByEvent((currentPhotos) => ({
         ...currentPhotos,
-        [eventId]: (currentPhotos[eventId] ?? []).map((photo) =>
-          photo.id === photoId
+        [eventId]: (currentPhotos[eventId] ?? []).map((currentPhoto) =>
+          currentPhoto.id === photo.id
             ? {
-                ...photo,
-                comments: photo.comments.map((currentComment) =>
-                  currentComment.id === comment.id
-                    ? {
-                        ...currentComment,
-                        resolvedAt: responseBody.resolvedAt,
-                      }
-                    : currentComment,
-                ),
+                ...currentPhoto,
+                workflowStatus: response.workflowStatus,
+                heartCount: response.heartCount,
               }
-            : photo,
+            : currentPhoto,
         ),
       }));
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : "Unable to update the comment.",
+          : "Unable to update the photo status.",
       );
     } finally {
-      setResolvingCommentId(null);
+      setUpdatingWorkflowPhotoId(null);
     }
   }
 
@@ -405,9 +414,9 @@ function DashboardPage() {
         <EditingQueue
           events={events}
           photosByEvent={photosByEvent}
-          resolvingCommentId={resolvingCommentId}
+          updatingWorkflowPhotoId={updatingWorkflowPhotoId}
           clearingHeartsPhotoId={clearingHeartsPhotoId}
-          onSetCommentResolved={handleSetCommentResolved}
+          onSetPhotoWorkflowStatus={handleSetPhotoWorkflowStatus}
           onClearHearts={handleClearHearts}
         />
 
@@ -446,11 +455,7 @@ function DashboardPage() {
                   const isUploading = uploadingEventId === eventRecord.id;
                   const photos = photosByEvent[eventRecord.id] ?? [];
                   const editRequestCount = photos.filter(
-                    (photo) =>
-                      photo.heartCount > 0 ||
-                      photo.comments.some(
-                        (comment) => comment.resolvedAt === null,
-                      ),
+                    (photo) => photo.heartCount > 0,
                   ).length;
 
                   return (
@@ -468,6 +473,10 @@ function DashboardPage() {
                       deletingPhotoId={deletingPhotoId}
                       clearingHeartsPhotoId={clearingHeartsPhotoId}
                       handleClearHearts={handleClearHearts}
+                      updatingWorkflowPhotoId={updatingWorkflowPhotoId}
+                      handleSetPhotoWorkflowStatus={
+                        handleSetPhotoWorkflowStatus
+                      }
                     />
                   );
                 })}
