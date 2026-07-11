@@ -1,3 +1,5 @@
+import { requireAdminAccess, type AccessEnvironment } from "./access.ts";
+
 interface CreateEventBody {
   title?: unknown;
 }
@@ -112,16 +114,6 @@ interface HeartCountRow {
 interface CommentRequestBody {
   displayName?: unknown;
   body?: unknown;
-}
-
-interface ResolveCommentRequestBody {
-  resolved?: unknown;
-}
-
-interface DashboardCommentRow {
-  id: string;
-  photoId: string;
-  eventId: string;
 }
 
 interface PhotoCommentRecord {
@@ -1488,65 +1480,6 @@ async function deleteComment(
   });
 }
 
-async function setCommentResolution(
-  request: Request,
-  env: Env,
-  commentId: string,
-): Promise<Response> {
-  let requestBody: ResolveCommentRequestBody;
-
-  try {
-    requestBody = await request.json<ResolveCommentRequestBody>();
-  } catch {
-    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
-  }
-
-  if (typeof requestBody.resolved !== "boolean") {
-    return jsonResponse(
-      { error: "The resolved field must be a boolean." },
-      400,
-    );
-  }
-
-  const comment = await env.DB.prepare(
-    `
-      SELECT
-        c.id,
-        c.photo_id AS photoId,
-        p.event_id AS eventId
-      FROM comments c
-      INNER JOIN photos p
-        ON p.id = c.photo_id
-      WHERE c.id = ?
-    `,
-  )
-    .bind(commentId)
-    .first<DashboardCommentRow>();
-
-  if (!comment) {
-    return jsonResponse({ error: "Comment not found." }, 404);
-  }
-
-  const resolvedAt = requestBody.resolved ? new Date().toISOString() : null;
-
-  await env.DB.prepare(
-    `
-      UPDATE comments
-      SET resolved_at = ?
-      WHERE id = ?
-    `,
-  )
-    .bind(resolvedAt, commentId)
-    .run();
-
-  return jsonResponse({
-    commentId,
-    photoId: comment.photoId,
-    eventId: comment.eventId,
-    resolvedAt,
-  });
-}
-
 function isPhotoWorkflowStatus(value: unknown): value is PhotoWorkflowStatus {
   return value === "idle" || value === "editing" || value === "final";
 }
@@ -1877,7 +1810,18 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/events") {
+    if (url.pathname.startsWith("/api/admin/")) {
+      const accessResponse = await requireAdminAccess(
+        request,
+        env as Env & AccessEnvironment,
+      );
+
+      if (accessResponse) {
+        return accessResponse;
+      }
+    }
+
+    if (url.pathname === "/api/admin/events") {
       if (request.method === "POST") {
         return createEvent(request, env);
       }
@@ -1890,7 +1834,7 @@ export default {
     }
 
     const eventPhotosMatch = url.pathname.match(
-      /^\/api\/events\/([^/]+)\/photos$/,
+      /^\/api\/admin\/events\/([^/]+)\/photos$/,
     );
 
     if (eventPhotosMatch) {
@@ -1936,7 +1880,7 @@ export default {
     }
 
     const photoFinalMatch = url.pathname.match(
-      /^\/api\/photos\/([^/]+)\/final$/,
+      /^\/api\/admin\/photos\/([^/]+)\/final$/,
     );
 
     if (photoFinalMatch) {
@@ -1949,7 +1893,7 @@ export default {
       return uploadFinalPhoto(request, env, photoId);
     }
 
-    const photoMatch = url.pathname.match(/^\/api\/photos\/([^/]+)$/);
+    const photoMatch = url.pathname.match(/^\/api\/admin\/photos\/([^/]+)$/);
 
     if (photoMatch) {
       if (request.method !== "DELETE") {
@@ -1981,7 +1925,7 @@ export default {
     }
 
     const photoHeartsMatch = url.pathname.match(
-      /^\/api\/photos\/([^/]+)\/hearts$/,
+      /^\/api\/admin\/photos\/([^/]+)\/hearts$/,
     );
 
     if (photoHeartsMatch) {
@@ -2043,22 +1987,8 @@ export default {
       return getPublicGallery(request, env, shareToken);
     }
 
-    const dashboardCommentResolutionMatch = url.pathname.match(
-      /^\/api\/comments\/([^/]+)\/resolution$/,
-    );
-
-    if (dashboardCommentResolutionMatch) {
-      if (request.method !== "PUT") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const commentId = decodeURIComponent(dashboardCommentResolutionMatch[1]);
-
-      return setCommentResolution(request, env, commentId);
-    }
-
     const photoWorkflowMatch = url.pathname.match(
-      /^\/api\/photos\/([^/]+)\/workflow$/,
+      /^\/api\/admin\/photos\/([^/]+)\/workflow$/,
     );
 
     if (photoWorkflowMatch) {

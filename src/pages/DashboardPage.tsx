@@ -94,7 +94,7 @@ function DashboardPage() {
     setError(null);
 
     try {
-      const body = await fetchJson<EventsResponse>("/api/events");
+      const body = await fetchJson<EventsResponse>("/api/admin/events");
 
       const photoEntries = await Promise.all(
         body.events.map(async (eventRecord) => {
@@ -134,7 +134,7 @@ function DashboardPage() {
     setError(null);
 
     try {
-      const body = await fetchJson<CreateEventResponse>("/api/events", {
+      const body = await fetchJson<CreateEventResponse>("/api/admin/events", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -255,7 +255,7 @@ function DashboardPage() {
         }
 
         const body = await fetchJson<CreatePhotoResponse>(
-          `/api/events/${encodeURIComponent(eventId)}/photos`,
+          `/api/admin/events/${encodeURIComponent(eventId)}/photos`,
           {
             method: "POST",
             headers,
@@ -330,7 +330,7 @@ function DashboardPage() {
 
     try {
       await fetchJson<{ deletedPhotoId: string }>(
-        `/api/photos/${encodeURIComponent(photo.id)}`,
+        `/api/admin/photos/${encodeURIComponent(photo.id)}`,
         {
           method: "DELETE",
         },
@@ -391,7 +391,7 @@ function DashboardPage() {
       await fetchJson<{
         photoId: string;
         heartCount: number;
-      }>(`/api/photos/${encodeURIComponent(photo.id)}/hearts`, {
+      }>(`/api/admin/photos/${encodeURIComponent(photo.id)}/hearts`, {
         method: "DELETE",
       });
 
@@ -519,7 +519,7 @@ function DashboardPage() {
     try {
       const finalSha256 = await calculateFileSha256(file);
       const response = await fetchJson<UploadFinalPhotoResponse>(
-        `/api/photos/${encodeURIComponent(photo.id)}/final`,
+        `/api/admin/photos/${encodeURIComponent(photo.id)}/final`,
         {
           method: "PUT",
           headers: {
