@@ -1,5 +1,10 @@
 import type { ChangeEvent } from "react";
-import type { EventRecord, PhotoRecord, PhotoWorkflowStatus } from "../types";
+import type {
+  EventRecord,
+  PhotoRecord,
+  UploadBatchProgress,
+  PhotoWorkflowStatus,
+} from "../types";
 
 function getWorkflowLabel(photo: PhotoRecord): string {
   if (photo.workflowStatus === "editing") {
@@ -41,6 +46,7 @@ type EventCardProps = {
   handleDeletePhoto(eventId: string, photo: PhotoRecord): Promise<void>;
   copyShareLink(eventRecord: EventRecord): Promise<void>;
   handleClearHearts(eventId: string, photo: PhotoRecord): Promise<void>;
+  uploadProgress: UploadBatchProgress | null;
 };
 
 function EventCard(props: EventCardProps) {
@@ -61,6 +67,7 @@ function EventCard(props: EventCardProps) {
     handleClearHearts,
     uploadingFinalPhotoId,
     handleFinalPhotoSelection,
+    uploadProgress,
   } = props;
 
   function formatDate(value: string): string {
@@ -114,6 +121,7 @@ function EventCard(props: EventCardProps) {
           id={`photo-upload-${eventRecord.id}`}
           type="file"
           accept="image/jpeg,.jpg,.jpeg"
+          multiple
           disabled={isUploading}
           onChange={(event) => void handlePhotoSelection(eventRecord.id, event)}
         />
@@ -125,10 +133,40 @@ function EventCard(props: EventCardProps) {
           htmlFor={`photo-upload-${eventRecord.id}`}
           aria-disabled={isUploading}
         >
-          {isUploading ? "Uploading…" : "Upload JPG"}
+          {isUploading && uploadProgress
+            ? `Uploading ${uploadProgress.processed}/${uploadProgress.total}…`
+            : "Upload JPGs"}
         </label>
 
-        <span className="upload-help">Maximum file size: 25 MB</span>
+        <span className="upload-help">
+          Select one or more JPGs · Maximum 25 MB each
+        </span>
+        {uploadProgress && (
+          <div className="upload-progress" aria-live="polite">
+            <progress
+              max={uploadProgress.total}
+              value={uploadProgress.processed}
+            />
+
+            <span>
+              {uploadProgress.processed}/{uploadProgress.total} processed
+              {" · "}
+              {uploadProgress.uploaded} uploaded
+              {" · "}
+              {uploadProgress.skipped} duplicates skipped
+              {uploadProgress.failed > 0 && (
+                <>
+                  {" · "}
+                  {uploadProgress.failed} failed
+                </>
+              )}
+            </span>
+
+            {uploadProgress.currentFilename && (
+              <small>Processing {uploadProgress.currentFilename}</small>
+            )}
+          </div>
+        )}
       </div>
 
       {photos.length > 0 && (

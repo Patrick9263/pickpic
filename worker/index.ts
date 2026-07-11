@@ -152,8 +152,12 @@ interface PhotoWorkflowRow {
   finalStorageKey: string | null;
 }
 
-const MAX_JPEG_BYTES = 25 * 1024 * 1024;
+interface DuplicatePhotoRow {
+  id: string;
+  duplicateVariant: "original" | "final";
+}
 
+const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 
 function jsonResponse(data: unknown, status = 200): Response {
@@ -171,6 +175,43 @@ function generateShareToken(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
     "",
   );
+}
+
+function getSourceSha256(request: Request): string | null {
+  const value = request.headers.get("X-File-SHA256")?.trim().toLowerCase();
+
+  if (!value || !/^[0-9a-f]{64}$/.test(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+async function findDuplicatePhoto(
+  env: Env,
+  eventId: string,
+  sourceSha256: string,
+): Promise<DuplicatePhotoRow | null> {
+  return env.DB.prepare(
+    `
+      SELECT
+        id,
+        CASE
+          WHEN source_sha256 = ? THEN 'original'
+          ELSE 'final'
+        END AS duplicateVariant
+      FROM photos
+      WHERE
+        event_id = ?
+        AND (
+          source_sha256 = ?
+          OR final_sha256 = ?
+        )
+      LIMIT 1
+    `,
+  )
+    .bind(sourceSha256, eventId, sourceSha256, sourceSha256)
+    .first<DuplicatePhotoRow>();
 }
 
 function getFilename(request: Request): string | null {
@@ -366,10 +407,31 @@ async function createPhoto(
     return jsonResponse({ error: "The image body is required." }, 400);
   }
 
+  const sourceSha256 = getSourceSha256(request);
+
+  if (!sourceSha256) {
+    return jsonResponse(
+      {
+        error: "A valid lowercase SHA-256 value is required in X-File-SHA256.",
+      },
+      400,
+    );
+  }
+
   const declaredSize = Number(request.headers.get("Content-Length"));
 
   if (Number.isFinite(declaredSize) && declaredSize > MAX_JPEG_BYTES) {
     return jsonResponse({ error: "The JPEG must be 25 MB or smaller." }, 413);
+  }
+
+  const duplicatePhoto = await findDuplicatePhoto(env, eventId, sourceSha256);
+
+  if (duplicatePhoto) {
+    return jsonResponse({
+      duplicate: true,
+      existingPhotoId: duplicatePhoto.id,
+      duplicateVariant: duplicatePhoto.duplicateVariant,
+    });
   }
 
   const photoId = crypto.randomUUID();
@@ -386,6 +448,7 @@ async function createPhoto(
         eventId,
         photoId,
         originalFilename,
+        sourceSha256,
       },
     });
   } catch {
@@ -411,9 +474,10 @@ async function createPhoto(
           content_type,
           byte_size,
           workflow_status,
+          source_sha256,
           created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
       .bind(
@@ -424,11 +488,32 @@ async function createPhoto(
         "image/jpeg",
         storedObject.size,
         "idle",
+        sourceSha256,
         createdAt,
       )
       .run();
-  } catch {
+  } catch (error) {
     await env.pickpic_photos.delete(storageKey);
+
+    /*
+     * Another upload could have inserted the same hash after our
+     * initial duplicate check.
+     */
+    const duplicateAfterInsert = await findDuplicatePhoto(
+      env,
+      eventId,
+      sourceSha256,
+    );
+
+    if (duplicateAfterInsert) {
+      return jsonResponse({
+        duplicate: true,
+        existingPhotoId: duplicateAfterInsert.id,
+        duplicateVariant: duplicateAfterInsert.duplicateVariant,
+      });
+    }
+
+    console.error("Unable to save photo metadata:", error);
 
     return jsonResponse(
       { error: "The photo metadata could not be saved." },
@@ -450,7 +535,13 @@ async function createPhoto(
     comments: [],
   };
 
-  return jsonResponse({ photo }, 201);
+  return jsonResponse(
+    {
+      duplicate: false,
+      photo,
+    },
+    201,
+  );
 }
 
 async function listPhotos(env: Env, eventId: string): Promise<Response> {
@@ -1485,6 +1576,17 @@ async function uploadFinalPhoto(
     );
   }
 
+  const finalSha256 = getSourceSha256(request);
+
+  if (!finalSha256) {
+    return jsonResponse(
+      {
+        error: "A valid lowercase SHA-256 value is required in X-File-SHA256.",
+      },
+      400,
+    );
+  }
+
   if (!request.body) {
     return jsonResponse({ error: "The final image body is required." }, 400);
   }
@@ -1515,6 +1617,7 @@ async function uploadFinalPhoto(
         photoId,
         originalFilename,
         variant: "final",
+        sourceSha256: finalSha256,
       },
     });
   } catch {
@@ -1543,6 +1646,7 @@ async function uploadFinalPhoto(
             final_content_type = ?,
             final_byte_size = ?,
             final_uploaded_at = ?,
+            final_sha256 = ?,
             workflow_status = 'final'
           WHERE id = ?
         `,
@@ -1552,6 +1656,7 @@ async function uploadFinalPhoto(
         "image/jpeg",
         storedObject.size,
         uploadedAt,
+        finalSha256,
         photoId,
       ),
 

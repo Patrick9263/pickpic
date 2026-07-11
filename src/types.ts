@@ -52,3 +52,12 @@ export interface GalleryPhotoRecord extends Omit<PhotoRecord, "comments"> {
   comments: ViewerPhotoCommentRecord[];
   viewerHearted: boolean;
 }
+
+export interface UploadBatchProgress {
+  total: number;
+  processed: number;
+  uploaded: number;
+  skipped: number;
+  failed: number;
+  currentFilename: string | null;
+}
