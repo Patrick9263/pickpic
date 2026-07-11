@@ -218,6 +218,27 @@
   background: #f3f1ec;
 }
 
+.queue-upload-button {
+  background: #171717;
+  border: 1px solid #171717;
+  border-radius: 9px;
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 750;
+  padding: 8px 12px;
+}
+
+.queue-upload-button:hover {
+  background: #34312d;
+}
+
+.queue-upload-button-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 @media (max-width: 700px) {
   .editing-queue-item {
     grid-template-columns: 90px minmax(0, 1fr);

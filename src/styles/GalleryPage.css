@@ -372,6 +372,72 @@
   margin-top: 5px;
 }
 
+.gallery-final-badge {
+  background: rgb(255 255 255 / 88%);
+  border-radius: 999px;
+  color: #426148;
+  font-size: 0.7rem;
+  font-weight: 800;
+  left: 10px;
+  padding: 6px 9px;
+  position: absolute;
+  top: 10px;
+}
+
+.photo-version-controls {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.photo-version-toggle {
+  background: rgb(255 255 255 / 10%);
+  border-radius: 999px;
+  display: flex;
+  padding: 3px;
+}
+
+.photo-version-toggle button {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: #d4d1cb;
+  font-size: 0.78rem;
+  padding: 7px 12px;
+}
+
+.photo-version-toggle button:hover {
+  background: rgb(255 255 255 / 10%);
+}
+
+.photo-version-toggle .photo-version-active {
+  background: #ffffff;
+  color: #171717;
+}
+
+.download-final-link {
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+@media (max-width: 560px) {
+  .photo-version-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .photo-version-toggle {
+    justify-content: center;
+  }
+
+  .download-final-link {
+    text-align: center;
+  }
+}
+
 @media (max-width: 560px) {
   .gallery-photo-card {
     margin-bottom: 6px;

@@ -26,6 +26,14 @@ export interface ViewerPhotoCommentRecord extends PhotoCommentRecord {
   viewerOwned: boolean;
 }
 
+export interface FinalPhotoRecord {
+  originalFilename: string;
+  contentType: string;
+  byteSize: number;
+  uploadedAt: string;
+  imageUrl: string;
+}
+
 export interface PhotoRecord {
   id: string;
   eventId: string;
@@ -36,6 +44,7 @@ export interface PhotoRecord {
   imageUrl: string;
   heartCount: number;
   workflowStatus: PhotoWorkflowStatus;
+  finalPhoto: FinalPhotoRecord | null;
   comments: PhotoCommentRecord[];
 }
 

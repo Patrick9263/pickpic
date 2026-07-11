@@ -31,6 +31,8 @@ interface GalleryPageProps {
   shareToken: string;
 }
 
+type PhotoVersion = "original" | "final";
+
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
 
@@ -64,6 +66,8 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [commentActionId, setCommentActionId] = useState<string | null>(null);
   const selectedPhoto =
     gallery?.photos.find((photo) => photo.id === selectedPhotoId) ?? null;
+  const [selectedVersion, setSelectedVersion] =
+    useState<PhotoVersion>("original");
 
   useEffect(() => {
     let isCancelled = false;
@@ -418,7 +422,18 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setSelectedPhotoId(null);
     setCommentText("");
     setActionError(null);
+    setSelectedVersion("original");
   }
+
+  function openPhoto(photo: GalleryPhotoRecord): void {
+    setSelectedPhotoId(photo.id);
+    setSelectedVersion(photo.finalPhoto ? "final" : "original");
+  }
+  const selectedImageUrl = selectedPhoto
+    ? selectedVersion === "final" && selectedPhoto.finalPhoto
+      ? selectedPhoto.finalPhoto.imageUrl
+      : selectedPhoto.imageUrl
+    : null;
 
   if (isLoading) {
     return (
@@ -462,7 +477,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </p>
 
           <p className="gallery-instructions">
-            Heart a photo to request that the photographer edit it.
+            Heart a photo to request an edit or another revision.
           </p>
         </div>
       </header>
@@ -494,16 +509,19 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   <button
                     className="gallery-photo-button"
                     type="button"
-                    onClick={() => setSelectedPhotoId(photo.id)}
+                    onClick={() => openPhoto(photo)}
                     aria-label={`Open ${photo.originalFilename}`}
                   >
                     <img
-                      src={photo.imageUrl}
+                      src={photo.finalPhoto?.imageUrl ?? photo.imageUrl}
                       alt={photo.originalFilename}
                       loading="lazy"
                     />
                   </button>
 
+                  {photo.finalPhoto && (
+                    <span className="gallery-final-badge">Final</span>
+                  )}
                   <button
                     className={`gallery-heart-button ${
                       photo.viewerHearted ? "gallery-heart-button-active" : ""
@@ -554,10 +572,44 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             </button>
 
             <img
-              src={selectedPhoto.imageUrl}
+              src={selectedImageUrl ?? selectedPhoto.imageUrl}
               alt={selectedPhoto.originalFilename}
             />
+            {selectedPhoto.finalPhoto && (
+              <div className="photo-version-controls">
+                <div className="photo-version-toggle">
+                  <button
+                    type="button"
+                    className={
+                      selectedVersion === "original"
+                        ? "photo-version-active"
+                        : ""
+                    }
+                    onClick={() => setSelectedVersion("original")}
+                  >
+                    Original
+                  </button>
 
+                  <button
+                    type="button"
+                    className={
+                      selectedVersion === "final" ? "photo-version-active" : ""
+                    }
+                    onClick={() => setSelectedVersion("final")}
+                  >
+                    Final
+                  </button>
+                </div>
+
+                <a
+                  className="download-final-link"
+                  href={selectedPhoto.finalPhoto.imageUrl}
+                  download={selectedPhoto.finalPhoto.originalFilename}
+                >
+                  Download final
+                </a>
+              </div>
+            )}
             <div className="lightbox-footer">
               <p>{selectedPhoto.originalFilename}</p>
 
