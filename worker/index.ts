@@ -225,7 +225,9 @@ function toPhotoRecord(
           contentType: finalContentType,
           byteSize: Number(finalByteSize),
           uploadedAt: finalUploadedAt,
-          imageUrl: `/api/photos/${encodeURIComponent(row.id)}/final-image`,
+          imageUrl:
+            `/api/photos/${encodeURIComponent(row.id)}/final-image` +
+            `?v=${encodeURIComponent(finalUploadedAt)}`,
         }
       : null,
     comments,
@@ -508,39 +510,17 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
 async function getPhotoImage(env: Env, photoId: string): Promise<Response> {
   const photo = await env.DB.prepare(
     `
-      SELECT
-        storage_key AS storageKey,
-        final_storage_key AS finalStorageKey
+      SELECT storage_key AS storageKey
       FROM photos
       WHERE id = ?
-  `,
+    `,
   )
     .bind(photoId)
-    .first<StoredPhotoRow>();
+    .first<{ storageKey: string }>();
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
-
-  const object = await env.pickpic_photos.get(photo.storageKey);
-
-  if (!object) {
-    return jsonResponse({ error: "The stored image could not be found." }, 404);
-  }
-
-  const headers = new Headers();
-
-  object.writeHttpMetadata(headers);
-
-  if (!headers.has("Content-Type")) {
-    headers.set("Content-Type", "image/jpeg");
-  }
-
-  headers.set("Content-Disposition", "inline");
-  headers.set("Content-Length", object.size.toString());
-  headers.set("ETag", object.httpEtag);
-  headers.set("Cache-Control", "private, max-age=3600");
-  headers.set("X-Content-Type-Options", "nosniff");
 
   return getStoredJpeg(env, photo.storageKey);
 }

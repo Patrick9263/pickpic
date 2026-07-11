@@ -168,20 +168,21 @@ function EventCard(props: EventCardProps) {
                     {" · "}
                     {photo.comments.length}{" "}
                     {photo.comments.length === 1 ? "comment" : "comments"}
-                    {photo.finalPhoto && (
-                      <div className="final-photo-details">
-                        <span>Final: {photo.finalPhoto.originalFilename}</span>
-
-                        <a
-                          href={photo.finalPhoto.imageUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View final
-                        </a>
-                      </div>
-                    )}
                   </small>
+
+                  {photo.finalPhoto && (
+                    <div className="final-photo-details">
+                      <span>Final: {photo.finalPhoto.originalFilename}</span>
+
+                      <a
+                        href={photo.finalPhoto.imageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View final
+                      </a>
+                    </div>
+                  )}
 
                   {photo.comments.length > 0 && (
                     <div className="dashboard-comments">
