@@ -573,6 +573,20 @@ button:disabled {
   white-space: nowrap;
 }
 
+.photo-metadata {
+  align-items: center;
+  color: #77736b;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.7rem;
+  gap: 8px;
+}
+
+.photo-metadata a {
+  color: #5d45b7;
+  font-weight: 700;
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;

@@ -15,6 +15,7 @@ import type {
 } from "../types";
 import EventCard from "../components/EventCard";
 import { fetchJson } from "../api";
+import { extractPhotoMetadata } from "../photoMetadata";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -226,17 +227,38 @@ function DashboardPage() {
       }));
 
       try {
-        const sourceSha256 = await calculateFileSha256(file);
+        const [sourceSha256, photoMetadata] = await Promise.all([
+          calculateFileSha256(file),
+          extractPhotoMetadata(file),
+        ]);
+
+        const headers = new Headers({
+          "Content-Type": "image/jpeg",
+          "X-File-Name": encodeURIComponent(file.name),
+          "X-File-SHA256": sourceSha256,
+        });
+
+        if (photoMetadata.capturedAt) {
+          headers.set("X-PickPic-Captured-At", photoMetadata.capturedAt);
+        }
+
+        if (
+          photoMetadata.latitude !== null &&
+          photoMetadata.longitude !== null
+        ) {
+          headers.set("X-PickPic-Latitude", photoMetadata.latitude.toString());
+
+          headers.set(
+            "X-PickPic-Longitude",
+            photoMetadata.longitude.toString(),
+          );
+        }
 
         const body = await fetchJson<CreatePhotoResponse>(
           `/api/events/${encodeURIComponent(eventId)}/photos`,
           {
             method: "POST",
-            headers: {
-              "Content-Type": "image/jpeg",
-              "X-File-Name": encodeURIComponent(file.name),
-              "X-File-SHA256": sourceSha256,
-            },
+            headers,
             body: file,
           },
         );
