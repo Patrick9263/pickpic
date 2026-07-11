@@ -1689,7 +1689,9 @@ async function uploadFinalPhoto(
     contentType: "image/jpeg",
     byteSize: storedObject.size,
     uploadedAt,
-    imageUrl: `/api/photos/${encodeURIComponent(photoId)}` + "/final-image",
+    imageUrl:
+      `/api/photos/${encodeURIComponent(photoId)}/final-image` +
+      `?v=${encodeURIComponent(uploadedAt)}`,
   };
 
   return jsonResponse({

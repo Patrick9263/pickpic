@@ -286,7 +286,7 @@ function DashboardPage() {
       setError(
         `${failedCount} ${
           failedCount === 1 ? "file was" : "files were"
-        } not uploaded. Check that each file is a valid JPG under 25 MB.`,
+        } not uploaded. Some files may be invalid, too large, or may have encountered an upload error.`,
       );
     }
   }
@@ -669,6 +669,7 @@ function DashboardPage() {
                       uploadProgress={
                         uploadProgressByEvent[eventRecord.id] ?? null
                       }
+                      uploadsDisabled={uploadingEventId !== null}
                     />
                   );
                 })}

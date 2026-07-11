@@ -47,6 +47,7 @@ type EventCardProps = {
   copyShareLink(eventRecord: EventRecord): Promise<void>;
   handleClearHearts(eventId: string, photo: PhotoRecord): Promise<void>;
   uploadProgress: UploadBatchProgress | null;
+  uploadsDisabled: boolean;
 };
 
 function EventCard(props: EventCardProps) {
@@ -68,6 +69,7 @@ function EventCard(props: EventCardProps) {
     uploadingFinalPhotoId,
     handleFinalPhotoSelection,
     uploadProgress,
+    uploadsDisabled,
   } = props;
 
   function formatDate(value: string): string {
@@ -122,16 +124,16 @@ function EventCard(props: EventCardProps) {
           type="file"
           accept="image/jpeg,.jpg,.jpeg"
           multiple
-          disabled={isUploading}
+          disabled={uploadsDisabled}
           onChange={(event) => void handlePhotoSelection(eventRecord.id, event)}
         />
 
         <label
           className={`upload-button ${
-            isUploading ? "upload-button-disabled" : ""
+            uploadsDisabled ? "upload-button-disabled" : ""
           }`}
           htmlFor={`photo-upload-${eventRecord.id}`}
-          aria-disabled={isUploading}
+          aria-disabled={uploadsDisabled}
         >
           {isUploading && uploadProgress
             ? `Uploading ${uploadProgress.processed}/${uploadProgress.total}…`
