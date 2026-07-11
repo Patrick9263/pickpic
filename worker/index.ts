@@ -15,6 +15,14 @@ interface EventRecord {
   updatedAt: string;
 }
 
+interface FinalPhotoRecord {
+  originalFilename: string;
+  contentType: string;
+  byteSize: number;
+  uploadedAt: string;
+  imageUrl: string;
+}
+
 interface PhotoRecord {
   id: string;
   eventId: string;
@@ -25,6 +33,7 @@ interface PhotoRecord {
   imageUrl: string;
   heartCount: number;
   workflowStatus: PhotoWorkflowStatus;
+  finalPhoto: FinalPhotoRecord | null;
   comments: PhotoCommentRecord[];
 }
 
@@ -37,10 +46,24 @@ interface PhotoRow {
   createdAt: string;
   heartCount: number;
   workflowStatus: PhotoWorkflowStatus;
+  finalOriginalFilename: string | null;
+  finalContentType: string | null;
+  finalByteSize: number | null;
+  finalUploadedAt: string | null;
 }
 
 interface StoredPhotoRow {
   storageKey: string;
+  finalStorageKey: string | null;
+}
+
+interface FinalPhotoUploadRow {
+  eventId: string;
+  finalStorageKey: string | null;
+}
+
+interface FinalPhotoKeyRow {
+  finalStorageKey: string | null;
 }
 
 interface PublicGalleryEvent {
@@ -126,9 +149,12 @@ interface SetPhotoWorkflowBody {
 interface PhotoWorkflowRow {
   id: string;
   workflowStatus: PhotoWorkflowStatus;
+  finalStorageKey: string | null;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
+
+const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 
 function jsonResponse(data: unknown, status = 200): Response {
   return Response.json(data, {
@@ -175,10 +201,35 @@ function toPhotoRecord(
   row: PhotoRow,
   comments: PhotoCommentRecord[] = [],
 ): PhotoRecord {
+  const {
+    finalOriginalFilename,
+    finalContentType,
+    finalByteSize,
+    finalUploadedAt,
+    ...basePhoto
+  } = row;
+
+  const hasFinalPhoto =
+    finalOriginalFilename !== null &&
+    finalContentType !== null &&
+    finalByteSize !== null &&
+    finalUploadedAt !== null;
+
   return {
-    ...row,
-    heartCount: Number(row.heartCount ?? 0),
+    ...basePhoto,
+    heartCount: Number(basePhoto.heartCount ?? 0),
     imageUrl: `/api/photos/${encodeURIComponent(row.id)}/image`,
+    finalPhoto: hasFinalPhoto
+      ? {
+          originalFilename: finalOriginalFilename,
+          contentType: finalContentType,
+          byteSize: Number(finalByteSize),
+          uploadedAt: finalUploadedAt,
+          imageUrl:
+            `/api/photos/${encodeURIComponent(row.id)}/final-image` +
+            `?v=${encodeURIComponent(finalUploadedAt)}`,
+        }
+      : null,
     comments,
   };
 }
@@ -395,6 +446,7 @@ async function createPhoto(
     imageUrl: `/api/photos/${encodeURIComponent(photoId)}/image`,
     heartCount: 0,
     workflowStatus: "idle",
+    finalPhoto: null,
     comments: [],
   };
 
@@ -416,6 +468,10 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
         p.byte_size AS byteSize,
         p.created_at AS createdAt,
         p.workflow_status AS workflowStatus,
+        p.final_original_filename AS finalOriginalFilename,
+        p.final_content_type AS finalContentType,
+        p.final_byte_size AS finalByteSize,
+        p.final_uploaded_at AS finalUploadedAt,
         COUNT(h.photo_id) AS heartCount
       FROM photos p
       LEFT JOIN hearts h
@@ -428,7 +484,11 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
         p.content_type,
         p.byte_size,
         p.created_at,
-        p.workflow_status
+        p.workflow_status,
+        p.final_original_filename,
+        p.final_content_type,
+        p.final_byte_size,
+        p.final_uploaded_at
       ORDER BY p.created_at DESC
     `,
   )
@@ -456,45 +516,24 @@ async function getPhotoImage(env: Env, photoId: string): Promise<Response> {
     `,
   )
     .bind(photoId)
-    .first<StoredPhotoRow>();
+    .first<{ storageKey: string }>();
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
-  const object = await env.pickpic_photos.get(photo.storageKey);
-
-  if (!object) {
-    return jsonResponse({ error: "The stored image could not be found." }, 404);
-  }
-
-  const headers = new Headers();
-
-  object.writeHttpMetadata(headers);
-
-  if (!headers.has("Content-Type")) {
-    headers.set("Content-Type", "image/jpeg");
-  }
-
-  headers.set("Content-Disposition", "inline");
-  headers.set("Content-Length", object.size.toString());
-  headers.set("ETag", object.httpEtag);
-  headers.set("Cache-Control", "private, max-age=3600");
-  headers.set("X-Content-Type-Options", "nosniff");
-
-  return new Response(object.body, {
-    status: 200,
-    headers,
-  });
+  return getStoredJpeg(env, photo.storageKey);
 }
 
 async function deletePhoto(env: Env, photoId: string): Promise<Response> {
   const photo = await env.DB.prepare(
     `
-      SELECT storage_key AS storageKey
+      SELECT
+        storage_key AS storageKey,
+        final_storage_key AS finalStorageKey
       FROM photos
       WHERE id = ?
-    `,
+  `,
   )
     .bind(photoId)
     .first<StoredPhotoRow>();
@@ -503,11 +542,17 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
+  const storageKeys = [photo.storageKey, photo.finalStorageKey].filter(
+    (key): key is string => key !== null,
+  );
+
   try {
-    await env.pickpic_photos.delete(photo.storageKey);
+    await Promise.all(
+      storageKeys.map((storageKey) => env.pickpic_photos.delete(storageKey)),
+    );
   } catch {
     return jsonResponse(
-      { error: "The stored image could not be deleted." },
+      { error: "The stored images could not be deleted." },
       500,
     );
   }
@@ -569,6 +614,10 @@ async function getPublicGallery(
         p.byte_size AS byteSize,
         p.created_at AS createdAt,
         p.workflow_status AS workflowStatus,
+        p.final_original_filename AS finalOriginalFilename,
+        p.final_content_type AS finalContentType,
+        p.final_byte_size AS finalByteSize,
+        p.final_uploaded_at AS finalUploadedAt,
         COUNT(h.photo_id) AS heartCount
       FROM photos p
       LEFT JOIN hearts h
@@ -581,7 +630,11 @@ async function getPublicGallery(
         p.content_type,
         p.byte_size,
         p.created_at,
-        p.workflow_status
+        p.workflow_status,
+        p.final_original_filename,
+        p.final_content_type,
+        p.final_byte_size,
+        p.final_uploaded_at
       ORDER BY p.created_at ASC
     `,
   )
@@ -1267,16 +1320,26 @@ async function setPhotoWorkflowStatus(
     `
       SELECT
         id,
-        workflow_status AS workflowStatus
+        workflow_status AS workflowStatus,
+        final_storage_key AS finalStorageKey
       FROM photos
       WHERE id = ?
-    `,
+  `,
   )
     .bind(photoId)
     .first<PhotoWorkflowRow>();
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  if (body.status === "final" && !photo.finalStorageKey) {
+    return jsonResponse(
+      {
+        error: "Upload a final JPEG before marking this photo final.",
+      },
+      409,
+    );
   }
 
   if (body.status === "final") {
@@ -1316,6 +1379,219 @@ async function setPhotoWorkflowStatus(
     photoId,
     workflowStatus: body.status,
     heartCount: body.status === "final" ? 0 : await getHeartCount(env, photoId),
+  });
+}
+
+async function getStoredJpeg(env: Env, storageKey: string): Promise<Response> {
+  const object = await env.pickpic_photos.get(storageKey);
+
+  if (!object) {
+    return jsonResponse({ error: "The stored image could not be found." }, 404);
+  }
+
+  const headers = new Headers();
+
+  object.writeHttpMetadata(headers);
+
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "image/jpeg");
+  }
+
+  headers.set("Content-Disposition", "inline");
+  headers.set("Content-Length", object.size.toString());
+  headers.set("ETag", object.httpEtag);
+  headers.set("Cache-Control", "private, max-age=3600");
+  headers.set("X-Content-Type-Options", "nosniff");
+
+  return new Response(object.body, {
+    status: 200,
+    headers,
+  });
+}
+
+async function getFinalPhotoImage(
+  env: Env,
+  photoId: string,
+): Promise<Response> {
+  const photo = await env.DB.prepare(
+    `
+      SELECT
+        final_storage_key AS finalStorageKey
+      FROM photos
+      WHERE id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<FinalPhotoKeyRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  if (!photo.finalStorageKey) {
+    return jsonResponse(
+      { error: "This photo does not have a final image yet." },
+      404,
+    );
+  }
+
+  return getStoredJpeg(env, photo.finalStorageKey);
+}
+
+async function uploadFinalPhoto(
+  request: Request,
+  env: Env,
+  photoId: string,
+): Promise<Response> {
+  const photo = await env.DB.prepare(
+    `
+      SELECT
+        event_id AS eventId,
+        final_storage_key AS finalStorageKey
+      FROM photos
+      WHERE id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<FinalPhotoUploadRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const contentType = request.headers
+    .get("Content-Type")
+    ?.split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  if (contentType !== "image/jpeg") {
+    return jsonResponse(
+      { error: "Only JPEG final images are supported." },
+      415,
+    );
+  }
+
+  const originalFilename = getFilename(request)?.trim();
+
+  if (
+    !originalFilename ||
+    originalFilename.length > 255 ||
+    originalFilename.includes("\0")
+  ) {
+    return jsonResponse(
+      { error: "A valid X-File-Name header is required." },
+      400,
+    );
+  }
+
+  if (!request.body) {
+    return jsonResponse({ error: "The final image body is required." }, 400);
+  }
+
+  const declaredSize = Number(request.headers.get("Content-Length"));
+
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_FINAL_JPEG_BYTES) {
+    return jsonResponse(
+      { error: "The final JPEG must be 50 MB or smaller." },
+      413,
+    );
+  }
+
+  const uploadId = crypto.randomUUID();
+
+  const newStorageKey =
+    `events/${photo.eventId}/photos/${photoId}` + `/finals/${uploadId}.jpg`;
+
+  let storedObject: R2Object;
+
+  try {
+    storedObject = await env.pickpic_photos.put(newStorageKey, request.body, {
+      httpMetadata: {
+        contentType: "image/jpeg",
+      },
+      customMetadata: {
+        eventId: photo.eventId,
+        photoId,
+        originalFilename,
+        variant: "final",
+      },
+    });
+  } catch {
+    return jsonResponse({ error: "The final image could not be stored." }, 500);
+  }
+
+  if (storedObject.size > MAX_FINAL_JPEG_BYTES) {
+    await env.pickpic_photos.delete(newStorageKey);
+
+    return jsonResponse(
+      { error: "The final JPEG must be 50 MB or smaller." },
+      413,
+    );
+  }
+
+  const uploadedAt = new Date().toISOString();
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `
+          UPDATE photos
+          SET
+            final_storage_key = ?,
+            final_original_filename = ?,
+            final_content_type = ?,
+            final_byte_size = ?,
+            final_uploaded_at = ?,
+            workflow_status = 'final'
+          WHERE id = ?
+        `,
+      ).bind(
+        newStorageKey,
+        originalFilename,
+        "image/jpeg",
+        storedObject.size,
+        uploadedAt,
+        photoId,
+      ),
+
+      env.DB.prepare(
+        `
+          DELETE FROM hearts
+          WHERE photo_id = ?
+        `,
+      ).bind(photoId),
+    ]);
+  } catch {
+    await env.pickpic_photos.delete(newStorageKey);
+
+    return jsonResponse(
+      { error: "The final photo metadata could not be saved." },
+      500,
+    );
+  }
+
+  if (photo.finalStorageKey && photo.finalStorageKey !== newStorageKey) {
+    try {
+      await env.pickpic_photos.delete(photo.finalStorageKey);
+    } catch (error) {
+      console.error("Unable to remove replaced final image:", error);
+    }
+  }
+
+  const finalPhoto: FinalPhotoRecord = {
+    originalFilename,
+    contentType: "image/jpeg",
+    byteSize: storedObject.size,
+    uploadedAt,
+    imageUrl: `/api/photos/${encodeURIComponent(photoId)}` + "/final-image",
+  };
+
+  return jsonResponse({
+    photoId,
+    workflowStatus: "final",
+    heartCount: 0,
+    finalPhoto,
   });
 }
 
@@ -1365,6 +1641,34 @@ export default {
       const photoId = decodeURIComponent(photoImageMatch[1]);
 
       return getPhotoImage(env, photoId);
+    }
+
+    const photoFinalImageMatch = url.pathname.match(
+      /^\/api\/photos\/([^/]+)\/final-image$/,
+    );
+
+    if (photoFinalImageMatch) {
+      if (request.method !== "GET") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const photoId = decodeURIComponent(photoFinalImageMatch[1]);
+
+      return getFinalPhotoImage(env, photoId);
+    }
+
+    const photoFinalMatch = url.pathname.match(
+      /^\/api\/photos\/([^/]+)\/final$/,
+    );
+
+    if (photoFinalMatch) {
+      if (request.method !== "PUT") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const photoId = decodeURIComponent(photoFinalMatch[1]);
+
+      return uploadFinalPhoto(request, env, photoId);
     }
 
     const photoMatch = url.pathname.match(/^\/api\/photos\/([^/]+)$/);

@@ -6,7 +6,12 @@ import {
   type FormEvent,
 } from "react";
 import EditingQueue from "../components/EditingQueue";
-import type { EventRecord, PhotoRecord, PhotoWorkflowStatus } from "../types";
+import type {
+  EventRecord,
+  FinalPhotoRecord,
+  PhotoRecord,
+  PhotoWorkflowStatus,
+} from "../types";
 import EventCard from "../components/EventCard";
 import { fetchJson } from "../api";
 
@@ -26,7 +31,16 @@ interface CreatePhotoResponse {
   photo: PhotoRecord;
 }
 
+interface UploadFinalPhotoResponse {
+  photoId: string;
+  workflowStatus: PhotoWorkflowStatus;
+  heartCount: number;
+  finalPhoto: FinalPhotoRecord;
+}
+
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
+
+const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 
 async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
   const body = await fetchJson<PhotosResponse>(
@@ -52,6 +66,9 @@ function DashboardPage() {
     string | null
   >(null);
   const [updatingWorkflowPhotoId, setUpdatingWorkflowPhotoId] = useState<
+    string | null
+  >(null);
+  const [uploadingFinalPhotoId, setUploadingFinalPhotoId] = useState<
     string | null
   >(null);
 
@@ -348,6 +365,84 @@ function DashboardPage() {
     }
   }
 
+  async function handleFinalPhotoSelection(
+    eventId: string,
+    photo: PhotoRecord,
+    changeEvent: ChangeEvent<HTMLInputElement>,
+  ): Promise<void> {
+    const file = changeEvent.currentTarget.files?.[0];
+
+    changeEvent.currentTarget.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    const isJpeg =
+      file.type === "image/jpeg" ||
+      file.name.toLowerCase().endsWith(".jpg") ||
+      file.name.toLowerCase().endsWith(".jpeg");
+
+    if (!isJpeg) {
+      setError("PickPic currently supports JPG and JPEG final files only.");
+      return;
+    }
+
+    if (file.size > MAX_FINAL_JPEG_BYTES) {
+      setError("The final JPEG must be 50 MB or smaller.");
+      return;
+    }
+
+    if (photo.finalPhoto) {
+      const shouldReplace = window.confirm(
+        `Replace the current final image for ` + `"${photo.originalFilename}"?`,
+      );
+
+      if (!shouldReplace) {
+        return;
+      }
+    }
+
+    setUploadingFinalPhotoId(photo.id);
+    setError(null);
+
+    try {
+      const response = await fetchJson<UploadFinalPhotoResponse>(
+        `/api/photos/${encodeURIComponent(photo.id)}/final`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "image/jpeg",
+            "X-File-Name": encodeURIComponent(file.name),
+          },
+          body: file,
+        },
+      );
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventId]: (currentPhotos[eventId] ?? []).map((currentPhoto) =>
+          currentPhoto.id === photo.id
+            ? {
+                ...currentPhoto,
+                workflowStatus: response.workflowStatus,
+                heartCount: response.heartCount,
+                finalPhoto: response.finalPhoto,
+              }
+            : currentPhoto,
+        ),
+      }));
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to upload the final image.",
+      );
+    } finally {
+      setUploadingFinalPhotoId(null);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -418,6 +513,8 @@ function DashboardPage() {
           clearingHeartsPhotoId={clearingHeartsPhotoId}
           onSetPhotoWorkflowStatus={handleSetPhotoWorkflowStatus}
           onClearHearts={handleClearHearts}
+          uploadingFinalPhotoId={uploadingFinalPhotoId}
+          onFinalPhotoSelection={handleFinalPhotoSelection}
         />
 
         <section className="events-section">
@@ -477,6 +574,8 @@ function DashboardPage() {
                       handleSetPhotoWorkflowStatus={
                         handleSetPhotoWorkflowStatus
                       }
+                      uploadingFinalPhotoId={uploadingFinalPhotoId}
+                      handleFinalPhotoSelection={handleFinalPhotoSelection}
                     />
                   );
                 })}

@@ -23,6 +23,12 @@ type EventCardProps = {
   deletingPhotoId: string | null;
   clearingHeartsPhotoId: string | null;
   updatingWorkflowPhotoId: string | null;
+  uploadingFinalPhotoId: string | null;
+  handleFinalPhotoSelection(
+    eventId: string,
+    photo: PhotoRecord,
+    event: ChangeEvent<HTMLInputElement>,
+  ): Promise<void>;
   handleSetPhotoWorkflowStatus(
     eventId: string,
     photo: PhotoRecord,
@@ -53,6 +59,8 @@ function EventCard(props: EventCardProps) {
     handleDeletePhoto,
     copyShareLink,
     handleClearHearts,
+    uploadingFinalPhotoId,
+    handleFinalPhotoSelection,
   } = props;
 
   function formatDate(value: string): string {
@@ -125,74 +133,70 @@ function EventCard(props: EventCardProps) {
 
       {photos.length > 0 && (
         <div className="photo-list">
-          {photos.map((photo) => (
-            <article className="photo-item" key={photo.id}>
-              <a
-                className="photo-thumbnail-link"
-                href={photo.imageUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <img
-                  className="photo-thumbnail"
-                  src={photo.imageUrl}
-                  alt={photo.originalFilename}
-                  loading="lazy"
-                />
-              </a>
+          {photos.map((photo) => {
+            const isUploadingFinal = uploadingFinalPhotoId === photo.id;
+            return (
+              <article className="photo-item" key={photo.id}>
+                <a
+                  className="photo-thumbnail-link"
+                  href={photo.imageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <img
+                    className="photo-thumbnail"
+                    src={photo.imageUrl}
+                    alt={photo.originalFilename}
+                    loading="lazy"
+                  />
+                </a>
 
-              <div className="photo-details">
-                <span title={photo.originalFilename}>
-                  {photo.originalFilename}
-                </span>
+                <div className="photo-details">
+                  <span title={photo.originalFilename}>
+                    {photo.originalFilename}
+                  </span>
 
-                <span className="photo-workflow-badge">
-                  {getWorkflowLabel(photo)}
-                </span>
+                  <span className="photo-workflow-badge">
+                    {getWorkflowLabel(photo)}
+                  </span>
 
-                <small>
-                  {formatFileSize(photo.byteSize)}
-                  {" · "}
-                  {photo.heartCount}{" "}
-                  {photo.heartCount === 1 ? "heart" : "hearts"}
-                  {" · "}
-                  {photo.comments.length}{" "}
-                  {photo.comments.length === 1 ? "comment" : "comments"}
-                </small>
+                  <small>
+                    {formatFileSize(photo.byteSize)}
+                    {" · "}
+                    {photo.heartCount}{" "}
+                    {photo.heartCount === 1 ? "heart" : "hearts"}
+                    {" · "}
+                    {photo.comments.length}{" "}
+                    {photo.comments.length === 1 ? "comment" : "comments"}
+                  </small>
 
-                {photo.comments.length > 0 && (
-                  <div className="dashboard-comments">
-                    {photo.comments.map((comment) => (
-                      <blockquote key={comment.id}>
-                        <strong>{comment.displayName}</strong>
-                        <span>{comment.body}</span>
-                      </blockquote>
-                    ))}
-                  </div>
-                )}
+                  {photo.finalPhoto && (
+                    <div className="final-photo-details">
+                      <span>Final: {photo.finalPhoto.originalFilename}</span>
 
-                <div className="photo-actions">
-                  {photo.workflowStatus === "idle" && (
-                    <button
-                      className="workflow-photo-button"
-                      type="button"
-                      disabled={updatingWorkflowPhotoId === photo.id}
-                      onClick={() =>
-                        void handleSetPhotoWorkflowStatus(
-                          eventRecord.id,
-                          photo,
-                          "editing",
-                        )
-                      }
-                    >
-                      {updatingWorkflowPhotoId === photo.id
-                        ? "Updating…"
-                        : "Start editing"}
-                    </button>
+                      <a
+                        href={photo.finalPhoto.imageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View final
+                      </a>
+                    </div>
                   )}
 
-                  {photo.workflowStatus === "editing" && (
-                    <>
+                  {photo.comments.length > 0 && (
+                    <div className="dashboard-comments">
+                      {photo.comments.map((comment) => (
+                        <blockquote key={comment.id}>
+                          <strong>{comment.displayName}</strong>
+                          <span>{comment.body}</span>
+                        </blockquote>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="photo-actions">
+                    {photo.workflowStatus === "idle" && (
                       <button
                         className="workflow-photo-button"
                         type="button"
@@ -201,15 +205,68 @@ function EventCard(props: EventCardProps) {
                           void handleSetPhotoWorkflowStatus(
                             eventRecord.id,
                             photo,
-                            "final",
+                            "editing",
                           )
                         }
                       >
                         {updatingWorkflowPhotoId === photo.id
                           ? "Updating…"
-                          : "Mark final"}
+                          : "Start editing"}
                       </button>
+                    )}
+                    {photo.workflowStatus === "editing" && (
+                      <>
+                        <input
+                          className="visually-hidden"
+                          id={`event-final-upload-${photo.id}`}
+                          type="file"
+                          accept="image/jpeg,.jpg,.jpeg"
+                          disabled={isUploadingFinal}
+                          onChange={(changeEvent) =>
+                            void handleFinalPhotoSelection(
+                              eventRecord.id,
+                              photo,
+                              changeEvent,
+                            )
+                          }
+                        />
 
+                        <label
+                          className={`workflow-upload-button ${
+                            isUploadingFinal
+                              ? "workflow-upload-button-disabled"
+                              : ""
+                          }`}
+                          htmlFor={`event-final-upload-${photo.id}`}
+                          aria-disabled={isUploadingFinal}
+                        >
+                          {isUploadingFinal
+                            ? "Uploading…"
+                            : photo.finalPhoto
+                              ? "Upload replacement"
+                              : "Upload final JPG"}
+                        </label>
+
+                        <button
+                          className="workflow-photo-button"
+                          type="button"
+                          disabled={updatingWorkflowPhotoId === photo.id}
+                          onClick={() =>
+                            void handleSetPhotoWorkflowStatus(
+                              eventRecord.id,
+                              photo,
+                              photo.finalPhoto ? "final" : "idle",
+                            )
+                          }
+                        >
+                          {photo.finalPhoto
+                            ? "Keep current final"
+                            : "Move back"}
+                        </button>
+                      </>
+                    )}
+
+                    {photo.workflowStatus === "final" && (
                       <button
                         className="workflow-photo-button"
                         type="button"
@@ -218,62 +275,45 @@ function EventCard(props: EventCardProps) {
                           void handleSetPhotoWorkflowStatus(
                             eventRecord.id,
                             photo,
-                            "idle",
+                            "editing",
                           )
                         }
                       >
-                        Move back
+                        {updatingWorkflowPhotoId === photo.id
+                          ? "Updating…"
+                          : "Edit again"}
                       </button>
-                    </>
-                  )}
+                    )}
+                    {photo.heartCount > 0 && (
+                      <button
+                        className="clear-hearts-button"
+                        type="button"
+                        disabled={clearingHeartsPhotoId === photo.id}
+                        onClick={() =>
+                          void handleClearHearts(eventRecord.id, photo)
+                        }
+                      >
+                        {clearingHeartsPhotoId === photo.id
+                          ? "Clearing…"
+                          : "Clear hearts"}
+                      </button>
+                    )}
 
-                  {photo.workflowStatus === "final" && (
                     <button
-                      className="workflow-photo-button"
+                      className="delete-photo-button"
                       type="button"
-                      disabled={updatingWorkflowPhotoId === photo.id}
+                      disabled={deletingPhotoId === photo.id}
                       onClick={() =>
-                        void handleSetPhotoWorkflowStatus(
-                          eventRecord.id,
-                          photo,
-                          "editing",
-                        )
+                        void handleDeletePhoto(eventRecord.id, photo)
                       }
                     >
-                      {updatingWorkflowPhotoId === photo.id
-                        ? "Updating…"
-                        : "Edit again"}
+                      {deletingPhotoId === photo.id ? "Deleting…" : "Delete"}
                     </button>
-                  )}
-                  {photo.heartCount > 0 && (
-                    <button
-                      className="clear-hearts-button"
-                      type="button"
-                      disabled={clearingHeartsPhotoId === photo.id}
-                      onClick={() =>
-                        void handleClearHearts(eventRecord.id, photo)
-                      }
-                    >
-                      {clearingHeartsPhotoId === photo.id
-                        ? "Clearing…"
-                        : "Clear hearts"}
-                    </button>
-                  )}
-
-                  <button
-                    className="delete-photo-button"
-                    type="button"
-                    disabled={deletingPhotoId === photo.id}
-                    onClick={() =>
-                      void handleDeletePhoto(eventRecord.id, photo)
-                    }
-                  >
-                    {deletingPhotoId === photo.id ? "Deleting…" : "Delete"}
-                  </button>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
         </div>
       )}
 

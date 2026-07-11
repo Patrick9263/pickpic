@@ -1,19 +1,23 @@
-import "../styles/EditingQueue.css";
-
+import type { ChangeEvent } from "react";
 import type { EventRecord, PhotoRecord, PhotoWorkflowStatus } from "../types";
+import "../styles/EditingQueue.css";
 
 interface EditingQueueProps {
   events: EventRecord[];
   photosByEvent: Record<string, PhotoRecord[]>;
   updatingWorkflowPhotoId: string | null;
   clearingHeartsPhotoId: string | null;
-
+  uploadingFinalPhotoId: string | null;
+  onFinalPhotoSelection: (
+    eventId: string,
+    photo: PhotoRecord,
+    event: ChangeEvent<HTMLInputElement>,
+  ) => Promise<void>;
   onSetPhotoWorkflowStatus: (
     eventId: string,
     photo: PhotoRecord,
     status: PhotoWorkflowStatus,
   ) => Promise<void>;
-
   onClearHearts: (eventId: string, photo: PhotoRecord) => Promise<void>;
 }
 
@@ -43,6 +47,8 @@ function EditingQueue({
   clearingHeartsPhotoId,
   onSetPhotoWorkflowStatus,
   onClearHearts,
+  uploadingFinalPhotoId,
+  onFinalPhotoSelection,
 }: EditingQueueProps) {
   const allPhotos: QueueItem[] = events.flatMap((eventRecord) =>
     (photosByEvent[eventRecord.id] ?? []).map((photo) => ({
@@ -94,6 +100,7 @@ function EditingQueue({
           {items.map(({ event, photo }) => {
             const isUpdating = updatingWorkflowPhotoId === photo.id;
             const isClearing = clearingHeartsPhotoId === photo.id;
+            const isUploadingFinal = uploadingFinalPhotoId === photo.id;
 
             return (
               <article className="editing-queue-item" key={photo.id}>
@@ -173,20 +180,36 @@ function EditingQueue({
 
                     {kind === "editing" && (
                       <>
-                        <button
-                          className="queue-primary-button"
-                          type="button"
-                          disabled={isUpdating}
-                          onClick={() =>
-                            void onSetPhotoWorkflowStatus(
+                        <input
+                          className="visually-hidden"
+                          id={`queue-final-upload-${photo.id}`}
+                          type="file"
+                          accept="image/jpeg,.jpg,.jpeg"
+                          disabled={isUploadingFinal}
+                          onChange={(changeEvent) =>
+                            void onFinalPhotoSelection(
                               event.id,
                               photo,
-                              "final",
+                              changeEvent,
                             )
                           }
+                        />
+
+                        <label
+                          className={`queue-upload-button ${
+                            isUploadingFinal
+                              ? "queue-upload-button-disabled"
+                              : ""
+                          }`}
+                          htmlFor={`queue-final-upload-${photo.id}`}
+                          aria-disabled={isUploadingFinal}
                         >
-                          {isUpdating ? "Updating…" : "Mark final"}
-                        </button>
+                          {isUploadingFinal
+                            ? "Uploading…"
+                            : photo.finalPhoto
+                              ? "Upload replacement"
+                              : "Upload final JPG"}
+                        </label>
 
                         <button
                           className="queue-secondary-button"
@@ -196,11 +219,13 @@ function EditingQueue({
                             void onSetPhotoWorkflowStatus(
                               event.id,
                               photo,
-                              "idle",
+                              photo.finalPhoto ? "final" : "idle",
                             )
                           }
                         >
-                          Move back
+                          {photo.finalPhoto
+                            ? "Keep current final"
+                            : "Move back"}
                         </button>
                       </>
                     )}
