@@ -1,5 +1,17 @@
 import type { ChangeEvent } from "react";
-import type { EventRecord, PhotoRecord } from "../types";
+import type { EventRecord, PhotoRecord, PhotoWorkflowStatus } from "../types";
+
+function getWorkflowLabel(photo: PhotoRecord): string {
+  if (photo.workflowStatus === "editing") {
+    return "Editing";
+  }
+
+  if (photo.workflowStatus === "final") {
+    return photo.heartCount > 0 ? "Final · revision requested" : "Final";
+  }
+
+  return photo.heartCount > 0 ? "Requested" : "Not requested";
+}
 
 type EventCardProps = {
   eventRecord: EventRecord;
@@ -10,6 +22,12 @@ type EventCardProps = {
   photos: PhotoRecord[];
   deletingPhotoId: string | null;
   clearingHeartsPhotoId: string | null;
+  updatingWorkflowPhotoId: string | null;
+  handleSetPhotoWorkflowStatus(
+    eventId: string,
+    photo: PhotoRecord,
+    status: PhotoWorkflowStatus,
+  ): Promise<void>;
   handlePhotoSelection(
     eventId: string,
     changeEvent: ChangeEvent<HTMLInputElement, Element>,
@@ -29,6 +47,8 @@ function EventCard(props: EventCardProps) {
     photos,
     deletingPhotoId,
     clearingHeartsPhotoId,
+    updatingWorkflowPhotoId,
+    handleSetPhotoWorkflowStatus,
     handlePhotoSelection,
     handleDeletePhoto,
     copyShareLink,
@@ -126,6 +146,10 @@ function EventCard(props: EventCardProps) {
                   {photo.originalFilename}
                 </span>
 
+                <span className="photo-workflow-badge">
+                  {getWorkflowLabel(photo)}
+                </span>
+
                 <small>
                   {formatFileSize(photo.byteSize)}
                   {" · "}
@@ -148,6 +172,79 @@ function EventCard(props: EventCardProps) {
                 )}
 
                 <div className="photo-actions">
+                  {photo.workflowStatus === "idle" && (
+                    <button
+                      className="workflow-photo-button"
+                      type="button"
+                      disabled={updatingWorkflowPhotoId === photo.id}
+                      onClick={() =>
+                        void handleSetPhotoWorkflowStatus(
+                          eventRecord.id,
+                          photo,
+                          "editing",
+                        )
+                      }
+                    >
+                      {updatingWorkflowPhotoId === photo.id
+                        ? "Updating…"
+                        : "Start editing"}
+                    </button>
+                  )}
+
+                  {photo.workflowStatus === "editing" && (
+                    <>
+                      <button
+                        className="workflow-photo-button"
+                        type="button"
+                        disabled={updatingWorkflowPhotoId === photo.id}
+                        onClick={() =>
+                          void handleSetPhotoWorkflowStatus(
+                            eventRecord.id,
+                            photo,
+                            "final",
+                          )
+                        }
+                      >
+                        {updatingWorkflowPhotoId === photo.id
+                          ? "Updating…"
+                          : "Mark final"}
+                      </button>
+
+                      <button
+                        className="workflow-photo-button"
+                        type="button"
+                        disabled={updatingWorkflowPhotoId === photo.id}
+                        onClick={() =>
+                          void handleSetPhotoWorkflowStatus(
+                            eventRecord.id,
+                            photo,
+                            "idle",
+                          )
+                        }
+                      >
+                        Move back
+                      </button>
+                    </>
+                  )}
+
+                  {photo.workflowStatus === "final" && (
+                    <button
+                      className="workflow-photo-button"
+                      type="button"
+                      disabled={updatingWorkflowPhotoId === photo.id}
+                      onClick={() =>
+                        void handleSetPhotoWorkflowStatus(
+                          eventRecord.id,
+                          photo,
+                          "editing",
+                        )
+                      }
+                    >
+                      {updatingWorkflowPhotoId === photo.id
+                        ? "Updating…"
+                        : "Edit again"}
+                    </button>
+                  )}
                   {photo.heartCount > 0 && (
                     <button
                       className="clear-hearts-button"

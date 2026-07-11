@@ -24,6 +24,7 @@ interface PhotoRecord {
   createdAt: string;
   imageUrl: string;
   heartCount: number;
+  workflowStatus: PhotoWorkflowStatus;
   comments: PhotoCommentRecord[];
 }
 
@@ -35,6 +36,7 @@ interface PhotoRow {
   byteSize: number;
   createdAt: string;
   heartCount: number;
+  workflowStatus: PhotoWorkflowStatus;
 }
 
 interface StoredPhotoRow {
@@ -113,6 +115,17 @@ interface PublicPhotoCommentRecord extends PhotoCommentRecord {
 
 interface CommentRow extends PhotoCommentRecord {
   visitorToken: string;
+}
+
+type PhotoWorkflowStatus = "idle" | "editing" | "final";
+
+interface SetPhotoWorkflowBody {
+  status?: unknown;
+}
+
+interface PhotoWorkflowRow {
+  id: string;
+  workflowStatus: PhotoWorkflowStatus;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
@@ -346,9 +359,10 @@ async function createPhoto(
           storage_key,
           content_type,
           byte_size,
+          workflow_status,
           created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
       .bind(
@@ -358,6 +372,7 @@ async function createPhoto(
         storageKey,
         "image/jpeg",
         storedObject.size,
+        "idle",
         createdAt,
       )
       .run();
@@ -379,6 +394,7 @@ async function createPhoto(
     createdAt,
     imageUrl: `/api/photos/${encodeURIComponent(photoId)}/image`,
     heartCount: 0,
+    workflowStatus: "idle",
     comments: [],
   };
 
@@ -399,6 +415,7 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
         p.content_type AS contentType,
         p.byte_size AS byteSize,
         p.created_at AS createdAt,
+        p.workflow_status AS workflowStatus,
         COUNT(h.photo_id) AS heartCount
       FROM photos p
       LEFT JOIN hearts h
@@ -410,7 +427,8 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
         p.original_filename,
         p.content_type,
         p.byte_size,
-        p.created_at
+        p.created_at,
+        p.workflow_status
       ORDER BY p.created_at DESC
     `,
   )
@@ -550,6 +568,7 @@ async function getPublicGallery(
         p.content_type AS contentType,
         p.byte_size AS byteSize,
         p.created_at AS createdAt,
+        p.workflow_status AS workflowStatus,
         COUNT(h.photo_id) AS heartCount
       FROM photos p
       LEFT JOIN hearts h
@@ -561,7 +580,8 @@ async function getPublicGallery(
         p.original_filename,
         p.content_type,
         p.byte_size,
-        p.created_at
+        p.created_at,
+        p.workflow_status
       ORDER BY p.created_at ASC
     `,
   )
@@ -1212,6 +1232,93 @@ async function setCommentResolution(
   });
 }
 
+function isPhotoWorkflowStatus(value: unknown): value is PhotoWorkflowStatus {
+  return value === "idle" || value === "editing" || value === "final";
+}
+
+async function setPhotoWorkflowStatus(
+  request: Request,
+  env: Env,
+  photoId: string,
+): Promise<Response> {
+  let body: SetPhotoWorkflowBody;
+
+  try {
+    body = await request.json<SetPhotoWorkflowBody>();
+  } catch {
+    return jsonResponse(
+      {
+        error: "The request body must be valid JSON.",
+      },
+      400,
+    );
+  }
+
+  if (!isPhotoWorkflowStatus(body.status)) {
+    return jsonResponse(
+      {
+        error: "The status must be idle, editing, or final.",
+      },
+      400,
+    );
+  }
+
+  const photo = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        workflow_status AS workflowStatus
+      FROM photos
+      WHERE id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<PhotoWorkflowRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  if (body.status === "final") {
+    /*
+     * A final photo fulfills its current edit requests.
+     * Future hearts then represent a new revision request.
+     */
+    await env.DB.batch([
+      env.DB.prepare(
+        `
+          UPDATE photos
+          SET workflow_status = ?
+          WHERE id = ?
+        `,
+      ).bind(body.status, photoId),
+
+      env.DB.prepare(
+        `
+          DELETE FROM hearts
+          WHERE photo_id = ?
+        `,
+      ).bind(photoId),
+    ]);
+  } else {
+    await env.DB.prepare(
+      `
+        UPDATE photos
+        SET workflow_status = ?
+        WHERE id = ?
+      `,
+    )
+      .bind(body.status, photoId)
+      .run();
+  }
+
+  return jsonResponse({
+    photoId,
+    workflowStatus: body.status,
+    heartCount: body.status === "final" ? 0 : await getHeartCount(env, photoId),
+  });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -1366,6 +1473,20 @@ export default {
       const commentId = decodeURIComponent(dashboardCommentResolutionMatch[1]);
 
       return setCommentResolution(request, env, commentId);
+    }
+
+    const photoWorkflowMatch = url.pathname.match(
+      /^\/api\/photos\/([^/]+)\/workflow$/,
+    );
+
+    if (photoWorkflowMatch) {
+      if (request.method !== "PUT") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const photoId = decodeURIComponent(photoWorkflowMatch[1]);
+
+      return setPhotoWorkflowStatus(request, env, photoId);
     }
 
     if (url.pathname.startsWith("/api/")) {

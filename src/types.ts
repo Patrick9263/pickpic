@@ -1,6 +1,8 @@
 export type EventStatus =
   "draft" | "uploading" | "ready" | "editing" | "completed" | "archived";
 
+export type PhotoWorkflowStatus = "idle" | "editing" | "final";
+
 export interface EventRecord {
   id: string;
   title: string;
@@ -33,6 +35,7 @@ export interface PhotoRecord {
   createdAt: string;
   imageUrl: string;
   heartCount: number;
+  workflowStatus: PhotoWorkflowStatus;
   comments: PhotoCommentRecord[];
 }
 

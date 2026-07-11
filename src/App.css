@@ -483,6 +483,32 @@ button:disabled {
   line-height: 1.4;
 }
 
+.photo-workflow-badge {
+  background: #efeafd;
+  border-radius: 999px;
+  color: #5d45b7;
+  font-size: 0.68rem;
+  font-weight: 800;
+  justify-self: start;
+  padding: 4px 7px;
+}
+
+.workflow-photo-button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #5d45b7;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 0;
+}
+
+.workflow-photo-button:hover:not(:disabled) {
+  background: transparent;
+  color: #423185;
+  text-decoration: underline;
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;
