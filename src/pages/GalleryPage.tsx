@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type {
   EventStatus,
   GalleryPhotoRecord,
@@ -33,6 +33,15 @@ interface GalleryPageProps {
 
 type PhotoVersion = "original" | "final";
 
+type GalleryGrouping = "all" | "day" | "location";
+
+interface GalleryPhotoGroup {
+  key: string;
+  label: string;
+  photos: GalleryPhotoRecord[];
+  mapUrl: string | null;
+}
+
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
 
@@ -48,6 +57,136 @@ function getOrCreateVisitorToken(): string {
   window.localStorage.setItem(VISITOR_TOKEN_KEY, token);
 
   return token;
+}
+
+function formatDayGroupLabel(dayKey: string): string {
+  if (dayKey === "unknown") {
+    return "Date unavailable";
+  }
+
+  const [year, month, day] = dayKey.split("-").map(Number);
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "full",
+  }).format(new Date(year, month - 1, day));
+}
+
+function comparePhotos(
+  first: GalleryPhotoRecord,
+  second: GalleryPhotoRecord,
+): number {
+  if (first.capturedAt && second.capturedAt) {
+    const captureDateComparison = first.capturedAt.localeCompare(
+      second.capturedAt,
+    );
+
+    if (captureDateComparison !== 0) {
+      return captureDateComparison;
+    }
+  } else if (first.capturedAt) {
+    // Photos with capture metadata come before those without it.
+    return -1;
+  } else if (second.capturedAt) {
+    return 1;
+  }
+
+  const filenameComparison = first.originalFilename.localeCompare(
+    second.originalFilename,
+    undefined,
+    {
+      numeric: true,
+      sensitivity: "base",
+    },
+  );
+
+  if (filenameComparison !== 0) {
+    return filenameComparison;
+  }
+
+  // Final fallback if filenames are identical.
+  return first.createdAt.localeCompare(second.createdAt);
+}
+
+function buildGalleryGroups(
+  photos: GalleryPhotoRecord[],
+  grouping: GalleryGrouping,
+): GalleryPhotoGroup[] {
+  const sortedPhotos = [...photos].sort(comparePhotos);
+
+  if (grouping === "all") {
+    return [
+      {
+        key: "all",
+        label: "All photos",
+        photos: sortedPhotos,
+        mapUrl: null,
+      },
+    ];
+  }
+
+  const groups = new Map<string, GalleryPhotoRecord[]>();
+
+  for (const photo of sortedPhotos) {
+    let key: string;
+
+    if (grouping === "day") {
+      key = photo.capturedAt?.slice(0, 10) ?? "unknown";
+    } else if (photo.latitude !== null && photo.longitude !== null) {
+      /*
+       * Public coordinates are already rounded by the
+       * Worker, creating approximate nearby-area groups.
+       */
+      key = `${photo.latitude.toFixed(2)},` + photo.longitude.toFixed(2);
+    } else {
+      key = "unknown";
+    }
+
+    const groupPhotos = groups.get(key) ?? [];
+
+    groupPhotos.push(photo);
+    groups.set(key, groupPhotos);
+  }
+
+  const results = Array.from(groups.entries(), ([key, groupPhotos]) => {
+    if (grouping === "day") {
+      return {
+        key,
+        label: formatDayGroupLabel(key),
+        photos: groupPhotos,
+        mapUrl: null,
+      };
+    }
+
+    if (key === "unknown") {
+      return {
+        key,
+        label: "Location unavailable",
+        photos: groupPhotos,
+        mapUrl: null,
+      };
+    }
+
+    const [latitudeText, longitudeText] = key.split(",");
+
+    return {
+      key,
+      label: `Near ${latitudeText}, ` + longitudeText,
+      photos: groupPhotos,
+      mapUrl: "https://www.google.com/maps?q=" + encodeURIComponent(key),
+    };
+  });
+
+  return results.sort((first, second) => {
+    if (first.key === "unknown") {
+      return 1;
+    }
+
+    if (second.key === "unknown") {
+      return -1;
+    }
+
+    return first.key.localeCompare(second.key);
+  });
 }
 
 function GalleryPage({ shareToken }: GalleryPageProps) {
@@ -68,6 +207,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     gallery?.photos.find((photo) => photo.id === selectedPhotoId) ?? null;
   const [selectedVersion, setSelectedVersion] =
     useState<PhotoVersion>("original");
+  const [grouping, setGrouping] = useState<GalleryGrouping>("all");
+  const photoGroups = useMemo(
+    () => (gallery ? buildGalleryGroups(gallery.photos, grouping) : []),
+    [gallery, grouping],
+  );
 
   useEffect(() => {
     let isCancelled = false;
@@ -479,6 +623,30 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           <p className="gallery-instructions">
             Heart a photo to request an edit or another revision.
           </p>
+
+          <div
+            className="gallery-grouping-controls"
+            role="group"
+            aria-label="Group photos"
+          >
+            {(
+              [
+                ["all", "All"],
+                ["day", "Day"],
+                ["location", "Location"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={grouping === value ? "gallery-grouping-active" : ""}
+                aria-pressed={grouping === value}
+                onClick={() => setGrouping(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -500,49 +668,75 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             <p>The photographer is still preparing this gallery.</p>
           </div>
         ) : (
-          <div className="gallery-grid">
-            {gallery.photos.map((photo) => {
-              const isToggling = togglingPhotoId === photo.id;
+          <div className="gallery-groups">
+            {photoGroups.map((group) => (
+              <section className="gallery-photo-group" key={group.key}>
+                {grouping !== "all" && (
+                  <header className="gallery-group-header">
+                    <div>
+                      <h2>{group.label}</h2>
 
-              return (
-                <article className="gallery-photo-card" key={photo.id}>
-                  <button
-                    className="gallery-photo-button"
-                    type="button"
-                    onClick={() => openPhoto(photo)}
-                    aria-label={`Open ${photo.originalFilename}`}
-                  >
-                    <img
-                      src={photo.finalPhoto?.imageUrl ?? photo.imageUrl}
-                      alt={photo.originalFilename}
-                      loading="lazy"
-                    />
-                  </button>
+                      <span>
+                        {group.photos.length}{" "}
+                        {group.photos.length === 1 ? "photo" : "photos"}
+                      </span>
+                    </div>
 
-                  {photo.finalPhoto && (
-                    <span className="gallery-final-badge">Final</span>
-                  )}
-                  <button
-                    className={`gallery-heart-button ${
-                      photo.viewerHearted ? "gallery-heart-button-active" : ""
-                    }`}
-                    type="button"
-                    disabled={isToggling}
-                    onClick={() => void toggleHeart(photo)}
-                    aria-pressed={photo.viewerHearted}
-                    aria-label={
-                      photo.viewerHearted
-                        ? `Remove edit request for ${photo.originalFilename}`
-                        : `Request an edit of ${photo.originalFilename}`
-                    }
-                  >
-                    <span aria-hidden="true">♥</span>
+                    {group.mapUrl && (
+                      <a href={group.mapUrl} target="_blank" rel="noreferrer">
+                        View area
+                      </a>
+                    )}
+                  </header>
+                )}
+                <div className="gallery-grid">
+                  {gallery.photos.map((photo) => {
+                    const isToggling = togglingPhotoId === photo.id;
 
-                    <span>{photo.heartCount}</span>
-                  </button>
-                </article>
-              );
-            })}
+                    return (
+                      <article className="gallery-photo-card" key={photo.id}>
+                        <button
+                          className="gallery-photo-button"
+                          type="button"
+                          onClick={() => openPhoto(photo)}
+                          aria-label={`Open ${photo.originalFilename}`}
+                        >
+                          <img
+                            src={photo.finalPhoto?.imageUrl ?? photo.imageUrl}
+                            alt={photo.originalFilename}
+                            loading="lazy"
+                          />
+                        </button>
+
+                        {photo.finalPhoto && (
+                          <span className="gallery-final-badge">Final</span>
+                        )}
+                        <button
+                          className={`gallery-heart-button ${
+                            photo.viewerHearted
+                              ? "gallery-heart-button-active"
+                              : ""
+                          }`}
+                          type="button"
+                          disabled={isToggling}
+                          onClick={() => void toggleHeart(photo)}
+                          aria-pressed={photo.viewerHearted}
+                          aria-label={
+                            photo.viewerHearted
+                              ? `Remove edit request for ${photo.originalFilename}`
+                              : `Request an edit of ${photo.originalFilename}`
+                          }
+                        >
+                          <span aria-hidden="true">♥</span>
+
+                          <span>{photo.heartCount}</span>
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
           </div>
         )}
       </main>

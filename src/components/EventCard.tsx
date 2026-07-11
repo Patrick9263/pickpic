@@ -18,6 +18,37 @@ function getWorkflowLabel(photo: PhotoRecord): string {
   return photo.heartCount > 0 ? "Requested" : "Not requested";
 }
 
+function formatCapturedAt(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/.exec(value);
+
+  if (!match) {
+    return value;
+  }
+
+  const [, year, month, day, hour, minute, second] = match;
+
+  const date = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hour),
+    Number(minute),
+    Number(second),
+  );
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function getMapUrl(latitude: number, longitude: number): string {
+  return (
+    "https://www.google.com/maps?q=" +
+    encodeURIComponent(`${latitude},${longitude}`)
+  );
+}
+
 type EventCardProps = {
   eventRecord: EventRecord;
   shareUrl: string;
@@ -209,6 +240,27 @@ function EventCard(props: EventCardProps) {
                     {photo.comments.length}{" "}
                     {photo.comments.length === 1 ? "comment" : "comments"}
                   </small>
+
+                  {(photo.capturedAt ||
+                    (photo.latitude !== null && photo.longitude !== null)) && (
+                    <div className="photo-metadata">
+                      {photo.capturedAt && (
+                        <span>
+                          Captured {formatCapturedAt(photo.capturedAt)}
+                        </span>
+                      )}
+
+                      {photo.latitude !== null && photo.longitude !== null && (
+                        <a
+                          href={getMapUrl(photo.latitude, photo.longitude)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View location
+                        </a>
+                      )}
+                    </div>
+                  )}
 
                   {photo.finalPhoto && (
                     <div className="final-photo-details">

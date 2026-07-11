@@ -45,6 +45,11 @@ export interface PhotoRecord {
   heartCount: number;
   workflowStatus: PhotoWorkflowStatus;
   finalPhoto: FinalPhotoRecord | null;
+
+  capturedAt: string | null;
+  latitude: number | null;
+  longitude: number | null;
+
   comments: PhotoCommentRecord[];
 }
 

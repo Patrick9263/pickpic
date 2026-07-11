@@ -35,6 +35,9 @@ interface PhotoRecord {
   workflowStatus: PhotoWorkflowStatus;
   finalPhoto: FinalPhotoRecord | null;
   comments: PhotoCommentRecord[];
+  capturedAt: string | null;
+  latitude: number | null;
+  longitude: number | null;
 }
 
 interface PhotoRow {
@@ -50,6 +53,9 @@ interface PhotoRow {
   finalContentType: string | null;
   finalByteSize: number | null;
   finalUploadedAt: string | null;
+  capturedAt: string | null;
+  latitude: number | null;
+  longitude: number | null;
 }
 
 interface StoredPhotoRow {
@@ -157,8 +163,120 @@ interface DuplicatePhotoRow {
   duplicateVariant: "original" | "final";
 }
 
+interface PhotoUploadMetadata {
+  capturedAt: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+type PhotoUploadMetadataResult =
+  | {
+      metadata: PhotoUploadMetadata;
+      error?: never;
+    }
+  | {
+      metadata?: never;
+      error: string;
+    };
+
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
+
+const CAPTURED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
+
+function isValidCapturedAt(value: string): boolean {
+  const match = CAPTURED_AT_PATTERN.exec(value);
+
+  if (!match) {
+    return false;
+  }
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText] =
+    match;
+
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day &&
+    date.getUTCHours() === hour &&
+    date.getUTCMinutes() === minute &&
+    date.getUTCSeconds() === second
+  );
+}
+
+function getPhotoUploadMetadata(request: Request): PhotoUploadMetadataResult {
+  const capturedAt =
+    request.headers.get("X-PickPic-Captured-At")?.trim() || null;
+
+  if (capturedAt !== null && !isValidCapturedAt(capturedAt)) {
+    return {
+      error: "X-PickPic-Captured-At must use YYYY-MM-DDTHH:mm:ss.",
+    };
+  }
+
+  const latitudeText =
+    request.headers.get("X-PickPic-Latitude")?.trim() || null;
+
+  const longitudeText =
+    request.headers.get("X-PickPic-Longitude")?.trim() || null;
+
+  if ((latitudeText === null) !== (longitudeText === null)) {
+    return {
+      error: "Latitude and longitude must be provided together.",
+    };
+  }
+
+  if (latitudeText === null || longitudeText === null) {
+    return {
+      metadata: {
+        capturedAt,
+        latitude: null,
+        longitude: null,
+      },
+    };
+  }
+
+  const latitude = Number(latitudeText);
+  const longitude = Number(longitudeText);
+
+  if (
+    !Number.isFinite(latitude) ||
+    latitude < -90 ||
+    latitude > 90 ||
+    !Number.isFinite(longitude) ||
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return {
+      error: "The supplied GPS coordinates are invalid.",
+    };
+  }
+
+  return {
+    metadata: {
+      capturedAt,
+      latitude,
+      longitude,
+    },
+  };
+}
+
+function roundPublicCoordinate(value: number | null): number | null {
+  if (value === null) {
+    return null;
+  }
+
+  return Math.round(value * 100) / 100;
+}
 
 function jsonResponse(data: unknown, status = 200): Response {
   return Response.json(data, {
@@ -418,6 +536,14 @@ async function createPhoto(
     );
   }
 
+  const metadataResult = getPhotoUploadMetadata(request);
+
+  if ("error" in metadataResult) {
+    return jsonResponse({ error: metadataResult.error }, 400);
+  }
+
+  const { capturedAt, latitude, longitude } = metadataResult.metadata;
+
   const declaredSize = Number(request.headers.get("Content-Length"));
 
   if (Number.isFinite(declaredSize) && declaredSize > MAX_JPEG_BYTES) {
@@ -437,6 +563,23 @@ async function createPhoto(
   const photoId = crypto.randomUUID();
   const storageKey = `events/${eventId}/photos/${photoId}/preview.jpg`;
 
+  const customMetadata: Record<string, string> = {
+    eventId,
+    photoId,
+    originalFilename,
+    sourceSha256,
+  };
+
+  if (capturedAt) {
+    customMetadata.capturedAt = capturedAt;
+  }
+
+  if (latitude !== null && longitude !== null) {
+    customMetadata.latitude = latitude.toString();
+
+    customMetadata.longitude = longitude.toString();
+  }
+
   let storedObject: R2Object;
 
   try {
@@ -444,12 +587,7 @@ async function createPhoto(
       httpMetadata: {
         contentType: "image/jpeg",
       },
-      customMetadata: {
-        eventId,
-        photoId,
-        originalFilename,
-        sourceSha256,
-      },
+      customMetadata,
     });
   } catch {
     return jsonResponse({ error: "The image could not be stored." }, 500);
@@ -475,9 +613,12 @@ async function createPhoto(
           byte_size,
           workflow_status,
           source_sha256,
+          captured_at,
+          latitude,
+          longitude,
           created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
       .bind(
@@ -489,6 +630,9 @@ async function createPhoto(
         storedObject.size,
         "idle",
         sourceSha256,
+        capturedAt,
+        latitude,
+        longitude,
         createdAt,
       )
       .run();
@@ -533,6 +677,9 @@ async function createPhoto(
     workflowStatus: "idle",
     finalPhoto: null,
     comments: [],
+    capturedAt,
+    latitude,
+    longitude,
   };
 
   return jsonResponse(
@@ -563,6 +710,9 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
         p.final_content_type AS finalContentType,
         p.final_byte_size AS finalByteSize,
         p.final_uploaded_at AS finalUploadedAt,
+        p.captured_at AS capturedAt,
+        p.latitude,
+        p.longitude,
         COUNT(h.photo_id) AS heartCount
       FROM photos p
       LEFT JOIN hearts h
@@ -579,13 +729,17 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
         p.final_original_filename,
         p.final_content_type,
         p.final_byte_size,
-        p.final_uploaded_at
-      ORDER BY p.created_at DESC
-    `,
+        p.final_uploaded_at,
+        p.captured_at,
+        p.latitude,
+        p.longitude
+      ORDER BY
+        COALESCE(p.captured_at, p.created_at) DESC,
+        p.created_at DESC
+  `,
   )
     .bind(eventId)
     .all<PhotoRow>();
-
   const commentsByPhoto = await getCommentsByPhoto(env, eventId);
 
   return jsonResponse({
@@ -709,6 +863,9 @@ async function getPublicGallery(
         p.final_content_type AS finalContentType,
         p.final_byte_size AS finalByteSize,
         p.final_uploaded_at AS finalUploadedAt,
+        p.captured_at AS capturedAt,
+        p.latitude,
+        p.longitude,
         COUNT(h.photo_id) AS heartCount
       FROM photos p
       LEFT JOIN hearts h
@@ -725,8 +882,13 @@ async function getPublicGallery(
         p.final_original_filename,
         p.final_content_type,
         p.final_byte_size,
-        p.final_uploaded_at
-      ORDER BY p.created_at ASC
+        p.final_uploaded_at,
+        p.captured_at,
+        p.latitude,
+        p.longitude,
+      ORDER BY
+        COALESCE(p.captured_at, p.created_at) ASC,
+        p.created_at ASC
     `,
   )
     .bind(event.id)
@@ -769,11 +931,20 @@ async function getPublicGallery(
 
       return {
         ...photo,
+
+        /*
+         * Public galleries receive approximate coordinates,
+         * while the photographer dashboard keeps the exact values.
+         */
+        latitude: roundPublicCoordinate(photo.latitude),
+        longitude: roundPublicCoordinate(photo.longitude),
+
         comments: commentRows.map((comment) => ({
           ...toPhotoCommentRecord(comment),
           viewerOwned:
             visitorToken !== null && comment.visitorToken === visitorToken,
         })),
+
         viewerHearted: heartedPhotoIds.has(photo.id),
       };
     }),
