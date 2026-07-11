@@ -442,7 +442,7 @@ function DashboardPage() {
         photoId: string;
         workflowStatus: PhotoWorkflowStatus;
         heartCount: number;
-      }>(`/api/photos/${encodeURIComponent(photo.id)}/workflow`, {
+      }>(`/api/admin/photos/${encodeURIComponent(photo.id)}/workflow`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
