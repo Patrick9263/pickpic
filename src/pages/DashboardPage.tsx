@@ -48,7 +48,7 @@ const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 
 async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
   const body = await fetchJson<PhotosResponse>(
-    `/api/events/${encodeURIComponent(eventId)}/photos`,
+    `/api/admin/events/${encodeURIComponent(eventId)}/photos`,
   );
 
   return body.photos;
