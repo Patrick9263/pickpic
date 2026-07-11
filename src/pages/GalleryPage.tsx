@@ -690,7 +690,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   </header>
                 )}
                 <div className="gallery-grid">
-                  {gallery.photos.map((photo) => {
+                  {group.photos.map((photo) => {
                     const isToggling = togglingPhotoId === photo.id;
 
                     return (

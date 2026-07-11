@@ -885,7 +885,7 @@ async function getPublicGallery(
         p.final_uploaded_at,
         p.captured_at,
         p.latitude,
-        p.longitude,
+        p.longitude
       ORDER BY
         COALESCE(p.captured_at, p.created_at) ASC,
         p.created_at ASC
