@@ -1,14 +1,14 @@
-import type { PhotoVersion } from "../../pages/GalleryPage";
+import type { PhotoVersion } from "./types";
 import type { GalleryPhotoRecord, ViewerPhotoCommentRecord } from "../../types";
 import GalleryComments from "./GalleryComments";
-import type { FormEvent } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 
 type GalleryLightboxProps = {
   selectedPhoto: GalleryPhotoRecord;
   closeLightbox: () => void;
   selectedImageUrl: string | null;
   selectedVersion: PhotoVersion;
-  setSelectedVersion: (value: React.SetStateAction<PhotoVersion>) => void;
+  setSelectedVersion: Dispatch<SetStateAction<PhotoVersion>>;
   togglingPhotoId: string | null;
   toggleHeart: (photo: GalleryPhotoRecord) => Promise<void>;
 
@@ -59,7 +59,7 @@ function GalleryLightbox({
           onClick={closeLightbox}
           aria-label="Close image"
         >
-          x
+          ×
         </button>
 
         <img

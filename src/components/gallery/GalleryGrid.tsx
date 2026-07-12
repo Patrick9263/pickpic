@@ -1,4 +1,4 @@
-import type { GalleryPhotoGroup } from "../../pages/GalleryPage";
+import type { GalleryPhotoGroup } from "./types";
 import type { GalleryPhotoRecord } from "../../types";
 
 type GalleryGridProps = {

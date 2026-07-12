@@ -1,12 +1,12 @@
-import type { FormEvent } from "react";
 import type { GalleryPhotoRecord, ViewerPhotoCommentRecord } from "../../types";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 
 type GalleryCommentsProps = {
   selectedPhoto: GalleryPhotoRecord;
   commentActionId: string | null;
   commentText: string;
   isSubmittingComment: boolean;
-  setCommentText: (value: React.SetStateAction<string>) => void;
+  setCommentText: Dispatch<SetStateAction<string>>;
   editComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
   deleteComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
   submitComment: (event: FormEvent<HTMLFormElement>) => Promise<void>;

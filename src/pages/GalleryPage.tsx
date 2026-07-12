@@ -8,6 +8,10 @@ import { fetchJson } from "../api";
 import "../styles/GalleryPage.css";
 import GalleryGrid from "../components/gallery/GalleryGrid";
 import GalleryLightbox from "../components/gallery/GalleryLightbox";
+import type {
+  GalleryPhotoGroup,
+  PhotoVersion,
+} from "../components/gallery/types";
 
 interface GalleryEvent {
   title: string;
@@ -33,16 +37,7 @@ interface GalleryPageProps {
   shareToken: string;
 }
 
-export type PhotoVersion = "original" | "final";
-
 type GalleryGrouping = "all" | "day" | "location";
-
-export interface GalleryPhotoGroup {
-  key: string;
-  label: string;
-  photos: GalleryPhotoRecord[];
-  mapUrl: string | null;
-}
 
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
