@@ -67,7 +67,9 @@ export interface UploadBatchProgress {
   uploaded: number;
   skipped: number;
   failed: number;
+  warnings: number;
   currentFilename: string | null;
+  currentStage: UploadStage | null;
 }
 
 export interface ImageVariantRecord {
@@ -83,3 +85,7 @@ export interface ImageVariantSet {
   thumbnail: ImageVariantRecord | null;
   preview: ImageVariantRecord | null;
 }
+
+export type UploadStage = "preparing" | "uploading" | "optimizing";
+
+export type PhotoVariantSource = "original" | "final";

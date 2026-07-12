@@ -5,6 +5,7 @@ import type {
   UploadBatchProgress,
   PhotoWorkflowStatus,
 } from "../types";
+import { isVariantSetComplete, isVariantSetMissing } from "../imageVariants";
 
 function getWorkflowLabel(photo: PhotoRecord): string {
   if (photo.workflowStatus === "editing") {
@@ -49,6 +50,24 @@ function getMapUrl(latitude: number, longitude: number): string {
   );
 }
 
+function getUploadStageLabel(
+  stage: UploadBatchProgress["currentStage"],
+): string {
+  switch (stage) {
+    case "preparing":
+      return "Preparing";
+
+    case "uploading":
+      return "Uploading";
+
+    case "optimizing":
+      return "Optimizing";
+
+    default:
+      return "Processing";
+  }
+}
+
 type EventCardProps = {
   eventRecord: EventRecord;
   shareUrl: string;
@@ -60,6 +79,9 @@ type EventCardProps = {
   clearingHeartsPhotoId: string | null;
   updatingWorkflowPhotoId: string | null;
   uploadingFinalPhotoId: string | null;
+  repairingVariantsPhotoId: string | null;
+  variantRepairWarnings: Record<string, string>;
+  handleRepairPhotoVariants(eventId: string, photo: PhotoRecord): Promise<void>;
   handleFinalPhotoSelection(
     eventId: string,
     photo: PhotoRecord,
@@ -101,6 +123,9 @@ function EventCard(props: EventCardProps) {
     handleFinalPhotoSelection,
     uploadProgress,
     uploadsDisabled,
+    repairingVariantsPhotoId,
+    variantRepairWarnings,
+    handleRepairPhotoVariants,
   } = props;
 
   function formatDate(value: string): string {
@@ -195,8 +220,19 @@ function EventCard(props: EventCardProps) {
               )}
             </span>
 
+            {uploadProgress.warnings > 0 && (
+              <>
+                {" · "}
+                {uploadProgress.warnings} optimization{" "}
+                {uploadProgress.warnings === 1 ? "warning" : "warnings"}
+              </>
+            )}
+
             {uploadProgress.currentFilename && (
-              <small>Processing {uploadProgress.currentFilename}</small>
+              <small>
+                {getUploadStageLabel(uploadProgress.currentStage)}{" "}
+                {uploadProgress.currentFilename}
+              </small>
             )}
           </div>
         )}
@@ -206,6 +242,22 @@ function EventCard(props: EventCardProps) {
         <div className="photo-list">
           {photos.map((photo) => {
             const isUploadingFinal = uploadingFinalPhotoId === photo.id;
+            const originalOptimized = isVariantSetComplete(photo.variants);
+
+            const finalOptimized =
+              !photo.finalPhoto ||
+              isVariantSetComplete(photo.finalPhoto.variants);
+
+            const hasMissingVariants =
+              isVariantSetMissing(photo.variants) ||
+              Boolean(
+                photo.finalPhoto &&
+                isVariantSetMissing(photo.finalPhoto.variants),
+              );
+
+            const isRepairingVariants = repairingVariantsPhotoId === photo.id;
+
+            const repairWarning = variantRepairWarnings[photo.id];
             return (
               <article className="photo-item" key={photo.id}>
                 <a
@@ -240,6 +292,28 @@ function EventCard(props: EventCardProps) {
                     {photo.comments.length}{" "}
                     {photo.comments.length === 1 ? "comment" : "comments"}
                   </small>
+
+                  <div className="photo-optimization-status">
+                    <span
+                      className={
+                        originalOptimized && finalOptimized
+                          ? "photo-optimization-complete"
+                          : "photo-optimization-missing"
+                      }
+                    >
+                      {originalOptimized && finalOptimized
+                        ? "Web versions ready"
+                        : "Web versions missing"}
+                    </span>
+
+                    {!originalOptimized && (
+                      <small>Original needs optimization</small>
+                    )}
+
+                    {photo.finalPhoto && !finalOptimized && (
+                      <small>Final needs optimization</small>
+                    )}
+                  </div>
 
                   {(photo.capturedAt ||
                     (photo.latitude !== null && photo.longitude !== null)) && (
@@ -288,6 +362,20 @@ function EventCard(props: EventCardProps) {
                   )}
 
                   <div className="photo-actions">
+                    {hasMissingVariants && (
+                      <button
+                        className="optimize-photo-button"
+                        type="button"
+                        disabled={isRepairingVariants}
+                        onClick={() =>
+                          void handleRepairPhotoVariants(eventRecord.id, photo)
+                        }
+                      >
+                        {isRepairingVariants
+                          ? "Optimizing…"
+                          : "Optimize missing versions"}
+                      </button>
+                    )}
                     {photo.workflowStatus === "idle" && (
                       <button
                         className="workflow-photo-button"
@@ -401,6 +489,11 @@ function EventCard(props: EventCardProps) {
                     >
                       {deletingPhotoId === photo.id ? "Deleting…" : "Delete"}
                     </button>
+                    {repairWarning && (
+                      <p className="photo-optimization-warning" role="alert">
+                        {repairWarning}
+                      </p>
+                    )}
                   </div>
                 </div>
               </article>

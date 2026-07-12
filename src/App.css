@@ -775,6 +775,62 @@ button:hover:not(:disabled),
   color: var(--color-accent-hover);
 }
 
+.photo-optimization-status {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 9px;
+}
+
+.photo-optimization-status > span {
+  border-radius: 999px;
+  font-size: 0.66rem;
+  font-weight: 800;
+  padding: 4px 7px;
+}
+
+.photo-optimization-status small {
+  color: var(--color-text-subtle);
+  font-size: 0.66rem;
+}
+
+.photo-optimization-complete {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.photo-optimization-missing {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.optimize-photo-button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--color-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 0;
+}
+
+.optimize-photo-button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.photo-optimization-warning {
+  background: var(--color-danger-soft);
+  border: 1px solid rgb(255 153 145 / 24%);
+  border-radius: 8px;
+  color: var(--color-danger);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  margin: 4px 0 0;
+  padding: 8px 9px;
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;

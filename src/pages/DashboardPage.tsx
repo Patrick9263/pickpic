@@ -9,19 +9,20 @@ import EditingQueue from "../components/EditingQueue";
 import type {
   EventRecord,
   FinalPhotoRecord,
+  ImageVariantSet,
   PhotoRecord,
+  PhotoVariantSource,
   PhotoWorkflowStatus,
   UploadBatchProgress,
 } from "../types";
 import EventCard from "../components/EventCard";
-import { fetchJson } from "../api";
+import { fetchJson, getErrorMessage } from "../api";
 import { extractPhotoMetadata } from "../photoMetadata";
 import {
   generateImageVariants,
+  isVariantSetMissing,
   type GeneratedImageVariants,
 } from "../imageVariants";
-
-import type { ImageVariantSet } from "../types";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -60,6 +61,41 @@ const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 const PUBLIC_APP_ORIGIN = (
   import.meta.env.VITE_PUBLIC_APP_ORIGIN || window.location.origin
 ).replace(/\/+$/, "");
+
+async function downloadImageAsFile(
+  imageUrl: string,
+  filename: string,
+): Promise<File> {
+  const response = await fetch(imageUrl);
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+
+  const blob = await response.blob();
+
+  if (blob.type && blob.type !== "image/jpeg") {
+    throw new Error("The stored image is not a JPEG.");
+  }
+
+  return new File([blob], filename, {
+    type: "image/jpeg",
+  });
+}
+
+function getMissingVariantSources(photo: PhotoRecord): PhotoVariantSource[] {
+  const sources: PhotoVariantSource[] = [];
+
+  if (isVariantSetMissing(photo.variants)) {
+    sources.push("original");
+  }
+
+  if (photo.finalPhoto && isVariantSetMissing(photo.finalPhoto.variants)) {
+    sources.push("final");
+  }
+
+  return sources;
+}
 
 async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
   const body = await fetchJson<PhotosResponse>(
@@ -143,6 +179,13 @@ function DashboardPage() {
   const [uploadProgressByEvent, setUploadProgressByEvent] = useState<
     Record<string, UploadBatchProgress>
   >({});
+  const [repairingVariantsPhotoId, setRepairingVariantsPhotoId] = useState<
+    string | null
+  >(null);
+
+  const [variantRepairWarnings, setVariantRepairWarnings] = useState<
+    Record<string, string>
+  >({});
 
   const loadEvents = useCallback(async (): Promise<void> => {
     setIsLoading(true);
@@ -220,6 +263,7 @@ function DashboardPage() {
     eventId: string,
     changeEvent: ChangeEvent<HTMLInputElement>,
   ): Promise<void> {
+    let warningCount = 0;
     const selectedFiles = Array.from(changeEvent.currentTarget.files ?? []);
 
     changeEvent.currentTarget.value = "";
@@ -262,22 +306,35 @@ function DashboardPage() {
 
     setUploadProgressByEvent((currentProgress) => ({
       ...currentProgress,
+
       [eventId]: {
         total: selectedFiles.length,
         processed: failedCount,
         uploaded: 0,
         skipped: 0,
         failed: failedCount,
+        warnings: 0,
         currentFilename: null,
+        currentStage: null,
       },
     }));
 
     for (const file of validFiles) {
       setUploadProgressByEvent((currentProgress) => ({
         ...currentProgress,
+
         [eventId]: {
           ...currentProgress[eventId],
           currentFilename: file.name,
+          currentStage: "preparing",
+        },
+      }));
+      setUploadProgressByEvent((currentProgress) => ({
+        ...currentProgress,
+
+        [eventId]: {
+          ...currentProgress[eventId],
+          currentStage: "uploading",
         },
       }));
 
@@ -332,6 +389,14 @@ function DashboardPage() {
             [eventId]: [body.photo!, ...(currentPhotos[eventId] ?? [])],
           }));
           try {
+            setUploadProgressByEvent((currentProgress) => ({
+              ...currentProgress,
+
+              [eventId]: {
+                ...currentProgress[eventId],
+                currentStage: "optimizing",
+              },
+            }));
             const generatedVariants = await generateImageVariants(file);
 
             const variants = await uploadImageVariants(
@@ -352,6 +417,8 @@ function DashboardPage() {
               ),
             }));
           } catch (variantError) {
+            warningCount += 1;
+
             console.error(`Unable to optimize ${file.name}:`, variantError);
 
             /*
@@ -378,11 +445,21 @@ function DashboardPage() {
               uploaded: uploadedCount,
               skipped: skippedCount,
               failed: failedCount,
+              warnings: warningCount,
               currentFilename: null,
+              currentStage: null,
             },
           };
         });
       }
+    }
+
+    if (failedCount === 0 && warningCount > 0) {
+      setError(
+        `${warningCount} ${
+          warningCount === 1 ? "photo uploaded" : "photos uploaded"
+        }, but optimized web versions could not be created. Use “Optimize missing versions” to retry.`,
+      );
     }
 
     setUploadingEventId(null);
@@ -671,6 +748,100 @@ function DashboardPage() {
     }
   }
 
+  async function handleRepairPhotoVariants(
+    eventId: string,
+    photo: PhotoRecord,
+  ): Promise<void> {
+    const missingSources = getMissingVariantSources(photo);
+
+    if (missingSources.length === 0) {
+      return;
+    }
+
+    setRepairingVariantsPhotoId(photo.id);
+
+    setVariantRepairWarnings((currentWarnings) => {
+      const nextWarnings = {
+        ...currentWarnings,
+      };
+
+      delete nextWarnings[photo.id];
+
+      return nextWarnings;
+    });
+
+    setError(null);
+
+    try {
+      for (const sourceKind of missingSources) {
+        const finalPhoto = photo.finalPhoto;
+
+        const imageUrl =
+          sourceKind === "final" ? finalPhoto?.imageUrl : photo.imageUrl;
+
+        const filename =
+          sourceKind === "final"
+            ? finalPhoto?.originalFilename
+            : photo.originalFilename;
+
+        if (!imageUrl || !filename) {
+          throw new Error(`The ${sourceKind} image is unavailable.`);
+        }
+
+        const sourceFile = await downloadImageAsFile(imageUrl, filename);
+
+        const generatedVariants = await generateImageVariants(sourceFile);
+
+        const variants = await uploadImageVariants(
+          photo.id,
+          sourceKind,
+          generatedVariants,
+        );
+
+        setPhotosByEvent((currentPhotos) => ({
+          ...currentPhotos,
+
+          [eventId]: (currentPhotos[eventId] ?? []).map((currentPhoto) => {
+            if (currentPhoto.id !== photo.id) {
+              return currentPhoto;
+            }
+
+            if (sourceKind === "original") {
+              return {
+                ...currentPhoto,
+                variants,
+              };
+            }
+
+            if (!currentPhoto.finalPhoto) {
+              return currentPhoto;
+            }
+
+            return {
+              ...currentPhoto,
+              finalPhoto: {
+                ...currentPhoto.finalPhoto,
+                variants,
+              },
+            };
+          }),
+        }));
+      }
+    } catch (caughtError) {
+      const message =
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to generate optimized versions.";
+
+      setVariantRepairWarnings((currentWarnings) => ({
+        ...currentWarnings,
+        [photo.id]: message,
+      }));
+    } finally {
+      setRepairingVariantsPhotoId(null);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -808,6 +979,9 @@ function DashboardPage() {
                         uploadProgressByEvent[eventRecord.id] ?? null
                       }
                       uploadsDisabled={uploadingEventId !== null}
+                      repairingVariantsPhotoId={repairingVariantsPhotoId}
+                      variantRepairWarnings={variantRepairWarnings}
+                      handleRepairPhotoVariants={handleRepairPhotoVariants}
                     />
                   );
                 })}
