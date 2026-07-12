@@ -6,45 +6,9 @@ import {
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
 } from "react";
-
 import type { GalleryPhotoRecord, ViewerPhotoCommentRecord } from "../../types";
-
 import type { PhotoVersion } from "./types";
-
 import GalleryComments from "./GalleryComments";
-
-type GalleryLightboxProps = {
-  selectedPhoto: GalleryPhotoRecord;
-  closeLightbox: () => void;
-  selectedImageUrl: string | null;
-
-  selectedVersion: PhotoVersion;
-
-  setSelectedVersion: Dispatch<SetStateAction<PhotoVersion>>;
-
-  togglingPhotoId: string | null;
-
-  toggleHeart: (photo: GalleryPhotoRecord) => Promise<void>;
-
-  commentActionId: string | null;
-  commentText: string;
-  isSubmittingComment: boolean;
-
-  setCommentText: Dispatch<SetStateAction<string>>;
-
-  editComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
-
-  deleteComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
-
-  submitComment: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-
-  photoIndex: number;
-  photoCount: number;
-  canGoPrevious: boolean;
-  canGoNext: boolean;
-  onPrevious: () => void;
-  onNext: () => void;
-};
 
 interface PointerStart {
   pointerId: number;
@@ -76,6 +40,30 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   );
 }
 
+type GalleryLightboxProps = {
+  selectedPhoto: GalleryPhotoRecord;
+  closeLightbox: () => void;
+  selectedImageUrl: string | null;
+  selectedVersion: PhotoVersion;
+  setSelectedVersion: Dispatch<SetStateAction<PhotoVersion>>;
+  togglingPhotoId: string | null;
+  toggleHeart: (photo: GalleryPhotoRecord) => Promise<void>;
+  commentActionId: string | null;
+  commentText: string;
+  isSubmittingComment: boolean;
+  setCommentText: Dispatch<SetStateAction<string>>;
+  editComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
+  deleteComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
+  submitComment: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  photoIndex: number;
+  photoCount: number;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+  interactionsEnabled: boolean;
+};
+
 function GalleryLightbox({
   selectedPhoto,
   closeLightbox,
@@ -97,6 +85,7 @@ function GalleryLightbox({
   canGoNext,
   onPrevious,
   onNext,
+  interactionsEnabled,
 }: GalleryLightboxProps) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -343,14 +332,20 @@ function GalleryLightbox({
               selectedPhoto.viewerHearted ? "lightbox-heart-button-active" : ""
             }`}
             type="button"
-            disabled={togglingPhotoId === selectedPhoto.id}
+            disabled={
+              !interactionsEnabled || togglingPhotoId === selectedPhoto.id
+            }
             onClick={() => void toggleHeart(selectedPhoto)}
             aria-pressed={selectedPhoto.viewerHearted}
           >
             <span aria-hidden="true">♥</span>
 
             <span>
-              {selectedPhoto.viewerHearted ? "Edit requested" : "Request edit"}
+              {!interactionsEnabled
+                ? "Gallery closed"
+                : selectedPhoto.viewerHearted
+                  ? "Edit requested"
+                  : "Request edit"}
             </span>
 
             <span>{selectedPhoto.heartCount}</span>
@@ -366,6 +361,7 @@ function GalleryLightbox({
           editComment={editComment}
           deleteComment={deleteComment}
           submitComment={submitComment}
+          interactionsEnabled={interactionsEnabled}
         />
       </div>
     </div>

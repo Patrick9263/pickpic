@@ -1,9 +1,10 @@
 import type { ChangeEvent } from "react";
 import type {
   EventRecord,
+  GalleryStatus,
   PhotoRecord,
-  UploadBatchProgress,
   PhotoWorkflowStatus,
+  UploadBatchProgress,
 } from "../types";
 import { isVariantSetComplete, isVariantSetMissing } from "../imageVariants";
 
@@ -68,6 +69,38 @@ function getUploadStageLabel(
   }
 }
 
+function getEventStatusLabel(status: EventRecord["status"]): string {
+  switch (status) {
+    case "ready":
+      return "Open";
+
+    case "completed":
+      return "Closed";
+
+    case "archived":
+      return "Archived";
+
+    default:
+      return "Draft";
+  }
+}
+
+function getEventStatusDescription(status: EventRecord["status"]): string {
+  switch (status) {
+    case "ready":
+      return "Viewers can see photos, heart them, and comment.";
+
+    case "completed":
+      return "Viewers can see and download photos, but interactions are disabled.";
+
+    case "archived":
+      return "The public gallery is unavailable and hidden from the normal dashboard.";
+
+    default:
+      return "The public gallery is unavailable until you open it.";
+  }
+}
+
 type EventCardProps = {
   eventRecord: EventRecord;
   shareUrl: string;
@@ -81,6 +114,11 @@ type EventCardProps = {
   uploadingFinalPhotoId: string | null;
   repairingVariantsPhotoId: string | null;
   variantRepairWarnings: Record<string, string>;
+  updatingEventStatusId: string | null;
+  handleSetEventStatus(
+    eventRecord: EventRecord,
+    status: GalleryStatus,
+  ): Promise<void>;
   handleRepairPhotoVariants(eventId: string, photo: PhotoRecord): Promise<void>;
   handleFinalPhotoSelection(
     eventId: string,
@@ -114,6 +152,8 @@ function EventCard(props: EventCardProps) {
     deletingPhotoId,
     clearingHeartsPhotoId,
     updatingWorkflowPhotoId,
+    updatingEventStatusId,
+    handleSetEventStatus,
     handleSetPhotoWorkflowStatus,
     handlePhotoSelection,
     handleDeletePhoto,
@@ -128,6 +168,9 @@ function EventCard(props: EventCardProps) {
     handleRepairPhotoVariants,
   } = props;
   const isAnyVariantRepairRunning = repairingVariantsPhotoId !== null;
+  const isUpdatingEventStatus = updatingEventStatusId === eventRecord.id;
+  const galleryIsAvailable =
+    eventRecord.status === "ready" || eventRecord.status === "completed";
 
   function formatDate(value: string): string {
     const date = new Date(value);
@@ -154,12 +197,45 @@ function EventCard(props: EventCardProps) {
     <article className="event-card" key={eventRecord.id}>
       <div className="event-card-summary">
         <div className="event-card-header">
-          <span className="status-badge">{eventRecord.status}</span>
+          <label className="event-status-control">
+            <span>Gallery status</span>
+
+            <select
+              value={
+                eventRecord.status === "ready" ||
+                eventRecord.status === "completed" ||
+                eventRecord.status === "archived"
+                  ? eventRecord.status
+                  : "draft"
+              }
+              disabled={isUpdatingEventStatus}
+              onChange={(changeEvent) =>
+                void handleSetEventStatus(
+                  eventRecord,
+                  changeEvent.target.value as GalleryStatus,
+                )
+              }
+            >
+              <option value="draft">Draft</option>
+
+              <option value="ready">Open</option>
+
+              <option value="completed">Closed</option>
+
+              <option value="archived">Archived</option>
+            </select>
+          </label>
 
           <span className="created-date">
-            {formatDate(eventRecord.createdAt)}
+            Created {formatDate(eventRecord.createdAt)}
           </span>
         </div>
+
+        <p className="event-status-description">
+          <strong>{getEventStatusLabel(eventRecord.status)}</strong>
+          {" — "}
+          {getEventStatusDescription(eventRecord.status)}
+        </p>
 
         <h3>{eventRecord.title}</h3>
 
@@ -523,12 +599,25 @@ function EventCard(props: EventCardProps) {
           <code title={shareUrl}>{shareUrl}</code>
         </div>
 
+        {!galleryIsAvailable && (
+          <p className="gallery-availability-note">
+            {eventRecord.status === "archived"
+              ? "Restore this event to Open or Closed before sharing it."
+              : "Change the gallery status to Open before sharing it."}
+          </p>
+        )}
+
         <button
           className="secondary-button full-width"
           type="button"
+          disabled={!galleryIsAvailable}
           onClick={() => void copyShareLink(eventRecord)}
         >
-          {wasCopied ? "Copied!" : "Copy gallery link"}
+          {wasCopied
+            ? "Copied!"
+            : eventRecord.status === "completed"
+              ? "Copy closed gallery link"
+              : "Copy gallery link"}
         </button>
       </footer>
     </article>

@@ -905,6 +905,58 @@ button:hover:not(:disabled),
   padding: 8px 9px;
 }
 
+.section-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.event-status-control {
+  display: grid;
+  gap: 5px;
+}
+
+.event-status-control > span {
+  color: var(--color-text-subtle);
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.event-status-control select {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  color: var(--color-text);
+  min-width: 120px;
+  padding: 7px 30px 7px 9px;
+}
+
+.event-status-control select:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(161 139 245 / 18%);
+  outline: 0;
+}
+
+.event-status-description {
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  margin: -10px 0 0;
+}
+
+.event-status-description strong {
+  color: var(--color-text);
+}
+
+.gallery-availability-note {
+  color: var(--color-text-subtle);
+  font-size: 0.7rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
 @media (max-width: 720px) {
   .event-card {
     max-height: none;

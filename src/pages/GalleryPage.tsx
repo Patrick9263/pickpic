@@ -228,6 +228,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     [visiblePhotos],
   );
 
+  const interactionsEnabled = gallery?.event.status === "ready";
   const selectedPhotoIndex =
     selectedPhotoId === null
       ? -1
@@ -328,8 +329,14 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   }
 
   async function toggleHeart(photo: GalleryPhotoRecord): Promise<void> {
-    let resolvedDisplayName = displayName.trim();
+    if (!interactionsEnabled) {
+      setActionError(
+        "This gallery is closed and no longer accepts edit requests.",
+      );
+      return;
+    }
 
+    let resolvedDisplayName = displayName.trim();
     if (!photo.viewerHearted) {
       const resolvedName = await resolveDisplayName();
 
@@ -403,6 +410,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   ): Promise<void> {
     event.preventDefault();
 
+    if (!interactionsEnabled) {
+      setActionError("This gallery is closed and no longer accepts comments.");
+      return;
+    }
+
     if (!selectedPhoto) {
       return;
     }
@@ -473,6 +485,12 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   }
 
   async function editComment(comment: ViewerPhotoCommentRecord): Promise<void> {
+    if (!interactionsEnabled) {
+      setActionError("Comments cannot be changed after the gallery is closed.");
+
+      return;
+    }
+
     if (!selectedPhoto || !comment.viewerOwned) {
       return;
     }
@@ -546,6 +564,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   async function deleteComment(
     comment: ViewerPhotoCommentRecord,
   ): Promise<void> {
+    if (!interactionsEnabled) {
+      setActionError("Comments cannot be changed after the gallery is closed.");
+      return;
+    }
     if (!selectedPhoto || !comment.viewerOwned) {
       return;
     }
@@ -732,7 +754,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </p>
 
           <p className="gallery-instructions">
-            Heart a photo to request an edit or another revision.
+            {interactionsEnabled
+              ? "Heart a photo to request an edit or another revision."
+              : "This gallery is closed. Photos and final downloads remain available, but new edit requests and comments are disabled."}
           </p>
 
           <div
@@ -760,6 +784,16 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </div>
         </div>
       </header>
+
+      {!interactionsEnabled && (
+        <div className="gallery-closed-banner" role="status">
+          <strong>Gallery closed</strong>
+
+          <span>
+            You can continue viewing photos and downloading final images.
+          </span>
+        </div>
+      )}
 
       <main className="gallery-content">
         {actionError && (
@@ -806,6 +840,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   openPhoto={openPhoto}
                   toggleHeart={toggleHeart}
                   priorityPhotoIds={priorityPhotoIds}
+                  interactionsEnabled={interactionsEnabled}
                 />
               </section>
             ))}
@@ -835,6 +870,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           canGoNext={canGoNext}
           onPrevious={showPreviousPhoto}
           onNext={showNextPhoto}
+          interactionsEnabled={interactionsEnabled}
         />
       )}
     </div>
