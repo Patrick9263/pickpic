@@ -516,18 +516,21 @@ function EventCard(props: EventCardProps) {
         </div>
       )}
 
-      <div className="share-link">
-        <span>Gallery link</span>
-        <code>{shareUrl}</code>
-      </div>
+      <footer className="event-card-footer">
+        <div className="share-link">
+          <span>Gallery link</span>
 
-      <button
-        className="secondary-button full-width"
-        type="button"
-        onClick={() => void copyShareLink(eventRecord)}
-      >
-        {wasCopied ? "Copied!" : "Copy gallery link"}
-      </button>
+          <code title={shareUrl}>{shareUrl}</code>
+        </div>
+
+        <button
+          className="secondary-button full-width"
+          type="button"
+          onClick={() => void copyShareLink(eventRecord)}
+        >
+          {wasCopied ? "Copied!" : "Copy gallery link"}
+        </button>
+      </footer>
     </article>
   );
 }

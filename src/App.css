@@ -219,8 +219,12 @@ button:disabled {
   border: 1px solid var(--color-border);
   border-radius: 16px;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  max-height: min(760px, calc(100vh - 48px));
+  gap: 0;
+  grid-template-rows:
+    auto
+    minmax(0, 1fr)
+    auto;
+  max-height: min(760px, calc(100dvh - 48px));
   overflow: hidden;
   padding: 0;
 }
@@ -247,6 +251,49 @@ button:disabled {
   overscroll-behavior: contain;
   padding: 18px 17px 22px 22px;
   scrollbar-gutter: stable;
+  scrollbar-color: var(--color-border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.event-card-scroll-region::-webkit-scrollbar {
+  width: 9px;
+}
+
+.event-card-scroll-region::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.event-card-scroll-region::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.event-card-scroll-region::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-subtle);
+  background-clip: padding-box;
+}
+
+.event-card-footer {
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: 10px;
+  padding: 16px 22px 22px;
+}
+
+.event-card-footer .share-link {
+  min-width: 0;
+}
+
+.event-card-footer .share-link code {
+  display: block;
+  width: 100%;
+}
+
+.event-card-footer .secondary-button {
+  width: 100%;
 }
 
 .photo-list {
@@ -866,11 +913,6 @@ button:hover:not(:disabled),
   .event-card-scroll-region {
     overflow: visible;
     padding-right: 22px;
-  }
-  .photo-list {
-    max-height: none;
-    overflow: visible;
-    padding-right: 0;
   }
 }
 
