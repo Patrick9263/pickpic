@@ -628,6 +628,153 @@ button:disabled {
   background: #34312d;
 }
 
+.brand,
+.hero h1,
+.panel h2,
+.section-heading h2,
+.event-card h3,
+.event-stats dd,
+.empty-state h3,
+.home-page h1,
+.photo-details span,
+.create-form label {
+  color: var(--color-text);
+}
+
+.environment-badge,
+.hero-description,
+.section-description,
+.created-date,
+.event-stats dt,
+.share-link span,
+.upload-help,
+.character-count,
+.photo-details small,
+.upload-progress span,
+.upload-progress small,
+.photo-metadata,
+.home-page p {
+  color: var(--color-text-muted);
+}
+
+.eyebrow,
+.section-label,
+.clear-hearts-button,
+.workflow-photo-button,
+.workflow-upload-button,
+.photo-metadata a {
+  color: var(--color-accent);
+}
+
+.panel,
+.event-card,
+.empty-state {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-raised);
+}
+
+.event-stats div,
+.share-link code,
+.photo-item {
+  background: var(--color-surface-raised);
+}
+
+.share-link code {
+  color: var(--color-text-muted);
+}
+
+input {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+input::placeholder {
+  color: var(--color-text-subtle);
+}
+
+input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(161 139 245 / 18%);
+}
+
+button,
+.upload-button,
+.home-admin-link {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-background);
+}
+
+button:hover:not(:disabled),
+.upload-button:hover,
+.home-admin-link:hover {
+  background: #dfe1e5;
+}
+
+.secondary-button {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.status-badge,
+.photo-workflow-badge {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+}
+
+.dashboard-comments blockquote {
+  background: var(--color-surface-raised);
+  border-left-color: var(--color-accent);
+}
+
+.dashboard-comments strong {
+  color: var(--color-text);
+}
+
+.dashboard-comments span {
+  color: var(--color-text-muted);
+}
+
+.final-photo-details {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.final-photo-details a {
+  color: var(--color-success);
+}
+
+.error-message {
+  background: var(--color-danger-soft);
+  border-color: rgb(255 153 145 / 32%);
+  color: var(--color-danger);
+}
+
+.delete-photo-button {
+  color: var(--color-danger);
+}
+
+.delete-photo-button:hover:not(:disabled) {
+  color: #ffc0bb;
+}
+
+.empty-state {
+  color: var(--color-text-muted);
+}
+
+.clear-hearts-button:hover:not(:disabled),
+.workflow-photo-button:hover:not(:disabled),
+.workflow-upload-button:hover {
+  color: var(--color-accent-hover);
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;

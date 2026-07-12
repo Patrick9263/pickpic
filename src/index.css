@@ -1,6 +1,37 @@
 :root {
-  background: #f7f5f0;
-  color: #171717;
+  color-scheme: dark;
+
+  --color-background: #0b0d10;
+  --color-background-subtle: #0f1217;
+
+  --color-surface: #151920;
+  --color-surface-raised: #1b2028;
+  --color-surface-hover: #242b35;
+
+  --color-border: rgb(255 255 255 / 10%);
+  --color-border-strong: rgb(255 255 255 / 18%);
+
+  --color-text: #f4f5f7;
+  --color-text-muted: #a9afb9;
+  --color-text-subtle: #7f8793;
+
+  --color-accent: #a18bf5;
+  --color-accent-hover: #b7a8fa;
+  --color-accent-soft: rgb(161 139 245 / 16%);
+
+  --color-heart: #f17b9a;
+  --color-heart-soft: rgb(241 123 154 / 14%);
+
+  --color-danger: #ff9991;
+  --color-danger-soft: rgb(255 120 112 / 12%);
+
+  --color-success: #8fd0a3;
+  --color-success-soft: rgb(105 190 132 / 14%);
+
+  --shadow-raised: 0 18px 50px rgb(0 0 0 / 28%);
+
+  background: var(--color-background);
+  color: var(--color-text);
   font-family:
     Inter,
     ui-sans-serif,
@@ -23,12 +54,23 @@ html {
 }
 
 body {
+  background:
+    radial-gradient(circle at top, rgb(161 139 245 / 7%), transparent 34rem),
+    var(--color-background);
+  color: var(--color-text);
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
 }
 
 button,
-input {
+input,
+textarea,
+select {
   font: inherit;
+}
+
+::selection {
+  background: rgb(161 139 245 / 35%);
+  color: var(--color-text);
 }
