@@ -6,6 +6,12 @@ import type {
 } from "../types";
 import { fetchJson } from "../api";
 import "../styles/GalleryPage.css";
+import GalleryGrid from "../components/gallery/GalleryGrid";
+import GalleryLightbox from "../components/gallery/GalleryLightbox";
+import type {
+  GalleryPhotoGroup,
+  PhotoVersion,
+} from "../components/gallery/types";
 
 interface GalleryEvent {
   title: string;
@@ -31,16 +37,7 @@ interface GalleryPageProps {
   shareToken: string;
 }
 
-type PhotoVersion = "original" | "final";
-
 type GalleryGrouping = "all" | "day" | "location";
-
-interface GalleryPhotoGroup {
-  key: string;
-  label: string;
-  photos: GalleryPhotoRecord[];
-  mapUrl: string | null;
-}
 
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
@@ -689,52 +686,12 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                     )}
                   </header>
                 )}
-                <div className="gallery-grid">
-                  {group.photos.map((photo) => {
-                    const isToggling = togglingPhotoId === photo.id;
-
-                    return (
-                      <article className="gallery-photo-card" key={photo.id}>
-                        <button
-                          className="gallery-photo-button"
-                          type="button"
-                          onClick={() => openPhoto(photo)}
-                          aria-label={`Open ${photo.originalFilename}`}
-                        >
-                          <img
-                            src={photo.finalPhoto?.imageUrl ?? photo.imageUrl}
-                            alt={photo.originalFilename}
-                            loading="lazy"
-                          />
-                        </button>
-
-                        {photo.finalPhoto && (
-                          <span className="gallery-final-badge">Final</span>
-                        )}
-                        <button
-                          className={`gallery-heart-button ${
-                            photo.viewerHearted
-                              ? "gallery-heart-button-active"
-                              : ""
-                          }`}
-                          type="button"
-                          disabled={isToggling}
-                          onClick={() => void toggleHeart(photo)}
-                          aria-pressed={photo.viewerHearted}
-                          aria-label={
-                            photo.viewerHearted
-                              ? `Remove edit request for ${photo.originalFilename}`
-                              : `Request an edit of ${photo.originalFilename}`
-                          }
-                        >
-                          <span aria-hidden="true">♥</span>
-
-                          <span>{photo.heartCount}</span>
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
+                <GalleryGrid
+                  group={group}
+                  togglingPhotoId={togglingPhotoId}
+                  openPhoto={openPhoto}
+                  toggleHeart={toggleHeart}
+                />
               </section>
             ))}
           </div>
@@ -742,170 +699,22 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       </main>
 
       {selectedPhoto && (
-        <div
-          className="lightbox"
-          role="dialog"
-          aria-modal="true"
-          aria-label={selectedPhoto.originalFilename}
-        >
-          <button
-            className="lightbox-backdrop"
-            type="button"
-            onClick={closeLightbox}
-            aria-label="Close image"
-          />
-
-          <div className="lightbox-content">
-            <button
-              className="lightbox-close"
-              type="button"
-              onClick={closeLightbox}
-              aria-label="Close image"
-            >
-              ×
-            </button>
-
-            <img
-              src={selectedImageUrl ?? selectedPhoto.imageUrl}
-              alt={selectedPhoto.originalFilename}
-            />
-            {selectedPhoto.finalPhoto && (
-              <div className="photo-version-controls">
-                <div className="photo-version-toggle">
-                  <button
-                    type="button"
-                    className={
-                      selectedVersion === "original"
-                        ? "photo-version-active"
-                        : ""
-                    }
-                    onClick={() => setSelectedVersion("original")}
-                  >
-                    Original
-                  </button>
-
-                  <button
-                    type="button"
-                    className={
-                      selectedVersion === "final" ? "photo-version-active" : ""
-                    }
-                    onClick={() => setSelectedVersion("final")}
-                  >
-                    Final
-                  </button>
-                </div>
-
-                <a
-                  className="download-final-link"
-                  href={selectedPhoto.finalPhoto.imageUrl}
-                  download={selectedPhoto.finalPhoto.originalFilename}
-                >
-                  Download final
-                </a>
-              </div>
-            )}
-            <div className="lightbox-footer">
-              <p>{selectedPhoto.originalFilename}</p>
-
-              <button
-                className={`lightbox-heart-button ${
-                  selectedPhoto.viewerHearted
-                    ? "lightbox-heart-button-active"
-                    : ""
-                }`}
-                type="button"
-                disabled={togglingPhotoId === selectedPhoto.id}
-                onClick={() => void toggleHeart(selectedPhoto)}
-                aria-pressed={selectedPhoto.viewerHearted}
-              >
-                <span aria-hidden="true">♥</span>
-
-                <span>
-                  {selectedPhoto.viewerHearted
-                    ? "Edit requested"
-                    : "Request edit"}
-                </span>
-
-                <span>{selectedPhoto.heartCount}</span>
-              </button>
-            </div>
-
-            <section className="photo-comments">
-              <h2>Comments and edit notes</h2>
-
-              {selectedPhoto.comments.length === 0 ? (
-                <p className="no-comments">No comments yet.</p>
-              ) : (
-                <div className="comment-list">
-                  {selectedPhoto.comments.map((comment) => (
-                    <article key={comment.id}>
-                      <div className="comment-heading">
-                        <strong>{comment.displayName}</strong>
-
-                        {comment.viewerOwned && (
-                          <div className="comment-actions">
-                            <button
-                              type="button"
-                              disabled={commentActionId === comment.id}
-                              onClick={() => void editComment(comment)}
-                            >
-                              Edit
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={commentActionId === comment.id}
-                              onClick={() => void deleteComment(comment)}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      <p>{comment.body}</p>
-
-                      {comment.updatedAt !== comment.createdAt && (
-                        <small>Edited</small>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              )}
-
-              <form
-                className="comment-form"
-                onSubmit={(event) => void submitComment(event)}
-              >
-                <label htmlFor={`comment-${selectedPhoto.id}`}>
-                  Leave a comment or edit note
-                </label>
-
-                <textarea
-                  id={`comment-${selectedPhoto.id}`}
-                  value={commentText}
-                  onChange={(event) => setCommentText(event.target.value)}
-                  maxLength={1000}
-                  placeholder="For example: Can you remove the stain from my shirt?"
-                  disabled={isSubmittingComment}
-                />
-
-                <div className="comment-form-footer">
-                  <span>{commentText.length}/1000</span>
-
-                  <button
-                    type="submit"
-                    disabled={
-                      isSubmittingComment || commentText.trim().length === 0
-                    }
-                  >
-                    {isSubmittingComment ? "Posting…" : "Post comment"}
-                  </button>
-                </div>
-              </form>
-            </section>
-          </div>
-        </div>
+        <GalleryLightbox
+          selectedPhoto={selectedPhoto}
+          closeLightbox={closeLightbox}
+          selectedImageUrl={selectedImageUrl}
+          selectedVersion={selectedVersion}
+          setSelectedVersion={setSelectedVersion}
+          togglingPhotoId={togglingPhotoId}
+          toggleHeart={toggleHeart}
+          commentActionId={commentActionId}
+          commentText={commentText}
+          isSubmittingComment={isSubmittingComment}
+          setCommentText={setCommentText}
+          editComment={editComment}
+          deleteComment={deleteComment}
+          submitComment={submitComment}
+        />
       )}
     </div>
   );
