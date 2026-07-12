@@ -69,6 +69,7 @@ web_modules/
 # dotenv environment variable files
 .env
 .env.*
+!.env.production
 !.env.example
 
 # parcel-bundler cache (https://parceljs.org/)
@@ -159,6 +160,4 @@ vite.config.ts.timestamp-*
 .wrangler
 .dev.vars*
 !.dev.vars.example
-.env*
-!.env.example
 

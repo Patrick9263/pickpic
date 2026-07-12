@@ -3,6 +3,10 @@ import "./App.css";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
 
+const ADMIN_APP_ORIGIN = (
+  import.meta.env.VITE_ADMIN_APP_ORIGIN || window.location.origin
+).replace(/\/+$/, "");
+
 function HomePage() {
   return (
     <main className="home-page">
@@ -17,7 +21,7 @@ function HomePage() {
         comments.
       </p>
 
-      <a className="home-admin-link" href="/admin">
+      <a className="home-admin-link" href={`${ADMIN_APP_ORIGIN}/admin`}>
         Photographer dashboard
       </a>
     </main>
