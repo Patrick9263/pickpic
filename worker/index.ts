@@ -1799,6 +1799,18 @@ async function uploadFinalPhoto(
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
+  const oldFinalVariants = await env.DB.prepare(
+    `
+      SELECT storage_key AS storageKey
+      FROM photo_variants
+      WHERE
+        photo_id = ?
+        AND source_kind = 'final'
+    `,
+  )
+    .bind(photoId)
+    .all<StoredVariantRow>();
+
   const contentType = request.headers
     .get("Content-Type")
     ?.split(";")[0]
@@ -1934,11 +1946,19 @@ async function uploadFinalPhoto(
     );
   }
 
-  if (photo.finalStorageKey && photo.finalStorageKey !== newStorageKey) {
+  const replacedStorageKeys = [
+    photo.finalStorageKey,
+    ...oldFinalVariants.results.map((variant) => variant.storageKey),
+  ].filter(
+    (storageKey): storageKey is string =>
+      storageKey !== null && storageKey !== newStorageKey,
+  );
+
+  if (replacedStorageKeys.length > 0) {
     try {
-      await env.pickpic_photos.delete(photo.finalStorageKey);
+      await env.pickpic_photos.delete(replacedStorageKeys);
     } catch (error) {
-      console.error("Unable to remove replaced final image:", error);
+      console.error("Unable to remove replaced final images:", error);
     }
   }
 
