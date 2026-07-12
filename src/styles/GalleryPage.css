@@ -122,10 +122,15 @@
 }
 
 .lightbox-backdrop:hover {
-  background: rgb(0 0 0 / 92%);
+  background: rgb(3 4 6 / 94%);
 }
 
 .lightbox-content {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 55%);
+  padding: 16px;
   max-height: 94vh;
   max-width: min(1200px, 94vw);
   position: relative;
@@ -147,11 +152,12 @@
 }
 
 .lightbox-close {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
   align-items: center;
-  background: rgb(255 255 255 / 14%);
   border: 1px solid rgb(255 255 255 / 25%);
   border-radius: 999px;
-  color: #ffffff;
   display: flex;
   font-size: 1.6rem;
   height: 42px;
@@ -178,11 +184,12 @@
 .gallery-heart-button {
   align-items: center;
   backdrop-filter: blur(8px);
-  background: rgb(20 20 20 / 72%);
+  background: rgb(10 12 15 / 76%);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
   border: 1px solid rgb(255 255 255 / 20%);
   border-radius: 999px;
   bottom: 10px;
-  color: #ffffff;
   display: flex;
   gap: 5px;
   min-width: 54px;
@@ -192,24 +199,26 @@
 }
 
 .gallery-heart-button:hover:not(:disabled) {
-  background: rgb(20 20 20 / 88%);
+  background: rgb(10 12 15 / 92%);
 }
 
 .gallery-heart-button-active {
-  background: #ffffff;
-  color: #a43858;
+  background: var(--color-heart);
+  border-color: var(--color-heart);
+  color: #17070d;
 }
 
 .gallery-heart-button-active:hover:not(:disabled) {
-  background: #f7edf1;
+  background: #f59ab1;
 }
 
 .gallery-action-error {
   align-items: center;
-  background: #fff1f0;
   border: 1px solid #f0c2be;
   border-radius: 12px;
-  color: #8b2921;
+  background: var(--color-danger-soft);
+  border-color: rgb(255 153 145 / 32%);
+  color: var(--color-danger);
   display: flex;
   justify-content: space-between;
   margin-bottom: 20px;
@@ -225,6 +234,7 @@
 }
 
 .lightbox-footer {
+  color: var(--color-text);
   align-items: center;
   display: flex;
   gap: 16px;
@@ -239,22 +249,24 @@
 
 .lightbox-heart-button {
   align-items: center;
-  background: rgb(255 255 255 / 14%);
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
   border: 1px solid rgb(255 255 255 / 25%);
   border-radius: 999px;
-  color: #ffffff;
   display: flex;
   gap: 7px;
   white-space: nowrap;
 }
 
 .lightbox-heart-button-active {
-  background: #ffffff;
-  color: #a43858;
+  background: var(--color-heart);
+  border-color: var(--color-heart);
+  color: #17070d;
 }
 
 .lightbox-heart-button-active:hover:not(:disabled) {
-  background: #f7edf1;
+  background: #f59ab1;
 }
 
 .lightbox-content {
@@ -263,18 +275,19 @@
 }
 
 .photo-comments {
-  background: #171717;
-  color: #ffffff;
+  background: transparent;
+  color: var(--color-text);
   padding: 18px 0 4px;
 }
 
 .photo-comments h2 {
+  color: var(--color-text);
   font-size: 1rem;
   margin: 0 0 12px;
 }
 
 .no-comments {
-  color: #aaa69f !important;
+  color: var(--color-text-subtle) !important;
   margin: 0 0 16px !important;
   text-align: left !important;
 }
@@ -286,17 +299,19 @@
 }
 
 .comment-list article {
-  background: rgb(255 255 255 / 9%);
-  border-radius: 9px;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 11px;
   padding: 10px 12px;
 }
 
 .comment-list strong {
   font-size: 0.75rem;
+  color: var(--color-text);
 }
 
 .comment-list p {
-  color: #ffffff;
+  color: var(--color-text);
   line-height: 1.45;
   margin: 4px 0 0;
   text-align: left;
@@ -313,18 +328,24 @@
 }
 
 .comment-form textarea {
-  background: rgb(255 255 255 / 10%);
+  color: var(--color-text);
   border: 1px solid rgb(255 255 255 / 20%);
   border-radius: 9px;
-  color: #ffffff;
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
   font: inherit;
   min-height: 84px;
   padding: 10px;
   resize: vertical;
 }
 
+.comment-form textarea::placeholder {
+  color: var(--color-text-subtle);
+}
+
 .comment-form textarea:focus {
-  border-color: #ffffff;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgb(161 139 245 / 18%);
   outline: none;
 }
 
@@ -335,7 +356,7 @@
 }
 
 .comment-form-footer span {
-  color: #aaa69f;
+  color: var(--color-text-subtle);
   font-size: 0.7rem;
 }
 
@@ -366,16 +387,17 @@
 }
 
 .comment-list small {
-  color: #aaa69f;
+  color: var(--color-text-subtle);
   display: block;
   font-size: 0.68rem;
   margin-top: 5px;
 }
 
 .gallery-final-badge {
-  background: rgb(255 255 255 / 88%);
+  background: rgb(15 18 23 / 86%);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-success);
   border-radius: 999px;
-  color: #426148;
   font-size: 0.7rem;
   font-weight: 800;
   left: 10px;
@@ -393,7 +415,8 @@
 }
 
 .photo-version-toggle {
-  background: rgb(255 255 255 / 10%);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
   border-radius: 999px;
   display: flex;
   padding: 3px;
@@ -403,22 +426,22 @@
   background: transparent;
   border: 0;
   border-radius: 999px;
-  color: #d4d1cb;
+  color: var(--color-text-muted);
   font-size: 0.78rem;
   padding: 7px 12px;
 }
 
 .photo-version-toggle button:hover {
-  background: rgb(255 255 255 / 10%);
+  background: var(--color-surface-hover);
 }
 
 .photo-version-toggle .photo-version-active {
-  background: #ffffff;
-  color: #171717;
+  background: var(--color-accent-soft);
+  color: var(--color-text);
 }
 
 .download-final-link {
-  color: #ffffff;
+  color: var(--color-accent-hover);
   font-size: 0.78rem;
   font-weight: 750;
 }
@@ -545,6 +568,51 @@
   font-size: 0.72rem !important;
   margin: 8px 0 0 !important;
   text-align: center !important;
+}
+
+.public-gallery {
+  background: var(--color-background);
+  color: var(--color-text);
+  min-height: 100vh;
+}
+
+.gallery-brand,
+.gallery-heading h1,
+.gallery-empty h2,
+.gallery-message h1,
+.gallery-group-header h2 {
+  color: var(--color-text);
+}
+
+.gallery-label,
+.gallery-group-header a {
+  color: var(--color-accent);
+}
+
+.gallery-heading > p:last-child,
+.gallery-empty,
+.gallery-message,
+.gallery-group-header span {
+  color: var(--color-text-muted);
+}
+
+.gallery-grouping-controls {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+}
+
+.gallery-grouping-controls button {
+  color: var(--color-text-muted);
+}
+
+.gallery-grouping-controls button:hover {
+  background: var(--color-surface-hover);
+}
+
+.gallery-grouping-controls .gallery-grouping-active {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+  box-shadow: none;
 }
 
 @media (max-width: 560px) {

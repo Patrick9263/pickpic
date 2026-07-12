@@ -239,6 +239,60 @@
   pointer-events: none;
 }
 
+.queue-total {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+}
+
+.editing-queue-empty,
+.editing-queue-item {
+  background: var(--color-surface);
+  border-color: var(--color-border);
+}
+
+.editing-queue-empty {
+  color: var(--color-text-muted);
+}
+
+.editing-queue-empty h3,
+.queue-item-heading h3 {
+  color: var(--color-text);
+}
+
+.queue-event-title {
+  color: var(--color-accent);
+}
+
+.queue-request-counts span,
+.queue-comment {
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
+}
+
+.queue-heart-request {
+  background: var(--color-heart-soft);
+  border-color: rgb(241 123 154 / 28%);
+  color: #f3abc0;
+}
+
+.queue-heart-request button,
+.queue-comment button {
+  color: var(--color-accent);
+}
+
+.queue-heart-request button:hover:not(:disabled),
+.queue-comment button:hover:not(:disabled) {
+  color: var(--color-accent-hover);
+}
+
+.queue-comment strong {
+  color: var(--color-text);
+}
+
+.queue-comment p {
+  color: var(--color-text-muted);
+}
+
 @media (max-width: 700px) {
   .editing-queue-item {
     grid-template-columns: 90px minmax(0, 1fr);
