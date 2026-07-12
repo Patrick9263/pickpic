@@ -769,6 +769,12 @@ button:hover:not(:disabled),
   color: var(--color-text-muted);
 }
 
+.clear-hearts-button:hover:not(:disabled),
+.workflow-photo-button:hover:not(:disabled),
+.workflow-upload-button:hover {
+  color: var(--color-accent-hover);
+}
+
 @media (max-width: 720px) {
   .site-header {
     padding: 18px;

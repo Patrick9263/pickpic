@@ -177,20 +177,20 @@
 }
 
 .queue-group-header h3 {
-  color: #302e2a;
+  color: var(--color-text);
   margin: 0;
 }
 
 .queue-group-header p {
-  color: #77736b;
+  color: var(--color-text-muted);
   font-size: 0.82rem;
   margin: 4px 0 0;
 }
 
 .queue-group-header > span {
-  background: #f3f1ec;
   border-radius: 999px;
-  color: #625f58;
+  background: var(--color-surface-raised);
+  color: var(--color-text-muted);
   font-size: 0.75rem;
   font-weight: 800;
   padding: 6px 9px;
@@ -204,6 +204,9 @@
 
 .queue-primary-button,
 .queue-secondary-button {
+  background: transparent;
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
   font-size: 0.78rem;
   padding: 8px 12px;
 }
@@ -215,14 +218,14 @@
 }
 
 .queue-secondary-button:hover:not(:disabled) {
-  background: #f3f1ec;
+  background: var(--color-surface-hover);
 }
 
 .queue-upload-button {
-  background: #171717;
-  border: 1px solid #171717;
   border-radius: 9px;
-  color: #ffffff;
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-background);
   cursor: pointer;
   font-size: 0.78rem;
   font-weight: 750;
@@ -230,7 +233,7 @@
 }
 
 .queue-upload-button:hover {
-  background: #34312d;
+  background: #dfe1e5;
 }
 
 .queue-upload-button-disabled {
