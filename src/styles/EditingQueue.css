@@ -204,17 +204,14 @@
 
 .queue-primary-button,
 .queue-secondary-button {
-  background: transparent;
-  border-color: var(--color-border-strong);
-  color: var(--color-text);
   font-size: 0.78rem;
   padding: 8px 12px;
 }
 
 .queue-secondary-button {
   background: transparent;
-  border-color: #d7d3cb;
-  color: #4d4942;
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
 }
 
 .queue-secondary-button:hover:not(:disabled) {

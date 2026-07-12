@@ -257,6 +257,19 @@
   white-space: nowrap;
 }
 
+.lightbox-heart-button {
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.lightbox-heart-button:not(.lightbox-heart-button-active):hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
 .lightbox-heart-button-active {
   background: var(--color-heart);
   border-color: var(--color-heart);
@@ -265,6 +278,8 @@
 
 .lightbox-heart-button-active:hover:not(:disabled) {
   background: #f59ab1;
+  border-color: #f59ab1;
+  color: #17070d;
 }
 
 .lightbox-content {
