@@ -16,6 +16,12 @@ import type {
 import EventCard from "../components/EventCard";
 import { fetchJson } from "../api";
 import { extractPhotoMetadata } from "../photoMetadata";
+import {
+  generateImageVariants,
+  type GeneratedImageVariants,
+} from "../imageVariants";
+
+import type { ImageVariantSet } from "../types";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -43,6 +49,12 @@ interface UploadFinalPhotoResponse {
   finalPhoto: FinalPhotoRecord;
 }
 
+interface UploadVariantsResponse {
+  photoId: string;
+  sourceKind: "original" | "final";
+  variants: ImageVariantSet;
+}
+
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 const PUBLIC_APP_ORIGIN = (
@@ -65,6 +77,46 @@ async function calculateFileSha256(file: File): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
+}
+
+async function uploadImageVariants(
+  photoId: string,
+  sourceKind: "original" | "final",
+  generatedVariants: GeneratedImageVariants,
+): Promise<ImageVariantSet> {
+  const formData = new FormData();
+
+  formData.append(
+    "thumbnail",
+    generatedVariants.thumbnail.blob,
+    "thumbnail.jpg",
+  );
+
+  formData.append("preview", generatedVariants.preview.blob, "preview.jpg");
+
+  formData.append(
+    "thumbnailWidth",
+    generatedVariants.thumbnail.width.toString(),
+  );
+
+  formData.append(
+    "thumbnailHeight",
+    generatedVariants.thumbnail.height.toString(),
+  );
+
+  formData.append("previewWidth", generatedVariants.preview.width.toString());
+
+  formData.append("previewHeight", generatedVariants.preview.height.toString());
+
+  const response = await fetchJson<UploadVariantsResponse>(
+    `/api/admin/photos/${encodeURIComponent(photoId)}/variants/${sourceKind}`,
+    {
+      method: "PUT",
+      body: formData,
+    },
+  );
+
+  return response.variants;
 }
 
 function DashboardPage() {
@@ -279,6 +331,34 @@ function DashboardPage() {
             ...currentPhotos,
             [eventId]: [body.photo!, ...(currentPhotos[eventId] ?? [])],
           }));
+          try {
+            const generatedVariants = await generateImageVariants(file);
+
+            const variants = await uploadImageVariants(
+              body.photo.id,
+              "original",
+              generatedVariants,
+            );
+
+            setPhotosByEvent((currentPhotos) => ({
+              ...currentPhotos,
+              [eventId]: (currentPhotos[eventId] ?? []).map((photo) =>
+                photo.id === body.photo!.id
+                  ? {
+                      ...photo,
+                      variants,
+                    }
+                  : photo,
+              ),
+            }));
+          } catch (variantError) {
+            console.error(`Unable to optimize ${file.name}:`, variantError);
+
+            /*
+             * The full photo remains valid, and the gallery
+             * will fall back to it.
+             */
+          }
         } else {
           throw new Error("The upload response did not contain a photo.");
         }
@@ -547,6 +627,39 @@ function DashboardPage() {
             : currentPhoto,
         ),
       }));
+      try {
+        const generatedVariants = await generateImageVariants(file);
+
+        const variants = await uploadImageVariants(
+          photo.id,
+          "final",
+          generatedVariants,
+        );
+
+        setPhotosByEvent((currentPhotos) => ({
+          ...currentPhotos,
+          [eventId]: (currentPhotos[eventId] ?? []).map((currentPhoto) =>
+            currentPhoto.id === photo.id && currentPhoto.finalPhoto
+              ? {
+                  ...currentPhoto,
+                  finalPhoto: {
+                    ...currentPhoto.finalPhoto,
+                    variants,
+                  },
+                }
+              : currentPhoto,
+          ),
+        }));
+      } catch (variantError) {
+        console.error(
+          "The final was uploaded, but its optimized variants failed:",
+          variantError,
+        );
+
+        setError(
+          "The final image uploaded successfully, but its optimized web versions could not be created. PickPic will use the full image.",
+        );
+      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
