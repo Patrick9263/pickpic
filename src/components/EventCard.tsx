@@ -127,6 +127,7 @@ function EventCard(props: EventCardProps) {
     variantRepairWarnings,
     handleRepairPhotoVariants,
   } = props;
+  const isAnyVariantRepairRunning = repairingVariantsPhotoId !== null;
 
   function formatDate(value: string): string {
     const date = new Date(value);
@@ -218,15 +219,14 @@ function EventCard(props: EventCardProps) {
                   {uploadProgress.failed} failed
                 </>
               )}
+              {uploadProgress.warnings > 0 && (
+                <>
+                  {" · "}
+                  {uploadProgress.warnings} optimization{" "}
+                  {uploadProgress.warnings === 1 ? "warning" : "warnings"}
+                </>
+              )}
             </span>
-
-            {uploadProgress.warnings > 0 && (
-              <>
-                {" · "}
-                {uploadProgress.warnings} optimization{" "}
-                {uploadProgress.warnings === 1 ? "warning" : "warnings"}
-              </>
-            )}
 
             {uploadProgress.currentFilename && (
               <small>
@@ -243,6 +243,7 @@ function EventCard(props: EventCardProps) {
           {photos.map((photo) => {
             const isUploadingFinal = uploadingFinalPhotoId === photo.id;
             const originalOptimized = isVariantSetComplete(photo.variants);
+            const dashboardThumbnail = photo.variants.thumbnail;
 
             const finalOptimized =
               !photo.finalPhoto ||
@@ -268,9 +269,12 @@ function EventCard(props: EventCardProps) {
                 >
                   <img
                     className="photo-thumbnail"
-                    src={photo.imageUrl}
+                    src={dashboardThumbnail?.imageUrl ?? photo.imageUrl}
                     alt={photo.originalFilename}
+                    width={dashboardThumbnail?.width}
+                    height={dashboardThumbnail?.height}
                     loading="lazy"
+                    decoding="async"
                   />
                 </a>
 
@@ -366,7 +370,7 @@ function EventCard(props: EventCardProps) {
                       <button
                         className="optimize-photo-button"
                         type="button"
-                        disabled={isRepairingVariants}
+                        disabled={isAnyVariantRepairRunning}
                         onClick={() =>
                           void handleRepairPhotoVariants(eventRecord.id, photo)
                         }

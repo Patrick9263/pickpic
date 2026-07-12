@@ -329,20 +329,20 @@ function DashboardPage() {
           currentStage: "preparing",
         },
       }));
-      setUploadProgressByEvent((currentProgress) => ({
-        ...currentProgress,
-
-        [eventId]: {
-          ...currentProgress[eventId],
-          currentStage: "uploading",
-        },
-      }));
 
       try {
         const [sourceSha256, photoMetadata] = await Promise.all([
           calculateFileSha256(file),
           extractPhotoMetadata(file),
         ]);
+
+        setUploadProgressByEvent((currentProgress) => ({
+          ...currentProgress,
+          [eventId]: {
+            ...currentProgress[eventId],
+            currentStage: "uploading",
+          },
+        }));
 
         const headers = new Headers({
           "Content-Type": "image/jpeg",
@@ -753,6 +753,10 @@ function DashboardPage() {
     photo: PhotoRecord,
   ): Promise<void> {
     const missingSources = getMissingVariantSources(photo);
+
+    if (repairingVariantsPhotoId !== null) {
+      return;
+    }
 
     if (missingSources.length === 0) {
       return;
