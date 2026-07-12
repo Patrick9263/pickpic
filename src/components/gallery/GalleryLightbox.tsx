@@ -16,7 +16,7 @@ type GalleryLightboxProps = {
   commentActionId: string | null;
   commentText: string;
   isSubmittingComment: boolean;
-  setCommentText: (value: React.SetStateAction<string>) => void;
+  setCommentText: Dispatch<SetStateAction<string>>;
   editComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
   deleteComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
   submitComment: (event: FormEvent<HTMLFormElement>) => Promise<void>;
