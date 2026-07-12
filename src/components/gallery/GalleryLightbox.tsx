@@ -225,12 +225,7 @@ function GalleryLightbox({
       aria-modal="true"
       aria-label={selectedPhoto.originalFilename}
     >
-      <button
-        className="lightbox-backdrop"
-        type="button"
-        onClick={closeLightbox}
-        aria-label="Close image"
-      />
+      <div className="lightbox-backdrop" aria-hidden="true" />
 
       <div className="lightbox-content">
         <button
@@ -238,9 +233,17 @@ function GalleryLightbox({
           className="lightbox-close"
           type="button"
           onClick={closeLightbox}
-          aria-label="Close image"
+          aria-label="Close photo viewer"
         >
-          ×
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path
+              d="M6 6l12 12M18 6 6 18"
+              fill="none"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeWidth="2"
+            />
+          </svg>
         </button>
 
         <div
@@ -256,7 +259,16 @@ function GalleryLightbox({
             onClick={onPrevious}
             aria-label="Previous photo"
           >
-            ‹
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path
+                d="M15 18 9 12l6-6"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2.25"
+              />
+            </svg>
           </button>
 
           <img
@@ -272,7 +284,16 @@ function GalleryLightbox({
             onClick={onNext}
             aria-label="Next photo"
           >
-            ›
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path
+                d="m9 18 6-6-6-6"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2.25"
+              />
+            </svg>
           </button>
         </div>
 
