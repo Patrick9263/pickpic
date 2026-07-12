@@ -209,6 +209,20 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     () => (gallery ? buildGalleryGroups(gallery.photos, grouping) : []),
     [gallery, grouping],
   );
+  const visiblePhotos = useMemo(
+    () => photoGroups.flatMap((group) => group.photos),
+    [photoGroups],
+  );
+
+  const selectedPhotoIndex =
+    selectedPhotoId === null
+      ? -1
+      : visiblePhotos.findIndex((photo) => photo.id === selectedPhotoId);
+
+  const canGoPrevious = selectedPhotoIndex > 0;
+
+  const canGoNext =
+    selectedPhotoIndex >= 0 && selectedPhotoIndex < visiblePhotos.length - 1;
 
   useEffect(() => {
     let isCancelled = false;
@@ -560,16 +574,82 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   }
 
   function closeLightbox(): void {
+    const photoIdToRestore = selectedPhotoId;
+
     setSelectedPhotoId(null);
     setCommentText("");
     setActionError(null);
     setSelectedVersion("original");
+
+    if (photoIdToRestore) {
+      window.requestAnimationFrame(() => {
+        const photoButton = document.querySelector<HTMLButtonElement>(
+          `[data-gallery-photo-id="${photoIdToRestore}"]`,
+        );
+
+        photoButton?.focus();
+      });
+    }
   }
 
   function openPhoto(photo: GalleryPhotoRecord): void {
     setSelectedPhotoId(photo.id);
+
     setSelectedVersion(photo.finalPhoto ? "final" : "original");
   }
+
+  function showPhotoAtIndex(index: number): void {
+    const photo = visiblePhotos[index];
+
+    if (!photo) {
+      return;
+    }
+
+    setSelectedPhotoId(photo.id);
+
+    setSelectedVersion(photo.finalPhoto ? "final" : "original");
+
+    setCommentText("");
+    setActionError(null);
+  }
+
+  function showPreviousPhoto(): void {
+    if (!canGoPrevious) {
+      return;
+    }
+
+    showPhotoAtIndex(selectedPhotoIndex - 1);
+  }
+
+  function showNextPhoto(): void {
+    if (!canGoNext) {
+      return;
+    }
+
+    showPhotoAtIndex(selectedPhotoIndex + 1);
+  }
+
+  useEffect(() => {
+    if (selectedPhotoIndex < 0) {
+      return;
+    }
+
+    const adjacentPhotos = [
+      visiblePhotos[selectedPhotoIndex - 1],
+      visiblePhotos[selectedPhotoIndex + 1],
+    ];
+
+    for (const photo of adjacentPhotos) {
+      if (!photo) {
+        continue;
+      }
+
+      const image = new Image();
+
+      image.src = photo.finalPhoto?.imageUrl ?? photo.imageUrl;
+    }
+  }, [selectedPhotoIndex, visiblePhotos]);
+
   const selectedImageUrl = selectedPhoto
     ? selectedVersion === "final" && selectedPhoto.finalPhoto
       ? selectedPhoto.finalPhoto.imageUrl
@@ -714,6 +794,12 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           editComment={editComment}
           deleteComment={deleteComment}
           submitComment={submitComment}
+          photoIndex={selectedPhotoIndex}
+          photoCount={visiblePhotos.length}
+          canGoPrevious={canGoPrevious}
+          canGoNext={canGoNext}
+          onPrevious={showPreviousPhoto}
+          onNext={showNextPhoto}
         />
       )}
     </div>
