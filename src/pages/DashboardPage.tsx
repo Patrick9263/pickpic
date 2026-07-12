@@ -627,6 +627,39 @@ function DashboardPage() {
             : currentPhoto,
         ),
       }));
+      try {
+        const generatedVariants = await generateImageVariants(file);
+
+        const variants = await uploadImageVariants(
+          photo.id,
+          "final",
+          generatedVariants,
+        );
+
+        setPhotosByEvent((currentPhotos) => ({
+          ...currentPhotos,
+          [eventId]: (currentPhotos[eventId] ?? []).map((currentPhoto) =>
+            currentPhoto.id === photo.id && currentPhoto.finalPhoto
+              ? {
+                  ...currentPhoto,
+                  finalPhoto: {
+                    ...currentPhoto.finalPhoto,
+                    variants,
+                  },
+                }
+              : currentPhoto,
+          ),
+        }));
+      } catch (variantError) {
+        console.error(
+          "The final was uploaded, but its optimized variants failed:",
+          variantError,
+        );
+
+        setError(
+          "The final image uploaded successfully, but its optimized web versions could not be created. PickPic will use the full image.",
+        );
+      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error

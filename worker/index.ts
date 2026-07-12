@@ -877,11 +877,9 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
   try {
     await env.DB.prepare(
       `
-        DELETE FROM photo_variants
-        WHERE
-          photo_id = ?
-          AND source_kind = 'final'
-      `,
+      DELETE FROM photos
+      WHERE id = ?
+    `,
     )
       .bind(photoId)
       .run();
@@ -889,7 +887,7 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
     return jsonResponse(
       {
         error:
-          "The image was deleted, but its photo record could not be removed. Try again.",
+          "The images were deleted, but the photo record could not be removed. Try again.",
       },
       500,
     );
@@ -1917,6 +1915,15 @@ async function uploadFinalPhoto(
           WHERE photo_id = ?
         `,
       ).bind(photoId),
+
+      env.DB.prepare(
+        `
+        DELETE FROM photo_variants
+        WHERE
+          photo_id = ?
+          AND source_kind = 'final'
+        `,
+      ).bind(photoId),
     ]);
   } catch {
     await env.pickpic_photos.delete(newStorageKey);
@@ -2225,9 +2232,8 @@ async function uploadPhotoVariants(
   }
 
   const newStorageKeys = new Set([thumbnailStorageKey, previewStorageKey]);
-
   const replacedStorageKeys = oldVariants.results
-    .map((row) => row.storageKey)
+    .map((variant) => variant.storageKey)
     .filter((storageKey) => !newStorageKeys.has(storageKey));
 
   if (replacedStorageKeys.length > 0) {

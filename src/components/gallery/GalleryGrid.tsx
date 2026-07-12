@@ -21,8 +21,9 @@ function GalleryGrid({
       {group.photos.map((photo) => {
         const isToggling = togglingPhotoId === photo.id;
         const isPriority = priorityPhotoIds.has(photo.id);
-        const displayedThumbnail =
-          photo.finalPhoto?.variants.thumbnail ?? photo.variants.thumbnail;
+        const displayedThumbnail = photo.finalPhoto
+          ? photo.finalPhoto.variants.thumbnail
+          : photo.variants.thumbnail;
         const gridImageUrl =
           displayedThumbnail?.imageUrl ??
           photo.finalPhoto?.imageUrl ??
