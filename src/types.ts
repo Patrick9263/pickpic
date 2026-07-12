@@ -32,6 +32,7 @@ export interface FinalPhotoRecord {
   byteSize: number;
   uploadedAt: string;
   imageUrl: string;
+  variants: ImageVariantSet;
 }
 
 export interface PhotoRecord {
@@ -45,6 +46,8 @@ export interface PhotoRecord {
   heartCount: number;
   workflowStatus: PhotoWorkflowStatus;
   finalPhoto: FinalPhotoRecord | null;
+
+  variants: ImageVariantSet;
 
   capturedAt: string | null;
   latitude: number | null;
@@ -65,4 +68,18 @@ export interface UploadBatchProgress {
   skipped: number;
   failed: number;
   currentFilename: string | null;
+}
+
+export interface ImageVariantRecord {
+  imageUrl: string;
+  contentType: string;
+  byteSize: number;
+  width: number;
+  height: number;
+  createdAt: string;
+}
+
+export interface ImageVariantSet {
+  thumbnail: ImageVariantRecord | null;
+  preview: ImageVariantRecord | null;
 }

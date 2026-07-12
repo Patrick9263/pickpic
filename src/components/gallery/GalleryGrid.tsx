@@ -18,9 +18,15 @@ function GalleryGrid({
 }: GalleryGridProps) {
   return (
     <div className="gallery-grid">
-      {group.photos.map((photo, photoIndex) => {
+      {group.photos.map((photo) => {
         const isToggling = togglingPhotoId === photo.id;
         const isPriority = priorityPhotoIds.has(photo.id);
+        const displayedThumbnail =
+          photo.finalPhoto?.variants.thumbnail ?? photo.variants.thumbnail;
+        const gridImageUrl =
+          displayedThumbnail?.imageUrl ??
+          photo.finalPhoto?.imageUrl ??
+          photo.imageUrl;
 
         return (
           <article className="gallery-photo-card" key={photo.id}>
@@ -32,8 +38,10 @@ function GalleryGrid({
               aria-label={`Open ${photo.originalFilename}`}
             >
               <img
-                src={photo.finalPhoto?.imageUrl ?? photo.imageUrl}
+                src={gridImageUrl}
                 alt={photo.originalFilename}
+                width={displayedThumbnail?.width}
+                height={displayedThumbnail?.height}
                 loading={isPriority ? "eager" : "lazy"}
                 fetchPriority={isPriority ? "high" : "auto"}
                 decoding="async"

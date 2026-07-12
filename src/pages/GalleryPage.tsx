@@ -186,6 +186,16 @@ function buildGalleryGroups(
   });
 }
 
+function getDefaultPreviewUrl(photo: GalleryPhotoRecord): string {
+  if (photo.finalPhoto) {
+    return (
+      photo.finalPhoto.variants.preview?.imageUrl ?? photo.finalPhoto.imageUrl
+    );
+  }
+
+  return photo.variants.preview?.imageUrl ?? photo.imageUrl;
+}
+
 function GalleryPage({ shareToken }: GalleryPageProps) {
   const [visitorToken] = useState(getOrCreateVisitorToken);
   const [displayName, setDisplayName] = useState(
@@ -230,35 +240,21 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     : null;
   const nextPhoto = canGoNext ? visiblePhotos[selectedPhotoIndex + 1] : null;
   const previousPhotoImageUrl = previousPhoto
-    ? (previousPhoto.finalPhoto?.imageUrl ?? previousPhoto.imageUrl)
+    ? getDefaultPreviewUrl(previousPhoto)
     : null;
-  const nextPhotoImageUrl = nextPhoto
-    ? (nextPhoto.finalPhoto?.imageUrl ?? nextPhoto.imageUrl)
-    : null;
+  const nextPhotoImageUrl = nextPhoto ? getDefaultPreviewUrl(nextPhoto) : null;
 
   useEffect(() => {
     const imageUrls = [previousPhotoImageUrl, nextPhotoImageUrl].filter(
       (imageUrl): imageUrl is string => imageUrl !== null,
     );
 
-    const preloadedImages = imageUrls.map((imageUrl) => {
+    for (const imageUrl of imageUrls) {
       const image = new Image();
 
       image.decoding = "async";
       image.src = imageUrl;
-
-      return image;
-    });
-
-    return () => {
-      /*
-       * Release references when the selected
-       * photo changes.
-       */
-      for (const image of preloadedImages) {
-        image.src = "";
-      }
-    };
+    }
   }, [previousPhotoImageUrl, nextPhotoImageUrl]);
 
   useEffect(() => {
@@ -689,8 +685,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
   const selectedImageUrl = selectedPhoto
     ? selectedVersion === "final" && selectedPhoto.finalPhoto
-      ? selectedPhoto.finalPhoto.imageUrl
-      : selectedPhoto.imageUrl
+      ? (selectedPhoto.finalPhoto.variants.preview?.imageUrl ??
+        selectedPhoto.finalPhoto.imageUrl)
+      : (selectedPhoto.variants.preview?.imageUrl ?? selectedPhoto.imageUrl)
     : null;
 
   if (isLoading) {

@@ -23,6 +23,7 @@ interface FinalPhotoRecord {
   byteSize: number;
   uploadedAt: string;
   imageUrl: string;
+  variants: ImageVariantSet;
 }
 
 interface PhotoRecord {
@@ -40,6 +41,7 @@ interface PhotoRecord {
   capturedAt: string | null;
   latitude: number | null;
   longitude: number | null;
+  variants: ImageVariantSet;
 }
 
 interface PhotoRow {
@@ -171,9 +173,54 @@ type PhotoUploadMetadataResult =
       error: string;
     };
 
+type PhotoVariantSource = "original" | "final";
+
+type PhotoVariantKind = "thumbnail" | "preview";
+
+interface ImageVariantRecord {
+  imageUrl: string;
+  contentType: string;
+  byteSize: number;
+  width: number;
+  height: number;
+  createdAt: string;
+}
+
+interface ImageVariantSet {
+  thumbnail: ImageVariantRecord | null;
+  preview: ImageVariantRecord | null;
+}
+
+interface PhotoVariantRow {
+  photoId: string;
+  sourceKind: PhotoVariantSource;
+  variantKind: PhotoVariantKind;
+  storageKey: string;
+  contentType: string;
+  byteSize: number;
+  width: number;
+  height: number;
+  createdAt: string;
+}
+
+interface PhotoVariantsBySource {
+  original: ImageVariantSet;
+  final: ImageVariantSet;
+}
+
+interface VariantPhotoRow {
+  eventId: string;
+  finalStorageKey: string | null;
+}
+
+interface StoredVariantRow {
+  storageKey: string;
+}
+
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
-
+const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 const CAPTURED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
 
 function isValidCapturedAt(value: string): boolean {
@@ -348,9 +395,24 @@ function getVisitorToken(request: Request): string | null {
   return token;
 }
 
+function createEmptyVariantSet(): ImageVariantSet {
+  return {
+    thumbnail: null,
+    preview: null,
+  };
+}
+
+function createEmptyPhotoVariants(): PhotoVariantsBySource {
+  return {
+    original: createEmptyVariantSet(),
+    final: createEmptyVariantSet(),
+  };
+}
+
 function toPhotoRecord(
   row: PhotoRow,
   comments: PhotoCommentRecord[] = [],
+  photoVariants: PhotoVariantsBySource = createEmptyPhotoVariants(),
 ): PhotoRecord {
   const {
     finalOriginalFilename,
@@ -370,6 +432,7 @@ function toPhotoRecord(
     ...basePhoto,
     heartCount: Number(basePhoto.heartCount ?? 0),
     imageUrl: `/api/photos/${encodeURIComponent(row.id)}/image`,
+    variants: photoVariants.original,
     finalPhoto: hasFinalPhoto
       ? {
           originalFilename: finalOriginalFilename,
@@ -379,6 +442,7 @@ function toPhotoRecord(
           imageUrl:
             `/api/photos/${encodeURIComponent(row.id)}/final-image` +
             `?v=${encodeURIComponent(finalUploadedAt)}`,
+          variants: photoVariants.final,
         }
       : null,
     comments,
@@ -668,6 +732,7 @@ async function createPhoto(
     heartCount: 0,
     workflowStatus: "idle",
     finalPhoto: null,
+    variants: createEmptyVariantSet(),
     comments: [],
     capturedAt,
     latitude,
@@ -732,13 +797,15 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
   )
     .bind(eventId)
     .all<PhotoRow>();
-  const commentsByPhoto = await getCommentsByPhoto(env, eventId);
 
+  const commentsByPhoto = await getCommentsByPhoto(env, eventId);
+  const variantsByPhoto = await getPhotoVariantsByEvent(env, eventId);
   return jsonResponse({
     photos: result.results.map((row) =>
       toPhotoRecord(
         row,
         (commentsByPhoto.get(row.id) ?? []).map(toPhotoCommentRecord),
+        variantsByPhoto.get(row.id) ?? createEmptyPhotoVariants(),
       ),
     ),
   });
@@ -770,7 +837,7 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
         final_storage_key AS finalStorageKey
       FROM photos
       WHERE id = ?
-  `,
+    `,
   )
     .bind(photoId)
     .first<StoredPhotoRow>();
@@ -779,9 +846,22 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
-  const storageKeys = [photo.storageKey, photo.finalStorageKey].filter(
-    (key): key is string => key !== null,
-  );
+  const variantResult = await env.DB.prepare(
+    `
+        SELECT
+          storage_key AS storageKey
+        FROM photo_variants
+        WHERE photo_id = ?
+      `,
+  )
+    .bind(photoId)
+    .all<StoredVariantRow>();
+
+  const storageKeys = [
+    photo.storageKey,
+    photo.finalStorageKey,
+    ...variantResult.results.map((variant) => variant.storageKey),
+  ].filter((key): key is string => key !== null);
 
   try {
     await Promise.all(
@@ -797,8 +877,10 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
   try {
     await env.DB.prepare(
       `
-        DELETE FROM photos
-        WHERE id = ?
+        DELETE FROM photo_variants
+        WHERE
+          photo_id = ?
+          AND source_kind = 'final'
       `,
     )
       .bind(photoId)
@@ -887,6 +969,7 @@ async function getPublicGallery(
     .all<PhotoRow>();
 
   const commentsByPhoto = await getCommentsByPhoto(env, event.id);
+  const variantsByPhoto = await getPhotoVariantsByEvent(env, event.id);
   const visitorToken = getVisitorToken(request);
   const heartedPhotoIds = new Set<string>();
 
@@ -918,9 +1001,11 @@ async function getPublicGallery(
     },
     photos: photoResult.results.map((row) => {
       const commentRows = commentsByPhoto.get(row.id) ?? [];
-
-      const photo = toPhotoRecord(row, commentRows.map(toPhotoCommentRecord));
-
+      const photo = toPhotoRecord(
+        row,
+        commentRows.map(toPhotoCommentRecord),
+        variantsByPhoto.get(row.id) ?? createEmptyPhotoVariants(),
+      );
       return {
         ...photo,
 
@@ -1604,6 +1689,68 @@ async function getStoredJpeg(env: Env, storageKey: string): Promise<Response> {
   });
 }
 
+function toImageVariantRecord(row: PhotoVariantRow): ImageVariantRecord {
+  return {
+    imageUrl:
+      `/api/photos/${encodeURIComponent(
+        row.photoId,
+      )}/variants/${row.sourceKind}/${row.variantKind}` +
+      `?v=${encodeURIComponent(row.createdAt)}`,
+    contentType: row.contentType,
+    byteSize: Number(row.byteSize),
+    width: Number(row.width),
+    height: Number(row.height),
+    createdAt: row.createdAt,
+  };
+}
+
+async function getPhotoVariantsByEvent(
+  env: Env,
+  eventId: string,
+): Promise<Map<string, PhotoVariantsBySource>> {
+  const result = await env.DB.prepare(
+    `
+      SELECT
+        v.photo_id AS photoId,
+        v.source_kind AS sourceKind,
+        v.variant_kind AS variantKind,
+        v.storage_key AS storageKey,
+        v.content_type AS contentType,
+        v.byte_size AS byteSize,
+        v.width,
+        v.height,
+        v.created_at AS createdAt
+      FROM photo_variants v
+      INNER JOIN photos p
+        ON p.id = v.photo_id
+      WHERE p.event_id = ?
+    `,
+  )
+    .bind(eventId)
+    .all<PhotoVariantRow>();
+
+  const variantsByPhoto = new Map<string, PhotoVariantsBySource>();
+
+  for (const row of result.results) {
+    const photoVariants =
+      variantsByPhoto.get(row.photoId) ?? createEmptyPhotoVariants();
+
+    const sourceVariants = photoVariants[row.sourceKind];
+
+    const variant = toImageVariantRecord(row);
+
+    if (row.variantKind === "thumbnail") {
+      sourceVariants.thumbnail = variant;
+    } else {
+      sourceVariants.preview = variant;
+    }
+
+    variantsByPhoto.set(row.photoId, photoVariants);
+  }
+
+  return variantsByPhoto;
+}
+
 async function getFinalPhotoImage(
   env: Env,
   photoId: string,
@@ -1796,6 +1943,7 @@ async function uploadFinalPhoto(
     imageUrl:
       `/api/photos/${encodeURIComponent(photoId)}/final-image` +
       `?v=${encodeURIComponent(uploadedAt)}`,
+    variants: createEmptyVariantSet(),
   };
 
   return jsonResponse({
@@ -1804,6 +1952,355 @@ async function uploadFinalPhoto(
     heartCount: 0,
     finalPhoto,
   });
+}
+
+function getFormInteger(formData: FormData, key: string): number | null {
+  const value = formData.get(key);
+
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parsedValue = Number(value);
+
+  if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+    return null;
+  }
+
+  return parsedValue;
+}
+
+async function uploadPhotoVariants(
+  request: Request,
+  env: Env,
+  photoId: string,
+  sourceKind: PhotoVariantSource,
+): Promise<Response> {
+  const photo = await env.DB.prepare(
+    `
+      SELECT
+        event_id AS eventId,
+        final_storage_key AS finalStorageKey
+      FROM photos
+      WHERE id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<VariantPhotoRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  if (sourceKind === "final" && !photo.finalStorageKey) {
+    return jsonResponse(
+      {
+        error: "Upload the final image before its optimized variants.",
+      },
+      409,
+    );
+  }
+
+  let formData: FormData;
+
+  try {
+    formData = await request.formData();
+  } catch {
+    return jsonResponse(
+      {
+        error: "The optimized-image request must use multipart form data.",
+      },
+      400,
+    );
+  }
+
+  const thumbnail = formData.get("thumbnail");
+  const preview = formData.get("preview");
+
+  const thumbnailWidth = getFormInteger(formData, "thumbnailWidth");
+
+  const thumbnailHeight = getFormInteger(formData, "thumbnailHeight");
+
+  const previewWidth = getFormInteger(formData, "previewWidth");
+
+  const previewHeight = getFormInteger(formData, "previewHeight");
+
+  if (
+    !(thumbnail instanceof File) ||
+    !(preview instanceof File) ||
+    thumbnail.type !== "image/jpeg" ||
+    preview.type !== "image/jpeg" ||
+    thumbnailWidth === null ||
+    thumbnailHeight === null ||
+    previewWidth === null ||
+    previewHeight === null
+  ) {
+    return jsonResponse(
+      {
+        error:
+          "Valid thumbnail and preview JPEGs with dimensions are required.",
+      },
+      400,
+    );
+  }
+
+  if (thumbnail.size > MAX_THUMBNAIL_BYTES) {
+    return jsonResponse(
+      {
+        error: "The thumbnail JPEG must be 2 MB or smaller.",
+      },
+      413,
+    );
+  }
+
+  if (preview.size > MAX_PREVIEW_BYTES) {
+    return jsonResponse(
+      {
+        error: "The preview JPEG must be 10 MB or smaller.",
+      },
+      413,
+    );
+  }
+
+  const oldVariants = await env.DB.prepare(
+    `
+      SELECT storage_key AS storageKey
+      FROM photo_variants
+      WHERE
+        photo_id = ?
+        AND source_kind = ?
+    `,
+  )
+    .bind(photoId, sourceKind)
+    .all<StoredVariantRow>();
+
+  const uploadId = crypto.randomUUID();
+
+  const baseStorageKey =
+    `events/${photo.eventId}/photos/${photoId}` +
+    `/variants/${sourceKind}/${uploadId}`;
+
+  const thumbnailStorageKey = `${baseStorageKey}/thumbnail.jpg`;
+
+  const previewStorageKey = `${baseStorageKey}/preview.jpg`;
+
+  let thumbnailObject: R2Object | null = null;
+  let previewObject: R2Object | null = null;
+
+  try {
+    thumbnailObject = await env.pickpic_photos.put(
+      thumbnailStorageKey,
+      thumbnail,
+      {
+        httpMetadata: {
+          contentType: "image/jpeg",
+        },
+        customMetadata: {
+          photoId,
+          sourceKind,
+          variantKind: "thumbnail",
+        },
+      },
+    );
+
+    previewObject = await env.pickpic_photos.put(previewStorageKey, preview, {
+      httpMetadata: {
+        contentType: "image/jpeg",
+      },
+      customMetadata: {
+        photoId,
+        sourceKind,
+        variantKind: "preview",
+      },
+    });
+  } catch {
+    await env.pickpic_photos.delete([thumbnailStorageKey, previewStorageKey]);
+
+    return jsonResponse(
+      {
+        error: "The optimized images could not be stored.",
+      },
+      500,
+    );
+  }
+
+  if (!thumbnailObject || !previewObject) {
+    await env.pickpic_photos.delete([thumbnailStorageKey, previewStorageKey]);
+
+    return jsonResponse(
+      {
+        error: "The optimized images could not be stored.",
+      },
+      500,
+    );
+  }
+
+  const createdAt = new Date().toISOString();
+
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        `
+          INSERT INTO photo_variants (
+            photo_id,
+            source_kind,
+            variant_kind,
+            storage_key,
+            content_type,
+            byte_size,
+            width,
+            height,
+            created_at
+          )
+          VALUES (?, ?, 'thumbnail', ?, 'image/jpeg', ?, ?, ?, ?)
+          ON CONFLICT (
+            photo_id,
+            source_kind,
+            variant_kind
+          )
+          DO UPDATE SET
+            storage_key = excluded.storage_key,
+            content_type = excluded.content_type,
+            byte_size = excluded.byte_size,
+            width = excluded.width,
+            height = excluded.height,
+            created_at = excluded.created_at
+        `,
+      ).bind(
+        photoId,
+        sourceKind,
+        thumbnailStorageKey,
+        thumbnailObject.size,
+        thumbnailWidth,
+        thumbnailHeight,
+        createdAt,
+      ),
+
+      env.DB.prepare(
+        `
+          INSERT INTO photo_variants (
+            photo_id,
+            source_kind,
+            variant_kind,
+            storage_key,
+            content_type,
+            byte_size,
+            width,
+            height,
+            created_at
+          )
+          VALUES (?, ?, 'preview', ?, 'image/jpeg', ?, ?, ?, ?)
+          ON CONFLICT (
+            photo_id,
+            source_kind,
+            variant_kind
+          )
+          DO UPDATE SET
+            storage_key = excluded.storage_key,
+            content_type = excluded.content_type,
+            byte_size = excluded.byte_size,
+            width = excluded.width,
+            height = excluded.height,
+            created_at = excluded.created_at
+        `,
+      ).bind(
+        photoId,
+        sourceKind,
+        previewStorageKey,
+        previewObject.size,
+        previewWidth,
+        previewHeight,
+        createdAt,
+      ),
+    ]);
+  } catch {
+    await env.pickpic_photos.delete([thumbnailStorageKey, previewStorageKey]);
+
+    return jsonResponse(
+      {
+        error: "The optimized-image metadata could not be saved.",
+      },
+      500,
+    );
+  }
+
+  const newStorageKeys = new Set([thumbnailStorageKey, previewStorageKey]);
+
+  const replacedStorageKeys = oldVariants.results
+    .map((row) => row.storageKey)
+    .filter((storageKey) => !newStorageKeys.has(storageKey));
+
+  if (replacedStorageKeys.length > 0) {
+    try {
+      await env.pickpic_photos.delete(replacedStorageKeys);
+    } catch (error) {
+      console.error("Unable to remove replaced variants:", error);
+    }
+  }
+
+  const variants: ImageVariantSet = {
+    thumbnail: {
+      imageUrl:
+        `/api/photos/${encodeURIComponent(
+          photoId,
+        )}/variants/${sourceKind}/thumbnail` +
+        `?v=${encodeURIComponent(createdAt)}`,
+      contentType: "image/jpeg",
+      byteSize: thumbnailObject.size,
+      width: thumbnailWidth,
+      height: thumbnailHeight,
+      createdAt,
+    },
+    preview: {
+      imageUrl:
+        `/api/photos/${encodeURIComponent(
+          photoId,
+        )}/variants/${sourceKind}/preview` +
+        `?v=${encodeURIComponent(createdAt)}`,
+      contentType: "image/jpeg",
+      byteSize: previewObject.size,
+      width: previewWidth,
+      height: previewHeight,
+      createdAt,
+    },
+  };
+
+  return jsonResponse({
+    photoId,
+    sourceKind,
+    variants,
+  });
+}
+
+async function getPhotoVariantImage(
+  env: Env,
+  photoId: string,
+  sourceKind: PhotoVariantSource,
+  variantKind: PhotoVariantKind,
+): Promise<Response> {
+  const variant = await env.DB.prepare(
+    `
+      SELECT storage_key AS storageKey
+      FROM photo_variants
+      WHERE
+        photo_id = ?
+        AND source_kind = ?
+        AND variant_kind = ?
+    `,
+  )
+    .bind(photoId, sourceKind, variantKind)
+    .first<StoredVariantRow>();
+
+  if (!variant) {
+    return jsonResponse(
+      {
+        error: "The requested image variant was not found.",
+      },
+      404,
+    );
+  }
+
+  return getStoredJpeg(env, variant.storageKey);
 }
 
 export default {
@@ -1999,6 +2496,40 @@ export default {
       const photoId = decodeURIComponent(photoWorkflowMatch[1]);
 
       return setPhotoWorkflowStatus(request, env, photoId);
+    }
+
+    const adminVariantUploadMatch = url.pathname.match(
+      /^\/api\/admin\/photos\/([^/]+)\/variants\/(original|final)$/,
+    );
+
+    if (adminVariantUploadMatch) {
+      if (request.method !== "PUT") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      return uploadPhotoVariants(
+        request,
+        env,
+        decodeURIComponent(adminVariantUploadMatch[1]),
+        adminVariantUploadMatch[2] as PhotoVariantSource,
+      );
+    }
+
+    const publicVariantMatch = url.pathname.match(
+      /^\/api\/photos\/([^/]+)\/variants\/(original|final)\/(thumbnail|preview)$/,
+    );
+
+    if (publicVariantMatch) {
+      if (request.method !== "GET") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      return getPhotoVariantImage(
+        env,
+        decodeURIComponent(publicVariantMatch[1]),
+        publicVariantMatch[2] as PhotoVariantSource,
+        publicVariantMatch[3] as PhotoVariantKind,
+      );
     }
 
     if (url.pathname.startsWith("/api/")) {
