@@ -207,24 +207,51 @@ button:disabled {
 }
 
 .event-grid {
+  align-items: start;
   display: grid;
   gap: 18px;
   grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
 }
 
 .event-card {
-  background: #ffffff;
-  border: 1px solid #e5e2db;
+  align-self: start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 16px;
   display: grid;
-  gap: 20px;
-  padding: 22px;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: hidden;
+  padding: 0;
 }
 
 .event-card-header {
   align-items: center;
   display: flex;
   justify-content: space-between;
+}
+
+.event-card-summary {
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  display: grid;
+  gap: 20px;
+  padding: 22px;
+  position: relative;
+  z-index: 1;
+}
+
+.event-card-scroll-region {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 17px 22px 22px;
+  scrollbar-gutter: stable;
+}
+
+.photo-list {
+  display: grid;
+  gap: 10px;
 }
 
 .status-badge {
@@ -829,6 +856,22 @@ button:hover:not(:disabled),
   line-height: 1.4;
   margin: 4px 0 0;
   padding: 8px 9px;
+}
+
+@media (max-width: 720px) {
+  .event-card {
+    max-height: none;
+    overflow: visible;
+  }
+  .event-card-scroll-region {
+    overflow: visible;
+    padding-right: 22px;
+  }
+  .photo-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
 }
 
 @media (max-width: 720px) {
