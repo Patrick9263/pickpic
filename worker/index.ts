@@ -1595,7 +1595,7 @@ async function getStoredJpeg(env: Env, storageKey: string): Promise<Response> {
   headers.set("Content-Disposition", "inline");
   headers.set("Content-Length", object.size.toString());
   headers.set("ETag", object.httpEtag);
-  headers.set("Cache-Control", "private, max-age=3600");
+  headers.set("Cache-Control", "public, max-age=31536000, immutable");
   headers.set("X-Content-Type-Options", "nosniff");
 
   return new Response(object.body, {

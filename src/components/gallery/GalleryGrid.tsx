@@ -6,6 +6,7 @@ type GalleryGridProps = {
   togglingPhotoId: string | null;
   openPhoto(photo: GalleryPhotoRecord): void;
   toggleHeart(photo: GalleryPhotoRecord): Promise<void>;
+  priorityPhotoIds: Set<string>;
 };
 
 function GalleryGrid({
@@ -13,11 +14,13 @@ function GalleryGrid({
   togglingPhotoId,
   openPhoto,
   toggleHeart,
+  priorityPhotoIds,
 }: GalleryGridProps) {
   return (
     <div className="gallery-grid">
-      {group.photos.map((photo) => {
+      {group.photos.map((photo, photoIndex) => {
         const isToggling = togglingPhotoId === photo.id;
+        const isPriority = priorityPhotoIds.has(photo.id);
 
         return (
           <article className="gallery-photo-card" key={photo.id}>
@@ -31,7 +34,9 @@ function GalleryGrid({
               <img
                 src={photo.finalPhoto?.imageUrl ?? photo.imageUrl}
                 alt={photo.originalFilename}
-                loading="lazy"
+                loading={isPriority ? "eager" : "lazy"}
+                fetchPriority={isPriority ? "high" : "auto"}
+                decoding="async"
               />
             </button>
 

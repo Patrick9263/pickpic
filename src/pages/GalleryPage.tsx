@@ -213,16 +213,53 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     () => photoGroups.flatMap((group) => group.photos),
     [photoGroups],
   );
+  const priorityPhotoIds = useMemo(
+    () => new Set(visiblePhotos.slice(0, 3).map((photo) => photo.id)),
+    [visiblePhotos],
+  );
 
   const selectedPhotoIndex =
     selectedPhotoId === null
       ? -1
       : visiblePhotos.findIndex((photo) => photo.id === selectedPhotoId);
-
   const canGoPrevious = selectedPhotoIndex > 0;
-
   const canGoNext =
     selectedPhotoIndex >= 0 && selectedPhotoIndex < visiblePhotos.length - 1;
+  const previousPhoto = canGoPrevious
+    ? visiblePhotos[selectedPhotoIndex - 1]
+    : null;
+  const nextPhoto = canGoNext ? visiblePhotos[selectedPhotoIndex + 1] : null;
+  const previousPhotoImageUrl = previousPhoto
+    ? (previousPhoto.finalPhoto?.imageUrl ?? previousPhoto.imageUrl)
+    : null;
+  const nextPhotoImageUrl = nextPhoto
+    ? (nextPhoto.finalPhoto?.imageUrl ?? nextPhoto.imageUrl)
+    : null;
+
+  useEffect(() => {
+    const imageUrls = [previousPhotoImageUrl, nextPhotoImageUrl].filter(
+      (imageUrl): imageUrl is string => imageUrl !== null,
+    );
+
+    const preloadedImages = imageUrls.map((imageUrl) => {
+      const image = new Image();
+
+      image.decoding = "async";
+      image.src = imageUrl;
+
+      return image;
+    });
+
+    return () => {
+      /*
+       * Release references when the selected
+       * photo changes.
+       */
+      for (const image of preloadedImages) {
+        image.src = "";
+      }
+    };
+  }, [previousPhotoImageUrl, nextPhotoImageUrl]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -771,6 +808,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   togglingPhotoId={togglingPhotoId}
                   openPhoto={openPhoto}
                   toggleHeart={toggleHeart}
+                  priorityPhotoIds={priorityPhotoIds}
                 />
               </section>
             ))}
