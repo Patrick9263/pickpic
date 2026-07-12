@@ -24,6 +24,7 @@ function GalleryGrid({
             <button
               className="gallery-photo-button"
               type="button"
+              data-gallery-photo-id={photo.id}
               onClick={() => openPhoto(photo)}
               aria-label={`Open ${photo.originalFilename}`}
             >
