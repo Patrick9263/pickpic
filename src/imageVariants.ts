@@ -1,3 +1,5 @@
+import type { ImageVariantSet } from "./types";
+
 export interface GeneratedImageVariant {
   blob: Blob;
   width: number;
@@ -147,4 +149,12 @@ export async function generateImageVariants(
      */
     sourceBitmap.close();
   }
+}
+
+export function isVariantSetComplete(variants: ImageVariantSet): boolean {
+  return variants.thumbnail !== null && variants.preview !== null;
+}
+
+export function isVariantSetMissing(variants: ImageVariantSet): boolean {
+  return !isVariantSetComplete(variants);
 }
