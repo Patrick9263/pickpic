@@ -45,6 +45,9 @@ interface UploadFinalPhotoResponse {
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
+const PUBLIC_APP_ORIGIN = (
+  import.meta.env.VITE_PUBLIC_APP_ORIGIN || window.location.origin
+).replace(/\/+$/, "");
 
 async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
   const body = await fetchJson<PhotosResponse>(
@@ -354,7 +357,7 @@ function DashboardPage() {
   }
 
   async function copyShareLink(eventRecord: EventRecord): Promise<void> {
-    const shareUrl = `${window.location.origin}/g/${eventRecord.shareToken}`;
+    const shareUrl = `${PUBLIC_APP_ORIGIN}/g/${eventRecord.shareToken}`;
 
     try {
       await navigator.clipboard.writeText(shareUrl);
@@ -659,7 +662,7 @@ function DashboardPage() {
             ) : (
               <div className="event-grid">
                 {events.map((eventRecord) => {
-                  const shareUrl = `${window.location.origin}/g/${eventRecord.shareToken}`;
+                  const shareUrl = `${PUBLIC_APP_ORIGIN}/g/${eventRecord.shareToken}`;
                   const wasCopied = copiedEventId === eventRecord.id;
                   const isUploading = uploadingEventId === eventRecord.id;
                   const photos = photosByEvent[eventRecord.id] ?? [];
