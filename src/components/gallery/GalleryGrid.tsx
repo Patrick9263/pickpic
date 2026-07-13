@@ -1,5 +1,6 @@
 import type { GalleryPhotoGroup } from "./types";
 import type { GalleryPhotoRecord } from "../../types";
+import { useState } from "react";
 
 type GalleryGridProps = {
   group: GalleryPhotoGroup;
@@ -18,6 +19,12 @@ function GalleryGrid({
   priorityPhotoIds,
   interactionsEnabled,
 }: GalleryGridProps) {
+  const [loadedPhotoIds, setLoadedPhotoIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [failedPhotoIds, setFailedPhotoIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   return (
     <div className="gallery-grid">
       {group.photos.map((photo) => {
@@ -30,6 +37,8 @@ function GalleryGrid({
           displayedThumbnail?.imageUrl ??
           photo.finalPhoto?.imageUrl ??
           photo.imageUrl;
+        const isLoaded = loadedPhotoIds.has(photo.id);
+        const hasFailed = failedPhotoIds.has(photo.id);
 
         return (
           <article className="gallery-photo-card" key={photo.id}>
@@ -40,15 +49,64 @@ function GalleryGrid({
               onClick={() => openPhoto(photo)}
               aria-label={`Open ${photo.originalFilename}`}
             >
-              <img
-                src={gridImageUrl}
-                alt={photo.originalFilename}
-                width={displayedThumbnail?.width}
-                height={displayedThumbnail?.height}
-                loading={isPriority ? "eager" : "lazy"}
-                fetchPriority={isPriority ? "high" : "auto"}
-                decoding="async"
-              />
+              <div
+                className={`gallery-image-frame ${
+                  isLoaded ? "gallery-image-loaded" : ""
+                }`}
+              >
+                {!isLoaded && !hasFailed && (
+                  <div className="gallery-image-skeleton" aria-hidden="true" />
+                )}
+
+                {hasFailed ? (
+                  <div className="gallery-image-error">
+                    <span>Image unavailable</span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFailedPhotoIds((currentIds) => {
+                          const nextIds = new Set(currentIds);
+                          nextIds.delete(photo.id);
+                          return nextIds;
+                        });
+                      }}
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : (
+                  <img
+                    src={gridImageUrl}
+                    alt={photo.originalFilename}
+                    width={displayedThumbnail?.width}
+                    height={displayedThumbnail?.height}
+                    loading={isPriority ? "eager" : "lazy"}
+                    fetchPriority={isPriority ? "high" : "auto"}
+                    decoding="async"
+                    className={isLoaded ? "gallery-image-visible" : ""}
+                    onLoad={() => {
+                      setLoadedPhotoIds((currentIds) => {
+                        const nextIds = new Set(currentIds);
+                        nextIds.add(photo.id);
+                        return nextIds;
+                      });
+                    }}
+                    onError={() => {
+                      setFailedPhotoIds((currentIds) => {
+                        const nextIds = new Set(currentIds);
+                        nextIds.add(photo.id);
+                        return nextIds;
+                      });
+                    }}
+                    style={{
+                      aspectRatio: displayedThumbnail
+                        ? `${displayedThumbnail.width} / ${displayedThumbnail.height}`
+                        : undefined,
+                    }}
+                  />
+                )}
+              </div>
             </button>
 
             {photo.finalPhoto && (
