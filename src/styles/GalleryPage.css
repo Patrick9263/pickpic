@@ -773,12 +773,6 @@
   text-align: center;
 }
 
-.gallery-image-error button {
-  background: var(--color-surface-hover);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-text);
-}
-
 @keyframes gallery-skeleton-pulse {
   0%,
   100% {

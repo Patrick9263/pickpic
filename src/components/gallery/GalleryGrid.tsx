@@ -25,6 +25,8 @@ function GalleryGrid({
   const [failedPhotoIds, setFailedPhotoIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [retryCounts, setRetryCounts] = useState<Record<string, number>>({});
+
   return (
     <div className="gallery-grid">
       {group.photos.map((photo) => {
@@ -37,14 +39,31 @@ function GalleryGrid({
           displayedThumbnail?.imageUrl ??
           photo.finalPhoto?.imageUrl ??
           photo.imageUrl;
+        const retryCount = retryCounts[photo.id] ?? 0;
+        const requestedImageUrl =
+          retryCount > 0
+            ? `${gridImageUrl}${
+                gridImageUrl.includes("?") ? "&" : "?"
+              }retry=${retryCount}`
+            : gridImageUrl;
         const isLoaded = loadedPhotoIds.has(photo.id);
         const hasFailed = failedPhotoIds.has(photo.id);
-        function clearImageFailure(): void {
+
+        function retryImage(): void {
+          setLoadedPhotoIds((currentIds) => {
+            const nextIds = new Set(currentIds);
+            nextIds.delete(photo.id);
+            return nextIds;
+          });
           setFailedPhotoIds((currentIds) => {
             const nextIds = new Set(currentIds);
             nextIds.delete(photo.id);
             return nextIds;
           });
+          setRetryCounts((currentCounts) => ({
+            ...currentCounts,
+            [photo.id]: (currentCounts[photo.id] ?? 0) + 1,
+          }));
         }
 
         return (
@@ -55,7 +74,7 @@ function GalleryGrid({
               data-gallery-photo-id={photo.id}
               onClick={() => {
                 if (hasFailed) {
-                  clearImageFailure();
+                  retryImage();
                   return;
                 }
 
@@ -90,7 +109,7 @@ function GalleryGrid({
                   </div>
                 ) : (
                   <img
-                    src={gridImageUrl}
+                    src={requestedImageUrl}
                     alt={photo.originalFilename}
                     width={displayedThumbnail?.width}
                     height={displayedThumbnail?.height}
@@ -100,13 +119,6 @@ function GalleryGrid({
                     className={isLoaded ? "gallery-image-visible" : ""}
                     onLoad={() => {
                       setLoadedPhotoIds((currentIds) => {
-                        const nextIds = new Set(currentIds);
-                        nextIds.add(photo.id);
-                        return nextIds;
-                      });
-                    }}
-                    onError={() => {
-                      setFailedPhotoIds((currentIds) => {
                         const nextIds = new Set(currentIds);
                         nextIds.add(photo.id);
                         return nextIds;

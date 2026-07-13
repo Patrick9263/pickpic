@@ -141,7 +141,7 @@ function GalleryLightbox({
   }, [canGoNext, canGoPrevious, closeLightbox, onNext, onPrevious]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (event.pointerType === "mouse") {
+    if (event.pointerType === "mouse" || isInteractiveTarget(event.target)) {
       return;
     }
 
