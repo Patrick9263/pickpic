@@ -915,7 +915,9 @@ function DashboardPage() {
           PickPic
         </a>
 
-        <span className="environment-badge">Local development</span>
+        {import.meta.env.DEV && (
+          <span className="environment-badge">Local development</span>
+        )}
       </header>
 
       <main className="dashboard">
