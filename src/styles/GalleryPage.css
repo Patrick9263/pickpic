@@ -732,7 +732,9 @@
   height: 100%;
   opacity: 0;
   object-fit: cover;
-  transition: opacity 180ms ease;
+  transition:
+    opacity 180ms ease,
+    transform 160ms ease;
   width: 100%;
 }
 

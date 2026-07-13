@@ -124,6 +124,18 @@ function GalleryGrid({
                         return nextIds;
                       });
                     }}
+                    onError={() => {
+                      setLoadedPhotoIds((currentIds) => {
+                        const nextIds = new Set(currentIds);
+                        nextIds.delete(photo.id);
+                        return nextIds;
+                      });
+                      setFailedPhotoIds((currentIds) => {
+                        const nextIds = new Set(currentIds);
+                        nextIds.add(photo.id);
+                        return nextIds;
+                      });
+                    }}
                   />
                 )}
               </div>
