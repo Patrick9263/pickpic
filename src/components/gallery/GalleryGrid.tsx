@@ -39,6 +39,13 @@ function GalleryGrid({
           photo.imageUrl;
         const isLoaded = loadedPhotoIds.has(photo.id);
         const hasFailed = failedPhotoIds.has(photo.id);
+        function clearImageFailure(): void {
+          setFailedPhotoIds((currentIds) => {
+            const nextIds = new Set(currentIds);
+            nextIds.delete(photo.id);
+            return nextIds;
+          });
+        }
 
         return (
           <article className="gallery-photo-card" key={photo.id}>
@@ -46,13 +53,29 @@ function GalleryGrid({
               className="gallery-photo-button"
               type="button"
               data-gallery-photo-id={photo.id}
-              onClick={() => openPhoto(photo)}
-              aria-label={`Open ${photo.originalFilename}`}
+              onClick={() => {
+                if (hasFailed) {
+                  clearImageFailure();
+                  return;
+                }
+
+                openPhoto(photo);
+              }}
+              aria-label={
+                hasFailed
+                  ? `Retry loading ${photo.originalFilename}`
+                  : `Open ${photo.originalFilename}`
+              }
             >
               <div
                 className={`gallery-image-frame ${
                   isLoaded ? "gallery-image-loaded" : ""
                 }`}
+                style={{
+                  aspectRatio: displayedThumbnail
+                    ? `${displayedThumbnail.width} / ${displayedThumbnail.height}`
+                    : undefined,
+                }}
               >
                 {!isLoaded && !hasFailed && (
                   <div className="gallery-image-skeleton" aria-hidden="true" />
@@ -61,19 +84,9 @@ function GalleryGrid({
                 {hasFailed ? (
                   <div className="gallery-image-error">
                     <span>Image unavailable</span>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFailedPhotoIds((currentIds) => {
-                          const nextIds = new Set(currentIds);
-                          nextIds.delete(photo.id);
-                          return nextIds;
-                        });
-                      }}
-                    >
-                      Retry
-                    </button>
+                    <span className="gallery-image-retry-label">
+                      Tap to retry
+                    </span>
                   </div>
                 ) : (
                   <img
@@ -98,11 +111,6 @@ function GalleryGrid({
                         nextIds.add(photo.id);
                         return nextIds;
                       });
-                    }}
-                    style={{
-                      aspectRatio: displayedThumbnail
-                        ? `${displayedThumbnail.width} / ${displayedThumbnail.height}`
-                        : undefined,
                     }}
                   />
                 )}

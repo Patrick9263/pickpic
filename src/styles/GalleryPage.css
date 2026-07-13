@@ -540,9 +540,15 @@
 }
 
 .lightbox-image-stage {
-  position: relative;
+  align-items: center;
   border-radius: 10px;
+  display: flex;
+  justify-content: center;
+  min-height: 260px;
   overflow: hidden;
+  position: relative;
+  touch-action: pan-y;
+  user-select: none;
 }
 
 .lightbox-image-stage img {
@@ -595,6 +601,42 @@
   font-size: 0.72rem !important;
   margin: 8px 0 0 !important;
   text-align: center !important;
+}
+
+.lightbox-image-loading {
+  animation: gallery-skeleton-pulse 1.4s ease-in-out infinite;
+  background:
+    linear-gradient(
+      100deg,
+      transparent 20%,
+      rgb(255 255 255 / 5%) 42%,
+      transparent 64%
+    ),
+    var(--color-surface-raised);
+  inset: 0;
+  position: absolute;
+  z-index: 1;
+}
+
+.lightbox-image-stage img {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease;
+  user-select: none;
+}
+
+.lightbox-image-stage img.lightbox-image-ready {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-image-loading {
+    animation: none;
+  }
+
+  .lightbox-image-stage img {
+    transition: none;
+  }
 }
 
 .public-gallery {
@@ -712,6 +754,12 @@
   position: absolute;
 }
 
+.gallery-image-retry-label {
+  color: var(--color-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
 .gallery-image-error {
   align-items: center;
   color: var(--color-text-muted);
@@ -729,12 +777,6 @@
   background: var(--color-surface-hover);
   border: 1px solid var(--color-border-strong);
   color: var(--color-text);
-}
-
-@supports (padding-top: env(safe-area-inset-top)) {
-  .lightbox-toolbar {
-    padding-top: env(safe-area-inset-top);
-  }
 }
 
 @keyframes gallery-skeleton-pulse {
@@ -759,30 +801,16 @@
 }
 
 @media (max-width: 560px) {
-  .gallery-closed-banner {
-    align-items: flex-start;
-    flex-direction: column;
-    margin-inline: 16px;
-  }
   .lightbox-close {
     height: 42px;
     right: 10px;
     top: 10px;
     width: 42px;
   }
-}
-
-@media (max-width: 560px) {
-  .lightbox-close {
-    height: 50px;
-    right: 12px;
-    top: 12px;
-    width: 50px;
-  }
 
   .lightbox-close svg {
-    height: 27px;
-    width: 27px;
+    height: 23px;
+    width: 23px;
   }
 
   .lightbox-image-stage {
