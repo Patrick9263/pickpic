@@ -1,4 +1,4 @@
-import type { ChangeEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import type {
   EventRecord,
   GalleryStatus,
@@ -115,6 +115,11 @@ type EventCardProps = {
   repairingVariantsPhotoId: string | null;
   variantRepairWarnings: Record<string, string>;
   updatingEventStatusId: string | null;
+  updatingEventTitleId: string | null;
+  deletingEventId: string | null;
+  eventManagementDisabled: boolean;
+  handleRenameEvent(eventRecord: EventRecord, title: string): Promise<boolean>;
+  handleDeleteEvent(eventRecord: EventRecord): Promise<boolean>;
   handleSetEventStatus(
     eventRecord: EventRecord,
     status: GalleryStatus,
@@ -166,11 +171,38 @@ function EventCard(props: EventCardProps) {
     repairingVariantsPhotoId,
     variantRepairWarnings,
     handleRepairPhotoVariants,
+    updatingEventTitleId,
+    deletingEventId,
+    eventManagementDisabled,
+    handleRenameEvent,
+    handleDeleteEvent,
   } = props;
+  const [isRenamingEvent, setIsRenamingEvent] = useState(false);
+  const [renameTitle, setRenameTitle] = useState(eventRecord.title);
+  const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const isAnyVariantRepairRunning = repairingVariantsPhotoId !== null;
   const isUpdatingEventStatus = updatingEventStatusId === eventRecord.id;
   const galleryIsAvailable =
     eventRecord.status === "ready" || eventRecord.status === "completed";
+  const isUpdatingEventTitle = updatingEventTitleId === eventRecord.id;
+  const isDeletingEvent = deletingEventId === eventRecord.id;
+  const eventActionsDisabled =
+    eventManagementDisabled ||
+    isUpdatingEventStatus ||
+    isUpdatingEventTitle ||
+    isDeletingEvent;
+  const trimmedRenameTitle = renameTitle.trim();
+  const renameIsValid =
+    trimmedRenameTitle.length > 0 && trimmedRenameTitle.length <= 120;
+  const renameHasChanged = trimmedRenameTitle !== eventRecord.title;
+  const deleteIsConfirmed = deleteConfirmation === eventRecord.title;
+
+  useEffect(() => {
+    if (!isRenamingEvent) {
+      setRenameTitle(eventRecord.title);
+    }
+  }, [eventRecord.title, isRenamingEvent]);
 
   function formatDate(value: string): string {
     const date = new Date(value);
@@ -189,8 +221,46 @@ function EventCard(props: EventCardProps) {
     if (byteSize < 1024 * 1024) {
       return `${Math.max(1, Math.round(byteSize / 1024))} KB`;
     }
-
     return `${(byteSize / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function submitEventRename(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
+    event.preventDefault();
+
+    if (!renameIsValid || !renameHasChanged) {
+      return;
+    }
+
+    const succeeded = await handleRenameEvent(eventRecord, trimmedRenameTitle);
+
+    if (succeeded) {
+      setIsRenamingEvent(false);
+    }
+  }
+
+  function cancelEventRename(): void {
+    setRenameTitle(eventRecord.title);
+    setIsRenamingEvent(false);
+  }
+
+  function openDeleteConfirmation(): void {
+    setIsRenamingEvent(false);
+    setDeleteConfirmation("");
+    setShowDeleteConfirmation(true);
+  }
+
+  function closeDeleteConfirmation(): void {
+    setDeleteConfirmation("");
+    setShowDeleteConfirmation(false);
+  }
+
+  async function confirmEventDeletion(): Promise<void> {
+    if (!deleteIsConfirmed || eventActionsDisabled) {
+      return;
+    }
+    await handleDeleteEvent(eventRecord);
   }
 
   return (
@@ -237,7 +307,135 @@ function EventCard(props: EventCardProps) {
           {getEventStatusDescription(eventRecord.status)}
         </p>
 
-        <h3>{eventRecord.title}</h3>
+        <div className="event-title-row">
+          {isRenamingEvent ? (
+            <form
+              className="event-rename-form"
+              onSubmit={(event) => void submitEventRename(event)}
+            >
+              <label htmlFor={`event-rename-${eventRecord.id}`}>
+                Rename event
+              </label>
+
+              <input
+                id={`event-rename-${eventRecord.id}`}
+                type="text"
+                value={renameTitle}
+                maxLength={120}
+                autoComplete="off"
+                disabled={isUpdatingEventTitle}
+                autoFocus
+                onChange={(event) => setRenameTitle(event.target.value)}
+              />
+
+              <div className="event-rename-footer">
+                <span>{renameTitle.length}/120</span>
+
+                <div className="event-rename-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={isUpdatingEventTitle}
+                    onClick={cancelEventRename}
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={
+                      isUpdatingEventTitle ||
+                      !renameIsValid ||
+                      !renameHasChanged
+                    }
+                  >
+                    {isUpdatingEventTitle ? "Saving…" : "Save"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          ) : (
+            <>
+              <h3>{eventRecord.title}</h3>
+
+              <div className="event-management-actions">
+                <button
+                  className="event-management-button"
+                  type="button"
+                  disabled={eventActionsDisabled}
+                  onClick={() => {
+                    setShowDeleteConfirmation(false);
+
+                    setRenameTitle(eventRecord.title);
+
+                    setIsRenamingEvent(true);
+                  }}
+                >
+                  Rename
+                </button>
+
+                <button
+                  className="event-management-button event-management-button-danger"
+                  type="button"
+                  disabled={eventActionsDisabled}
+                  onClick={openDeleteConfirmation}
+                >
+                  Delete event
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+        {showDeleteConfirmation && (
+          <div
+            className="event-delete-confirmation"
+            role="group"
+            aria-labelledby={`event-delete-title-${eventRecord.id}`}
+          >
+            <strong id={`event-delete-title-${eventRecord.id}`}>
+              Delete event permanently?
+            </strong>
+
+            <p>
+              This deletes all original photos, final photos, optimized
+              versions, comments, hearts, and the gallery link. This cannot be
+              undone.
+            </p>
+
+            <label htmlFor={`event-delete-confirmation-${eventRecord.id}`}>
+              Type <code>{eventRecord.title}</code> to confirm
+            </label>
+
+            <input
+              id={`event-delete-confirmation-${eventRecord.id}`}
+              type="text"
+              value={deleteConfirmation}
+              autoComplete="off"
+              disabled={isDeletingEvent}
+              onChange={(event) => setDeleteConfirmation(event.target.value)}
+            />
+
+            <div className="event-delete-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isDeletingEvent}
+                onClick={closeDeleteConfirmation}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="event-delete-button"
+                type="button"
+                disabled={isDeletingEvent || !deleteIsConfirmed}
+                onClick={() => void confirmEventDeletion()}
+              >
+                {isDeletingEvent ? "Deleting…" : "Delete permanently"}
+              </button>
+            </div>
+          </div>
+        )}
 
         <dl className="event-stats">
           <div>

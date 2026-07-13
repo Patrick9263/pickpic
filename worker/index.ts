@@ -4,6 +4,10 @@ interface CreateEventBody {
   title?: unknown;
 }
 
+interface UpdateEventBody {
+  title?: unknown;
+}
+
 type GalleryStatus = "draft" | "ready" | "completed" | "archived";
 
 interface SetEventStatusBody {
@@ -236,6 +240,14 @@ const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 const CAPTURED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
+
+function chunkArray<T>(values: readonly T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
 
 function isValidCapturedAt(value: string): boolean {
   const match = CAPTURED_AT_PATTERN.exec(value);
@@ -644,6 +656,189 @@ async function createEvent(request: Request, env: Env): Promise<Response> {
     .run();
 
   return jsonResponse({ event }, 201);
+}
+
+async function updateEvent(
+  request: Request,
+  env: Env,
+  eventId: string,
+): Promise<Response> {
+  let body: UpdateEventBody;
+
+  try {
+    body = await request.json<UpdateEventBody>();
+  } catch {
+    return jsonResponse(
+      {
+        error: "The request body must be valid JSON.",
+      },
+      400,
+    );
+  }
+
+  if (typeof body.title !== "string") {
+    return jsonResponse(
+      {
+        error: "An event title is required.",
+      },
+      400,
+    );
+  }
+
+  const title = body.title.trim();
+
+  if (title.length === 0 || title.length > 120) {
+    return jsonResponse(
+      {
+        error: "The event title must be between 1 and 120 characters.",
+      },
+      400,
+    );
+  }
+
+  const existingEvent = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        title,
+        share_token AS shareToken,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM events
+      WHERE id = ?
+    `,
+  )
+    .bind(eventId)
+    .first<EventRecord>();
+
+  if (!existingEvent) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  if (title === existingEvent.title) {
+    return jsonResponse({
+      event: existingEvent,
+    });
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      UPDATE events
+      SET
+        title = ?,
+        updated_at = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(title, updatedAt, eventId)
+    .run();
+
+  return jsonResponse({
+    event: {
+      ...existingEvent,
+      title,
+      updatedAt,
+    },
+  });
+}
+
+async function deleteEvent(env: Env, eventId: string): Promise<Response> {
+  const event = await env.DB.prepare(
+    `
+      SELECT id
+      FROM events
+      WHERE id = ?
+    `,
+  )
+    .bind(eventId)
+    .first<{ id: string }>();
+
+  if (!event) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  const photoResult = await env.DB.prepare(
+    `
+      SELECT
+        storage_key AS storageKey,
+        final_storage_key AS finalStorageKey
+      FROM photos
+      WHERE event_id = ?
+    `,
+  )
+    .bind(eventId)
+    .all<StoredPhotoRow>();
+
+  const variantResult = await env.DB.prepare(
+    `
+        SELECT
+          v.storage_key AS storageKey
+        FROM photo_variants v
+        INNER JOIN photos p
+          ON p.id = v.photo_id
+        WHERE p.event_id = ?
+      `,
+  )
+    .bind(eventId)
+    .all<StoredVariantRow>();
+
+  const storageKeys = Array.from(
+    new Set(
+      [
+        ...photoResult.results.flatMap((photo) => [
+          photo.storageKey,
+          photo.finalStorageKey,
+        ]),
+
+        ...variantResult.results.map((variant) => variant.storageKey),
+      ].filter((storageKey): storageKey is string => storageKey !== null),
+    ),
+  );
+
+  try {
+    for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
+      await env.pickpic_photos.delete(storageKeyChunk);
+    }
+  } catch (error) {
+    console.error("Unable to delete event images:", error);
+
+    return jsonResponse(
+      {
+        error:
+          "The event images could not be deleted. The event was not removed.",
+      },
+      500,
+    );
+  }
+
+  try {
+    await env.DB.prepare(
+      `
+        DELETE FROM events
+        WHERE id = ?
+      `,
+    )
+      .bind(eventId)
+      .run();
+  } catch (error) {
+    console.error("Unable to delete event record:", error);
+
+    return jsonResponse(
+      {
+        error:
+          "The images were deleted, but the event record could not be removed.",
+      },
+      500,
+    );
+  }
+
+  return jsonResponse({
+    deleted: true,
+    eventId,
+  });
 }
 
 async function listEvents(env: Env): Promise<Response> {
@@ -2479,6 +2674,24 @@ export default {
 
       if (request.method === "GET") {
         return listEvents(env);
+      }
+
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const adminEventMatch = url.pathname.match(
+      /^\/api\/admin\/events\/([^/]+)$/,
+    );
+
+    if (adminEventMatch) {
+      const eventId = decodeURIComponent(adminEventMatch[1]);
+
+      if (request.method === "PUT") {
+        return updateEvent(request, env, eventId);
+      }
+
+      if (request.method === "DELETE") {
+        return deleteEvent(env, eventId);
       }
 
       return jsonResponse({ error: "Method not allowed." }, 405);

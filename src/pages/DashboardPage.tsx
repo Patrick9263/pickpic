@@ -29,6 +29,15 @@ interface EventsResponse {
   events: EventRecord[];
 }
 
+interface UpdateEventResponse {
+  event: EventRecord;
+}
+
+interface DeleteEventResponse {
+  deleted: boolean;
+  eventId: string;
+}
+
 interface PhotosResponse {
   photos: PhotoRecord[];
 }
@@ -193,6 +202,10 @@ function DashboardPage() {
   const [updatingEventStatusId, setUpdatingEventStatusId] = useState<
     string | null
   >(null);
+  const [updatingEventTitleId, setUpdatingEventTitleId] = useState<
+    string | null
+  >(null);
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const archivedEventCount = events.filter(
     (eventRecord) => eventRecord.status === "archived",
@@ -908,6 +921,127 @@ function DashboardPage() {
     }
   }
 
+  async function handleRenameEvent(
+    eventRecord: EventRecord,
+    title: string,
+  ): Promise<boolean> {
+    const trimmedTitle = title.trim();
+
+    if (trimmedTitle.length === 0 || trimmedTitle.length > 120) {
+      setError("The event title must be between 1 and 120 characters.");
+
+      return false;
+    }
+
+    if (trimmedTitle === eventRecord.title) {
+      return true;
+    }
+
+    setUpdatingEventTitleId(eventRecord.id);
+    setError(null);
+
+    try {
+      const response = await fetchJson<UpdateEventResponse>(
+        `/api/admin/events/${encodeURIComponent(eventRecord.id)}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title: trimmedTitle,
+          }),
+        },
+      );
+
+      setEvents((currentEvents) =>
+        currentEvents.map((currentEvent) =>
+          currentEvent.id === eventRecord.id ? response.event : currentEvent,
+        ),
+      );
+
+      return true;
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to rename the event.",
+      );
+
+      return false;
+    } finally {
+      setUpdatingEventTitleId(null);
+    }
+  }
+
+  async function handleDeleteEvent(eventRecord: EventRecord): Promise<boolean> {
+    const deletedPhotoIds = new Set(
+      (photosByEvent[eventRecord.id] ?? []).map((photo) => photo.id),
+    );
+
+    setDeletingEventId(eventRecord.id);
+    setError(null);
+
+    try {
+      await fetchJson<DeleteEventResponse>(
+        `/api/admin/events/${encodeURIComponent(eventRecord.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      setEvents((currentEvents) =>
+        currentEvents.filter(
+          (currentEvent) => currentEvent.id !== eventRecord.id,
+        ),
+      );
+
+      setPhotosByEvent((currentPhotos) => {
+        const nextPhotos = {
+          ...currentPhotos,
+        };
+
+        delete nextPhotos[eventRecord.id];
+
+        return nextPhotos;
+      });
+
+      setUploadProgressByEvent((currentProgress) => {
+        const nextProgress = {
+          ...currentProgress,
+        };
+
+        delete nextProgress[eventRecord.id];
+
+        return nextProgress;
+      });
+
+      setVariantRepairWarnings((currentWarnings) =>
+        Object.fromEntries(
+          Object.entries(currentWarnings).filter(
+            ([photoId]) => !deletedPhotoIds.has(photoId),
+          ),
+        ),
+      );
+
+      setCopiedEventId((currentId) =>
+        currentId === eventRecord.id ? null : currentId,
+      );
+
+      return true;
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to delete the event.",
+      );
+
+      return false;
+    } finally {
+      setDeletingEventId(null);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -1046,6 +1180,16 @@ function DashboardPage() {
                   const editRequestCount = photos.filter(
                     (photo) => photo.heartCount > 0,
                   ).length;
+                  const photoActionInProgress = photos.some(
+                    (photo) =>
+                      deletingPhotoId === photo.id ||
+                      clearingHeartsPhotoId === photo.id ||
+                      updatingWorkflowPhotoId === photo.id ||
+                      uploadingFinalPhotoId === photo.id ||
+                      repairingVariantsPhotoId === photo.id,
+                  );
+                  const eventManagementDisabled =
+                    isUploading || photoActionInProgress;
 
                   return (
                     <EventCard
@@ -1077,6 +1221,11 @@ function DashboardPage() {
                       handleRepairPhotoVariants={handleRepairPhotoVariants}
                       updatingEventStatusId={updatingEventStatusId}
                       handleSetEventStatus={handleSetEventStatus}
+                      updatingEventTitleId={updatingEventTitleId}
+                      deletingEventId={deletingEventId}
+                      eventManagementDisabled={eventManagementDisabled}
+                      handleRenameEvent={handleRenameEvent}
+                      handleDeleteEvent={handleDeleteEvent}
                     />
                   );
                 })}
