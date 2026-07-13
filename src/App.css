@@ -950,6 +950,162 @@ button:hover:not(:disabled),
   color: var(--color-text);
 }
 
+.event-title-row {
+  align-items: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.event-title-row h3 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.event-management-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-start;
+}
+
+.event-management-button {
+  background: transparent;
+  border: 0;
+  color: var(--color-accent);
+  font-size: 0.7rem;
+  font-weight: 750;
+  padding: 0;
+}
+
+.event-management-button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.event-management-button-danger {
+  color: var(--color-danger);
+}
+
+.event-management-button-danger:hover:not(:disabled) {
+  color: #ffc0bb;
+}
+
+.event-rename-form {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.event-rename-form > label {
+  color: var(--color-text-subtle);
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.event-rename-form input {
+  width: 100%;
+}
+
+.event-rename-footer {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.event-rename-footer > span {
+  color: var(--color-text-subtle);
+  font-size: 0.68rem;
+}
+
+.event-rename-actions,
+.event-delete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.event-rename-actions button,
+.event-delete-actions button {
+  font-size: 0.75rem;
+  padding: 8px 11px;
+}
+
+.event-delete-confirmation {
+  background: var(--color-danger-soft);
+  border: 1px solid rgb(255 153 145 / 30%);
+  border-radius: 11px;
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+}
+
+.event-delete-confirmation strong {
+  color: var(--color-danger);
+  font-size: 0.82rem;
+}
+
+.event-delete-confirmation p {
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.event-delete-confirmation label {
+  color: var(--color-text);
+  font-size: 0.72rem;
+}
+
+.event-delete-confirmation code {
+  background: rgb(0 0 0 / 20%);
+  border-radius: 5px;
+  padding: 2px 5px;
+}
+
+.event-delete-confirmation input {
+  width: 100%;
+}
+
+.event-delete-button {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: #210807;
+}
+
+.event-delete-button:hover:not(:disabled) {
+  background: #ffb0aa;
+  border-color: #ffb0aa;
+}
+
+@media (max-width: 560px) {
+  .event-management-actions {
+    justify-content: flex-start;
+  }
+
+  .event-rename-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .event-rename-actions,
+  .event-delete-actions {
+    justify-content: stretch;
+  }
+
+  .event-rename-actions button,
+  .event-delete-actions button {
+    flex: 1;
+  }
+}
+
 .gallery-availability-note {
   color: var(--color-text-subtle);
   font-size: 0.7rem;
