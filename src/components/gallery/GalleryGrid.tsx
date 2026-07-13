@@ -1,5 +1,6 @@
 import type { GalleryPhotoGroup } from "./types";
 import type { GalleryPhotoRecord } from "../../types";
+import { useState } from "react";
 
 type GalleryGridProps = {
   group: GalleryPhotoGroup;
@@ -18,6 +19,14 @@ function GalleryGrid({
   priorityPhotoIds,
   interactionsEnabled,
 }: GalleryGridProps) {
+  const [loadedPhotoIds, setLoadedPhotoIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [failedPhotoIds, setFailedPhotoIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [retryCounts, setRetryCounts] = useState<Record<string, number>>({});
+
   return (
     <div className="gallery-grid">
       {group.photos.map((photo) => {
@@ -30,6 +39,32 @@ function GalleryGrid({
           displayedThumbnail?.imageUrl ??
           photo.finalPhoto?.imageUrl ??
           photo.imageUrl;
+        const retryCount = retryCounts[photo.id] ?? 0;
+        const requestedImageUrl =
+          retryCount > 0
+            ? `${gridImageUrl}${
+                gridImageUrl.includes("?") ? "&" : "?"
+              }retry=${retryCount}`
+            : gridImageUrl;
+        const isLoaded = loadedPhotoIds.has(photo.id);
+        const hasFailed = failedPhotoIds.has(photo.id);
+
+        function retryImage(): void {
+          setLoadedPhotoIds((currentIds) => {
+            const nextIds = new Set(currentIds);
+            nextIds.delete(photo.id);
+            return nextIds;
+          });
+          setFailedPhotoIds((currentIds) => {
+            const nextIds = new Set(currentIds);
+            nextIds.delete(photo.id);
+            return nextIds;
+          });
+          setRetryCounts((currentCounts) => ({
+            ...currentCounts,
+            [photo.id]: (currentCounts[photo.id] ?? 0) + 1,
+          }));
+        }
 
         return (
           <article className="gallery-photo-card" key={photo.id}>
@@ -37,18 +72,73 @@ function GalleryGrid({
               className="gallery-photo-button"
               type="button"
               data-gallery-photo-id={photo.id}
-              onClick={() => openPhoto(photo)}
-              aria-label={`Open ${photo.originalFilename}`}
+              onClick={() => {
+                if (hasFailed) {
+                  retryImage();
+                  return;
+                }
+
+                openPhoto(photo);
+              }}
+              aria-label={
+                hasFailed
+                  ? `Retry loading ${photo.originalFilename}`
+                  : `Open ${photo.originalFilename}`
+              }
             >
-              <img
-                src={gridImageUrl}
-                alt={photo.originalFilename}
-                width={displayedThumbnail?.width}
-                height={displayedThumbnail?.height}
-                loading={isPriority ? "eager" : "lazy"}
-                fetchPriority={isPriority ? "high" : "auto"}
-                decoding="async"
-              />
+              <div
+                className={`gallery-image-frame ${
+                  isLoaded ? "gallery-image-loaded" : ""
+                }`}
+                style={{
+                  aspectRatio: displayedThumbnail
+                    ? `${displayedThumbnail.width} / ${displayedThumbnail.height}`
+                    : undefined,
+                }}
+              >
+                {!isLoaded && !hasFailed && (
+                  <div className="gallery-image-skeleton" aria-hidden="true" />
+                )}
+
+                {hasFailed ? (
+                  <div className="gallery-image-error">
+                    <span>Image unavailable</span>
+                    <span className="gallery-image-retry-label">
+                      Tap to retry
+                    </span>
+                  </div>
+                ) : (
+                  <img
+                    src={requestedImageUrl}
+                    alt={photo.originalFilename}
+                    width={displayedThumbnail?.width}
+                    height={displayedThumbnail?.height}
+                    loading={isPriority ? "eager" : "lazy"}
+                    fetchPriority={isPriority ? "high" : "auto"}
+                    decoding="async"
+                    className={isLoaded ? "gallery-image-visible" : ""}
+                    onLoad={() => {
+                      setLoadedPhotoIds((currentIds) => {
+                        const nextIds = new Set(currentIds);
+                        nextIds.add(photo.id);
+                        return nextIds;
+                      });
+                    }}
+                    onError={() => {
+                      setLoadedPhotoIds((currentIds) => {
+                        const nextIds = new Set(currentIds);
+                        nextIds.delete(photo.id);
+                        return nextIds;
+                      });
+                      setFailedPhotoIds((currentIds) => {
+                        const nextIds = new Set(currentIds);
+                        nextIds.add(photo.id);
+                        return nextIds;
+                      });
+                    }}
+                  />
+                )}
+              </div>
             </button>
 
             {photo.finalPhoto && (

@@ -1,6 +1,7 @@
 import {
   useEffect,
   useRef,
+  useState,
   type Dispatch,
   type FormEvent,
   type PointerEvent as ReactPointerEvent,
@@ -87,13 +88,17 @@ function GalleryLightbox({
   onNext,
   interactionsEnabled,
 }: GalleryLightboxProps) {
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-
+  const dialogRef = useRef<HTMLDivElement>(null);
   const pointerStartRef = useRef<PointerStart | null>(null);
+  const [isImageLoaded, setIsImageLoaded] = useState(false);
 
   useEffect(() => {
-    closeButtonRef.current?.focus();
+    dialogRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    setIsImageLoaded(false);
+  }, [selectedImageUrl]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -136,7 +141,7 @@ function GalleryLightbox({
   }, [canGoNext, canGoPrevious, closeLightbox, onNext, onPrevious]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (event.pointerType === "mouse") {
+    if (event.pointerType === "mouse" || isInteractiveTarget(event.target)) {
       return;
     }
 
@@ -163,13 +168,9 @@ function GalleryLightbox({
     }
 
     const horizontalMovement = event.clientX - start.x;
-
     const verticalMovement = event.clientY - start.y;
-
     const absoluteHorizontal = Math.abs(horizontalMovement);
-
     const absoluteVertical = Math.abs(verticalMovement);
-
     const isHorizontalSwipe =
       absoluteHorizontal >= SWIPE_THRESHOLD &&
       absoluteHorizontal > absoluteVertical * 1.2;
@@ -209,38 +210,38 @@ function GalleryLightbox({
 
   return (
     <div
+      ref={dialogRef}
       className="lightbox"
       role="dialog"
       aria-modal="true"
       aria-label={selectedPhoto.originalFilename}
+      tabIndex={-1}
     >
       <div className="lightbox-backdrop" aria-hidden="true" />
 
       <div className="lightbox-content">
-        <button
-          ref={closeButtonRef}
-          className="lightbox-close"
-          type="button"
-          onClick={closeLightbox}
-          aria-label="Close photo viewer"
-        >
-          <svg aria-hidden="true" viewBox="0 0 24 24">
-            <path
-              d="M6 6l12 12M18 6 6 18"
-              fill="none"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeWidth="2"
-            />
-          </svg>
-        </button>
-
         <div
           className="lightbox-image-stage"
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
         >
+          <button
+            className="lightbox-close"
+            type="button"
+            onClick={closeLightbox}
+            aria-label="Close photo viewer"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path
+                d="M6 6l12 12M18 6 6 18"
+                fill="none"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeWidth="2.25"
+              />
+            </svg>
+          </button>
           <button
             className="lightbox-nav lightbox-nav-previous"
             type="button"
@@ -260,9 +261,18 @@ function GalleryLightbox({
             </svg>
           </button>
 
+          {!isImageLoaded && (
+            <div
+              className="lightbox-image-loading"
+              aria-label="Loading photo"
+            />
+          )}
+
           <img
             src={selectedImageUrl ?? selectedPhoto.imageUrl}
             alt={selectedPhoto.originalFilename}
+            className={isImageLoaded ? "lightbox-image-ready" : ""}
+            onLoad={() => setIsImageLoaded(true)}
             draggable={false}
           />
 
