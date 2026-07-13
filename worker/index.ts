@@ -4,6 +4,20 @@ interface CreateEventBody {
   title?: unknown;
 }
 
+type GalleryStatus = "draft" | "ready" | "completed" | "archived";
+
+interface SetEventStatusBody {
+  status?: unknown;
+}
+
+interface EventStatusRow extends EventRecord {
+  status: string;
+}
+
+interface GalleryStatusRow {
+  status: string;
+}
+
 interface HeartRequestBody {
   displayName?: unknown;
 }
@@ -463,6 +477,116 @@ async function eventExists(eventId: string, env: Env): Promise<boolean> {
   return event !== null;
 }
 
+function isGalleryStatus(value: unknown): value is GalleryStatus {
+  return (
+    value === "draft" ||
+    value === "ready" ||
+    value === "completed" ||
+    value === "archived"
+  );
+}
+
+async function setEventStatus(
+  request: Request,
+  env: Env,
+  eventId: string,
+): Promise<Response> {
+  let body: SetEventStatusBody;
+
+  try {
+    body = await request.json<SetEventStatusBody>();
+  } catch {
+    return jsonResponse(
+      {
+        error: "The request body must be valid JSON.",
+      },
+      400,
+    );
+  }
+
+  if (!isGalleryStatus(body.status)) {
+    return jsonResponse(
+      {
+        error: "The status must be draft, ready, completed, or archived.",
+      },
+      400,
+    );
+  }
+
+  const existingEvent = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        title,
+        share_token AS shareToken,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM events
+      WHERE id = ?
+    `,
+  )
+    .bind(eventId)
+    .first<EventStatusRow>();
+
+  if (!existingEvent) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      UPDATE events
+      SET
+        status = ?,
+        updated_at = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(body.status, updatedAt, eventId)
+    .run();
+
+  return jsonResponse({
+    event: {
+      ...existingEvent,
+      status: body.status,
+      updatedAt,
+    },
+  });
+}
+
+async function requireOpenGallery(
+  env: Env,
+  shareToken: string,
+): Promise<Response | null> {
+  const event = await env.DB.prepare(
+    `
+      SELECT status
+      FROM events
+      WHERE share_token = ?
+    `,
+  )
+    .bind(shareToken)
+    .first<GalleryStatusRow>();
+
+  if (!event || (event.status !== "ready" && event.status !== "completed")) {
+    return jsonResponse({ error: "Gallery not found." }, 404);
+  }
+
+  if (event.status === "completed") {
+    return jsonResponse(
+      {
+        error:
+          "This gallery is closed and no longer accepts edit requests or comments.",
+      },
+      409,
+    );
+  }
+
+  return null;
+}
+
 async function createEvent(request: Request, env: Env): Promise<Response> {
   let body: CreateEventBody;
 
@@ -918,6 +1042,10 @@ async function getPublicGallery(
     .first<PublicGalleryEventRow>();
 
   if (!event) {
+    return jsonResponse({ error: "Gallery not found." }, 404);
+  }
+
+  if (event.status !== "ready" && event.status !== "completed") {
     return jsonResponse({ error: "Gallery not found." }, 404);
   }
 
@@ -2356,6 +2484,20 @@ export default {
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
+    const adminEventStatusMatch = url.pathname.match(
+      /^\/api\/admin\/events\/([^/]+)\/status$/,
+    );
+
+    if (adminEventStatusMatch) {
+      if (request.method !== "PUT") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const eventId = decodeURIComponent(adminEventStatusMatch[1]);
+
+      return setEventStatus(request, env, eventId);
+    }
+
     const eventPhotosMatch = url.pathname.match(
       /^\/api\/admin\/events\/([^/]+)\/photos$/,
     );
@@ -2445,6 +2587,20 @@ export default {
       }
 
       return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const galleryMutationMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|comments(?:\/[^/]+)?)$/,
+    );
+
+    if (galleryMutationMatch && request.method !== "GET") {
+      const shareToken = decodeURIComponent(galleryMutationMatch[1]);
+
+      const galleryGuard = await requireOpenGallery(env, shareToken);
+
+      if (galleryGuard) {
+        return galleryGuard;
+      }
     }
 
     const photoHeartsMatch = url.pathname.match(

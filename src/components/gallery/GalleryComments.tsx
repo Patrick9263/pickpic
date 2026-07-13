@@ -10,6 +10,7 @@ type GalleryCommentsProps = {
   editComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
   deleteComment: (comment: ViewerPhotoCommentRecord) => Promise<void>;
   submitComment: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  interactionsEnabled: boolean;
 };
 
 function GalleryComments({
@@ -21,6 +22,7 @@ function GalleryComments({
   editComment,
   deleteComment,
   submitComment,
+  interactionsEnabled,
 }: GalleryCommentsProps) {
   return (
     <section className="photo-comments">
@@ -35,7 +37,7 @@ function GalleryComments({
               <div className="comment-heading">
                 <strong>{comment.displayName}</strong>
 
-                {comment.viewerOwned && (
+                {comment.viewerOwned && interactionsEnabled && (
                   <div className="comment-actions">
                     <button
                       type="button"
@@ -63,35 +65,40 @@ function GalleryComments({
           ))}
         </div>
       )}
+      {interactionsEnabled ? (
+        <form
+          className="comment-form"
+          onSubmit={(event) => void submitComment(event)}
+        >
+          <label htmlFor={`comment-${selectedPhoto.id}`}>
+            Leave a comment or edit note
+          </label>
 
-      <form
-        className="comment-form"
-        onSubmit={(event) => void submitComment(event)}
-      >
-        <label htmlFor={`comment-${selectedPhoto.id}`}>
-          Leave a comment or edit note
-        </label>
+          <textarea
+            id={`comment-${selectedPhoto.id}`}
+            value={commentText}
+            onChange={(event) => setCommentText(event.target.value)}
+            maxLength={1000}
+            placeholder="For example: Can you remove the stain from my shirt?"
+            disabled={isSubmittingComment}
+          />
 
-        <textarea
-          id={`comment-${selectedPhoto.id}`}
-          value={commentText}
-          onChange={(event) => setCommentText(event.target.value)}
-          maxLength={1000}
-          placeholder="For example: Can you remove the stain from my shirt?"
-          disabled={isSubmittingComment}
-        />
+          <div className="comment-form-footer">
+            <span>{commentText.length}/1000</span>
 
-        <div className="comment-form-footer">
-          <span>{commentText.length}/1000</span>
-
-          <button
-            type="submit"
-            disabled={isSubmittingComment || commentText.trim().length === 0}
-          >
-            {isSubmittingComment ? "Posting…" : "Post comment"}
-          </button>
+            <button
+              type="submit"
+              disabled={isSubmittingComment || commentText.trim().length === 0}
+            >
+              {isSubmittingComment ? "Posting…" : "Post comment"}
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="comments-closed-message">
+          Comments are read-only because this gallery has been closed.
         </div>
-      </form>
+      )}
     </section>
   );
 }

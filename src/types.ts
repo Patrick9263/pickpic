@@ -1,6 +1,8 @@
 export type EventStatus =
   "draft" | "uploading" | "ready" | "editing" | "completed" | "archived";
 
+export type GalleryStatus = "draft" | "ready" | "completed" | "archived";
+
 export type PhotoWorkflowStatus = "idle" | "editing" | "final";
 
 export interface EventRecord {

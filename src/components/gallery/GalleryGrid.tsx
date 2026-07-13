@@ -7,6 +7,7 @@ type GalleryGridProps = {
   openPhoto(photo: GalleryPhotoRecord): void;
   toggleHeart(photo: GalleryPhotoRecord): Promise<void>;
   priorityPhotoIds: Set<string>;
+  interactionsEnabled: boolean;
 };
 
 function GalleryGrid({
@@ -15,6 +16,7 @@ function GalleryGrid({
   openPhoto,
   toggleHeart,
   priorityPhotoIds,
+  interactionsEnabled,
 }: GalleryGridProps) {
   return (
     <div className="gallery-grid">
@@ -57,14 +59,17 @@ function GalleryGrid({
                 photo.viewerHearted ? "gallery-heart-button-active" : ""
               }`}
               type="button"
-              disabled={isToggling}
+              disabled={!interactionsEnabled || isToggling}
               onClick={() => void toggleHeart(photo)}
               aria-pressed={photo.viewerHearted}
               aria-label={
-                photo.viewerHearted
-                  ? `Remove edit request for ${photo.originalFilename}`
-                  : `Request an edit of ${photo.originalFilename}`
+                !interactionsEnabled
+                  ? `Gallery closed; ${photo.heartCount} edit requests for ${photo.originalFilename}`
+                  : photo.viewerHearted
+                    ? `Remove edit request for ${photo.originalFilename}`
+                    : `Request an edit of ${photo.originalFilename}`
               }
+              title={interactionsEnabled ? undefined : "This gallery is closed"}
             >
               <span aria-hidden="true">♥</span>
 

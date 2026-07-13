@@ -9,6 +9,7 @@ import EditingQueue from "../components/EditingQueue";
 import type {
   EventRecord,
   FinalPhotoRecord,
+  GalleryStatus,
   ImageVariantSet,
   PhotoRecord,
   PhotoVariantSource,
@@ -54,6 +55,10 @@ interface UploadVariantsResponse {
   photoId: string;
   sourceKind: "original" | "final";
   variants: ImageVariantSet;
+}
+
+interface SetEventStatusResponse {
+  event: EventRecord;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
@@ -182,10 +187,20 @@ function DashboardPage() {
   const [repairingVariantsPhotoId, setRepairingVariantsPhotoId] = useState<
     string | null
   >(null);
-
   const [variantRepairWarnings, setVariantRepairWarnings] = useState<
     Record<string, string>
   >({});
+  const [updatingEventStatusId, setUpdatingEventStatusId] = useState<
+    string | null
+  >(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedEventCount = events.filter(
+    (eventRecord) => eventRecord.status === "archived",
+  ).length;
+  const activeEvents = events.filter(
+    (eventRecord) => eventRecord.status !== "archived",
+  );
+  const displayedEvents = showArchived ? events : activeEvents;
 
   const loadEvents = useCallback(async (): Promise<void> => {
     setIsLoading(true);
@@ -846,6 +861,53 @@ function DashboardPage() {
     }
   }
 
+  async function handleSetEventStatus(
+    eventRecord: EventRecord,
+    status: GalleryStatus,
+  ): Promise<void> {
+    if (status === "archived" && eventRecord.status !== "archived") {
+      const shouldArchive = window.confirm(
+        `Archive "${eventRecord.title}"? Its public gallery will become unavailable.`,
+      );
+
+      if (!shouldArchive) {
+        return;
+      }
+    }
+
+    setUpdatingEventStatusId(eventRecord.id);
+    setError(null);
+
+    try {
+      const response = await fetchJson<SetEventStatusResponse>(
+        `/api/admin/events/${encodeURIComponent(eventRecord.id)}/status`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            status,
+          }),
+        },
+      );
+
+      setEvents((currentEvents) =>
+        currentEvents.map((currentEvent) =>
+          currentEvent.id === eventRecord.id ? response.event : currentEvent,
+        ),
+      );
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to update the gallery status.",
+      );
+    } finally {
+      setUpdatingEventStatusId(null);
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -853,7 +915,9 @@ function DashboardPage() {
           PickPic
         </a>
 
-        <span className="environment-badge">Local development</span>
+        {import.meta.env.DEV && (
+          <span className="environment-badge">Local development</span>
+        )}
       </header>
 
       <main className="dashboard">
@@ -910,7 +974,7 @@ function DashboardPage() {
         )}
 
         <EditingQueue
-          events={events}
+          events={activeEvents}
           photosByEvent={photosByEvent}
           updatingWorkflowPhotoId={updatingWorkflowPhotoId}
           clearingHeartsPhotoId={clearingHeartsPhotoId}
@@ -927,29 +991,54 @@ function DashboardPage() {
               <h2>Events</h2>
             </div>
 
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => void loadEvents()}
-              disabled={isLoading}
-            >
-              {isLoading ? "Refreshing…" : "Refresh"}
-            </button>
+            <div className="section-actions">
+              {archivedEventCount > 0 && (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() =>
+                    setShowArchived((currentValue) => !currentValue)
+                  }
+                >
+                  {showArchived
+                    ? "Hide archived"
+                    : `Show archived (${archivedEventCount})`}
+                </button>
+              )}
+
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void loadEvents()}
+                disabled={isLoading}
+              >
+                {isLoading ? "Refreshing…" : "Refresh"}
+              </button>
+            </div>
           </div>
 
           <div aria-live="polite">
-            {isLoading && events.length === 0 ? (
+            {isLoading && displayedEvents.length === 0 ? (
               <div className="empty-state">
                 <h3>Loading events…</h3>
               </div>
-            ) : events.length === 0 ? (
+            ) : displayedEvents.length === 0 ? (
               <div className="empty-state">
-                <h3>No events yet</h3>
-                <p>Create your first PickPic gallery above.</p>
+                <h3>
+                  {archivedEventCount > 0 && !showArchived
+                    ? "No active events"
+                    : "No events yet"}
+                </h3>
+
+                <p>
+                  {archivedEventCount > 0 && !showArchived
+                    ? "Your remaining events are archived. Use “Show archived” to view or restore them."
+                    : "Create your first PickPic gallery above."}
+                </p>
               </div>
             ) : (
               <div className="event-grid">
-                {events.map((eventRecord) => {
+                {displayedEvents.map((eventRecord) => {
                   const shareUrl = `${PUBLIC_APP_ORIGIN}/g/${eventRecord.shareToken}`;
                   const wasCopied = copiedEventId === eventRecord.id;
                   const isUploading = uploadingEventId === eventRecord.id;
@@ -986,6 +1075,8 @@ function DashboardPage() {
                       repairingVariantsPhotoId={repairingVariantsPhotoId}
                       variantRepairWarnings={variantRepairWarnings}
                       handleRepairPhotoVariants={handleRepairPhotoVariants}
+                      updatingEventStatusId={updatingEventStatusId}
+                      handleSetEventStatus={handleSetEventStatus}
                     />
                   );
                 })}
