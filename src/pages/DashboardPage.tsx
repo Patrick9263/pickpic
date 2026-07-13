@@ -1022,8 +1022,17 @@ function DashboardPage() {
               </div>
             ) : displayedEvents.length === 0 ? (
               <div className="empty-state">
-                <h3>No events yet</h3>
-                <p>Create your first PickPic gallery above.</p>
+                <h3>
+                  {archivedEventCount > 0 && !showArchived
+                    ? "No active events"
+                    : "No events yet"}
+                </h3>
+
+                <p>
+                  {archivedEventCount > 0 && !showArchived
+                    ? "Your remaining events are archived. Use “Show archived” to view or restore them."
+                    : "Create your first PickPic gallery above."}
+                </p>
               </div>
             ) : (
               <div className="event-grid">

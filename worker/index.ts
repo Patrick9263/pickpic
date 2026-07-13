@@ -570,17 +570,15 @@ async function requireOpenGallery(
     .bind(shareToken)
     .first<GalleryStatusRow>();
 
-  if (!event) {
+  if (!event || (event.status !== "ready" && event.status !== "completed")) {
     return jsonResponse({ error: "Gallery not found." }, 404);
   }
 
-  if (event.status !== "ready") {
+  if (event.status === "completed") {
     return jsonResponse(
       {
         error:
-          event.status === "completed"
-            ? "This gallery is closed and no longer accepts edit requests or comments."
-            : "This gallery is unavailable.",
+          "This gallery is closed and no longer accepts edit requests or comments.",
       },
       409,
     );
