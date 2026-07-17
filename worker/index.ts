@@ -1,3 +1,4 @@
+import { downloadZip } from "client-zip";
 import { requireAdminAccess, type AccessEnvironment } from "./access.ts";
 
 interface CreateEventBody {
@@ -235,6 +236,23 @@ interface StoredVariantRow {
   storageKey: string;
 }
 
+interface DownloadGalleryRow {
+  id: string;
+  title: string;
+  status: string;
+}
+
+interface DownloadPhotoRow {
+  id: string;
+  finalStorageKey: string;
+  finalOriginalFilename: string;
+  finalByteSize: number;
+  finalUploadedAt: string;
+  capturedAt: string | null;
+  createdAt: string;
+}
+
+const MAX_EXPLICIT_DOWNLOAD_PHOTOS = 100;
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
@@ -247,6 +265,54 @@ function chunkArray<T>(values: readonly T[], chunkSize: number): T[][] {
     chunks.push(values.slice(index, index + chunkSize));
   }
   return chunks;
+}
+
+function sanitizeZipEntryName(filename: string): string {
+  const sanitized = Array.from(filename)
+    .filter((character) => {
+      const characterCode = character.charCodeAt(0);
+
+      return characterCode > 0x1f && characterCode !== 0x7f;
+    })
+    .join("")
+    .replace(/[\\/]/g, "-")
+    .trim();
+
+  return sanitized || "photo.jpg";
+}
+
+function createUniqueZipEntryNames(filenames: string[]): string[] {
+  const usedNames = new Set<string>();
+
+  return filenames.map((filename) => {
+    const sanitized = sanitizeZipEntryName(filename);
+    const dotIndex = sanitized.lastIndexOf(".");
+    const hasExtension = dotIndex > 0;
+
+    const baseName = hasExtension ? sanitized.slice(0, dotIndex) : sanitized;
+    const extension = hasExtension ? sanitized.slice(dotIndex) : "";
+
+    let candidate = sanitized;
+    let suffix = 2;
+
+    while (usedNames.has(candidate.toLowerCase())) {
+      candidate = `${baseName} (${suffix})${extension}`;
+      suffix += 1;
+    }
+
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  });
+}
+
+function createArchiveFilename(title: string): string {
+  const sanitizedTitle = title
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80)
+    .toLowerCase();
+
+  return `${sanitizedTitle || "pickpic-gallery"}-finals.zip`;
 }
 
 function isValidCapturedAt(value: string): boolean {
@@ -2652,6 +2718,217 @@ async function getPhotoVariantImage(
   return getStoredJpeg(env, variant.storageKey);
 }
 
+async function downloadGalleryFinals(
+  request: Request,
+  env: Env,
+  shareToken: string,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const scope = url.searchParams.get("scope");
+  const photoIdsParameter = url.searchParams.get("photoIds");
+
+  if (
+    (scope !== null && photoIdsParameter !== null) ||
+    (scope === null && photoIdsParameter === null)
+  ) {
+    return jsonResponse(
+      {
+        error: "Provide either a download scope or a list of photo IDs.",
+      },
+      400,
+    );
+  }
+
+  if (scope !== null && scope !== "all" && scope !== "liked") {
+    return jsonResponse(
+      { error: "The download scope must be all or liked." },
+      400,
+    );
+  }
+
+  const event = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        title,
+        status
+      FROM events
+      WHERE share_token = ?
+    `,
+  )
+    .bind(shareToken)
+    .first<DownloadGalleryRow>();
+
+  if (!event || (event.status !== "ready" && event.status !== "completed")) {
+    return jsonResponse({ error: "Gallery not found." }, 404);
+  }
+
+  let photoRows: DownloadPhotoRow[];
+
+  const basePhotoSelection = `
+    SELECT
+      p.id,
+      p.final_storage_key AS finalStorageKey,
+      p.final_original_filename AS finalOriginalFilename,
+      p.final_byte_size AS finalByteSize,
+      p.final_uploaded_at AS finalUploadedAt,
+      p.captured_at AS capturedAt,
+      p.created_at AS createdAt
+    FROM photos p
+  `;
+
+  const finalPhotoConditions = `
+    p.event_id = ?
+    AND p.final_storage_key IS NOT NULL
+    AND p.final_original_filename IS NOT NULL
+    AND p.final_byte_size IS NOT NULL
+    AND p.final_uploaded_at IS NOT NULL
+  `;
+
+  const photoOrdering = `
+    ORDER BY
+      COALESCE(p.captured_at, p.created_at) ASC,
+      p.created_at ASC
+  `;
+
+  if (scope === "all") {
+    const result = await env.DB.prepare(
+      `
+        ${basePhotoSelection}
+        WHERE ${finalPhotoConditions}
+        ${photoOrdering}
+      `,
+    )
+      .bind(event.id)
+      .all<DownloadPhotoRow>();
+
+    photoRows = result.results;
+  } else if (scope === "liked") {
+    const result = await env.DB.prepare(
+      `
+        ${basePhotoSelection}
+        WHERE ${finalPhotoConditions}
+          AND EXISTS (
+            SELECT 1
+            FROM hearts h
+            WHERE h.photo_id = p.id
+          )
+        ${photoOrdering}
+      `,
+    )
+      .bind(event.id)
+      .all<DownloadPhotoRow>();
+
+    photoRows = result.results;
+  } else {
+    const photoIds = Array.from(
+      new Set(
+        (photoIdsParameter ?? "")
+          .split(",")
+          .map((photoId) => photoId.trim())
+          .filter(Boolean),
+      ),
+    );
+
+    if (
+      photoIds.length === 0 ||
+      photoIds.length > MAX_EXPLICIT_DOWNLOAD_PHOTOS
+    ) {
+      return jsonResponse(
+        {
+          error: `Select between 1 and ${MAX_EXPLICIT_DOWNLOAD_PHOTOS} individual photos.`,
+        },
+        400,
+      );
+    }
+
+    if (
+      photoIds.some(
+        (photoId) => photoId.length > 100 || !/^[a-z0-9-]+$/i.test(photoId),
+      )
+    ) {
+      return jsonResponse({ error: "One or more photo IDs are invalid." }, 400);
+    }
+
+    const placeholders = photoIds.map(() => "?").join(", ");
+
+    const result = await env.DB.prepare(
+      `
+        ${basePhotoSelection}
+        WHERE ${finalPhotoConditions}
+          AND p.id IN (${placeholders})
+        ${photoOrdering}
+      `,
+    )
+      .bind(event.id, ...photoIds)
+      .all<DownloadPhotoRow>();
+
+    photoRows = result.results;
+
+    if (photoRows.length !== photoIds.length) {
+      return jsonResponse(
+        {
+          error:
+            "One or more selected photos are unavailable or do not have a final image.",
+        },
+        400,
+      );
+    }
+  }
+
+  if (photoRows.length === 0) {
+    return jsonResponse(
+      { error: "No final photos are available to download." },
+      404,
+    );
+  }
+
+  const zipEntryNames = createUniqueZipEntryNames(
+    photoRows.map((photo) => photo.finalOriginalFilename),
+  );
+
+  async function* createZipInputs() {
+    for (const [index, photo] of photoRows.entries()) {
+      const object = await env.pickpic_photos.get(photo.finalStorageKey);
+
+      if (!object) {
+        throw new Error(
+          `Final image ${photo.id} could not be found in storage.`,
+        );
+      }
+
+      yield {
+        name: zipEntryNames[index],
+        lastModified: new Date(photo.finalUploadedAt),
+        input: object.body,
+      };
+    }
+  }
+
+  const zipResponse = downloadZip(createZipInputs(), {
+    metadata: photoRows.map((photo, index) => ({
+      name: zipEntryNames[index],
+      size: Number(photo.finalByteSize),
+      lastModified: new Date(photo.finalUploadedAt),
+    })),
+  });
+
+  const headers = new Headers(zipResponse.headers);
+
+  headers.set("Content-Type", "application/zip");
+  headers.set(
+    "Content-Disposition",
+    `attachment; filename="${createArchiveFilename(event.title)}"`,
+  );
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+
+  return new Response(zipResponse.body, {
+    status: 200,
+    headers,
+  });
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
@@ -2863,6 +3140,20 @@ export default {
       const photoId = decodeURIComponent(galleryCommentsMatch[2]);
 
       return addComment(request, env, shareToken, photoId);
+    }
+
+    const galleryDownloadMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/download$/,
+    );
+
+    if (galleryDownloadMatch) {
+      if (request.method !== "GET") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const shareToken = decodeURIComponent(galleryDownloadMatch[1]);
+
+      return downloadGalleryFinals(request, env, shareToken);
     }
 
     const publicGalleryMatch = url.pathname.match(

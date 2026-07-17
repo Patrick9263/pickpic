@@ -39,6 +39,9 @@ interface GalleryPageProps {
 
 type GalleryGrouping = "all" | "day" | "location";
 
+type GalleryFilter = "all" | "liked" | "finals";
+
+const MAX_EXPLICIT_DOWNLOAD_PHOTOS = 100;
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
 
@@ -215,14 +218,47 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [selectedVersion, setSelectedVersion] =
     useState<PhotoVersion>("original");
   const [grouping, setGrouping] = useState<GalleryGrouping>("all");
-  const photoGroups = useMemo(
-    () => (gallery ? buildGalleryGroups(gallery.photos, grouping) : []),
-    [gallery, grouping],
+  const [filter, setFilter] = useState<GalleryFilter>("all");
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(
+    () => new Set(),
   );
+  const filteredPhotos = useMemo(() => {
+    if (!gallery) {
+      return [];
+    }
+
+    switch (filter) {
+      case "liked":
+        return gallery.photos.filter((photo) => photo.heartCount > 0);
+
+      case "finals":
+        return gallery.photos.filter((photo) => photo.finalPhoto !== null);
+
+      default:
+        return gallery.photos;
+    }
+  }, [filter, gallery]);
+
+  const photoGroups = useMemo(
+    () => buildGalleryGroups(filteredPhotos, grouping),
+    [filteredPhotos, grouping],
+  );
+
   const visiblePhotos = useMemo(
     () => photoGroups.flatMap((group) => group.photos),
     [photoGroups],
   );
+
+  const downloadableVisiblePhotos = useMemo(
+    () => visiblePhotos.filter((photo) => photo.finalPhoto !== null),
+    [visiblePhotos],
+  );
+
+  const allVisibleSelected =
+    downloadableVisiblePhotos.length > 0 &&
+    downloadableVisiblePhotos.every((photo) => selectedPhotoIds.has(photo.id));
+
   const priorityPhotoIds = useMemo(
     () => new Set(visiblePhotos.slice(0, 3).map((photo) => photo.id)),
     [visiblePhotos],
@@ -684,6 +720,80 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     showPhotoAtIndex(selectedPhotoIndex + 1);
   }
 
+  function enterSelectionMode(): void {
+    setSelectedPhotoId(null);
+    setSelectedPhotoIds(new Set());
+    setActionError(null);
+    setIsSelecting(true);
+  }
+
+  function exitSelectionMode(): void {
+    setSelectedPhotoIds(new Set());
+    setActionError(null);
+    setIsSelecting(false);
+  }
+
+  function togglePhotoSelection(photo: GalleryPhotoRecord): void {
+    if (!photo.finalPhoto) {
+      return;
+    }
+
+    setSelectedPhotoIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      if (nextIds.has(photo.id)) {
+        nextIds.delete(photo.id);
+      } else {
+        nextIds.add(photo.id);
+      }
+
+      return nextIds;
+    });
+  }
+
+  function selectAllVisiblePhotos(): void {
+    setSelectedPhotoIds(
+      new Set(downloadableVisiblePhotos.map((photo) => photo.id)),
+    );
+  }
+
+  function clearSelectedPhotos(): void {
+    setSelectedPhotoIds(new Set());
+  }
+
+  function downloadSelectedPhotos(): void {
+    if (selectedPhotoIds.size === 0) {
+      setActionError("Select at least one final photo to download.");
+      return;
+    }
+
+    const searchParams = new URLSearchParams();
+
+    if (allVisibleSelected) {
+      searchParams.set("scope", filter === "liked" ? "liked" : "all");
+    } else {
+      if (selectedPhotoIds.size > MAX_EXPLICIT_DOWNLOAD_PHOTOS) {
+        setActionError(
+          `Select no more than ${MAX_EXPLICIT_DOWNLOAD_PHOTOS} individual photos, or use Select all.`,
+        );
+        return;
+      }
+
+      searchParams.set("photoIds", Array.from(selectedPhotoIds).join(","));
+    }
+
+    const link = document.createElement("a");
+
+    link.href =
+      `/api/galleries/${encodeURIComponent(shareToken)}/download?` +
+      searchParams.toString();
+    link.download = "";
+
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }
+
   useEffect(() => {
     if (selectedPhotoIndex < 0) {
       return;
@@ -749,8 +859,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           <h1>{gallery.event.title}</h1>
 
           <p>
-            {gallery.photos.length}{" "}
-            {gallery.photos.length === 1 ? "photo" : "photos"}
+            {filter === "all"
+              ? `${gallery.photos.length} ${
+                  gallery.photos.length === 1 ? "photo" : "photos"
+                }`
+              : `${filteredPhotos.length} of ${gallery.photos.length} photos`}
           </p>
 
           <p className="gallery-instructions">
@@ -759,28 +872,77 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               : "This gallery is closed. Photos and final downloads remain available, but new edit requests and comments are disabled."}
           </p>
 
-          <div
-            className="gallery-grouping-controls"
-            role="group"
-            aria-label="Group photos"
-          >
-            {(
-              [
-                ["all", "All"],
-                ["day", "Day"],
-                ["location", "Location"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={grouping === value ? "gallery-grouping-active" : ""}
-                aria-pressed={grouping === value}
-                onClick={() => setGrouping(value)}
+          <div className="gallery-toolbar">
+            <div className="gallery-toolbar-section">
+              <span className="gallery-toolbar-label">Show</span>
+
+              <div
+                className="gallery-filter-controls"
+                aria-label="Filter gallery photos"
               >
-                {label}
-              </button>
-            ))}
+                {(
+                  [
+                    ["all", "All"],
+                    ["liked", "Liked"],
+                    ["finals", "Finals"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    className={
+                      filter === value ? "gallery-filter-active" : undefined
+                    }
+                    key={value}
+                    type="button"
+                    aria-pressed={filter === value}
+                    onClick={() => setFilter(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="gallery-toolbar-section">
+              <span className="gallery-toolbar-label">Group</span>
+
+              <div
+                className="gallery-grouping-controls"
+                aria-label="Group gallery photos"
+              >
+                {(
+                  [
+                    ["all", "All"],
+                    ["day", "Day"],
+                    ["location", "Location"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    className={
+                      grouping === value ? "gallery-grouping-active" : undefined
+                    }
+                    key={value}
+                    type="button"
+                    aria-pressed={grouping === value}
+                    onClick={() => setGrouping(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              className={[
+                "gallery-select-button",
+                isSelecting ? "gallery-select-button-cancel" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              type="button"
+              onClick={isSelecting ? exitSelectionMode : enterSelectionMode}
+            >
+              {isSelecting ? "Cancel" : "Select"}
+            </button>
           </div>
         </div>
       </header>
@@ -806,11 +968,62 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </div>
         )}
 
+        {isSelecting && (
+          <div className="gallery-selection-bar">
+            <div className="gallery-selection-summary">
+              <strong>
+                {selectedPhotoIds.size}{" "}
+                {selectedPhotoIds.size === 1 ? "photo" : "photos"} selected
+              </strong>
+
+              <span>Only final photos can be downloaded.</span>
+            </div>
+
+            <div className="gallery-selection-actions">
+              <button
+                className="gallery-select-all-button"
+                type="button"
+                disabled={downloadableVisiblePhotos.length === 0}
+                onClick={
+                  allVisibleSelected
+                    ? clearSelectedPhotos
+                    : selectAllVisiblePhotos
+                }
+              >
+                {allVisibleSelected
+                  ? "Clear selection"
+                  : `Select all (${downloadableVisiblePhotos.length})`}
+              </button>
+
+              <button
+                className="gallery-download-button"
+                type="button"
+                disabled={selectedPhotoIds.size === 0}
+                onClick={downloadSelectedPhotos}
+              >
+                Download
+                {selectedPhotoIds.size > 0 ? ` (${selectedPhotoIds.size})` : ""}
+              </button>
+            </div>
+          </div>
+        )}
+
         {gallery.photos.length === 0 ? (
           <div className="gallery-empty">
             <h2>No photos yet</h2>
-
             <p>The photographer is still preparing this gallery.</p>
+          </div>
+        ) : filteredPhotos.length === 0 ? (
+          <div className="gallery-empty">
+            <h2>
+              {filter === "liked" ? "No liked photos" : "No final photos"}
+            </h2>
+
+            <p>
+              {filter === "liked"
+                ? "No photos have been liked yet."
+                : "The photographer has not uploaded any final photos yet."}
+            </p>
           </div>
         ) : (
           <div className="gallery-groups">
@@ -841,6 +1054,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   toggleHeart={toggleHeart}
                   priorityPhotoIds={priorityPhotoIds}
                   interactionsEnabled={interactionsEnabled}
+                  isSelecting={isSelecting}
+                  selectedPhotoIds={selectedPhotoIds}
+                  togglePhotoSelection={togglePhotoSelection}
                 />
               </section>
             ))}
