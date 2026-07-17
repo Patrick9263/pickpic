@@ -9,6 +9,9 @@ type GalleryGridProps = {
   toggleHeart(photo: GalleryPhotoRecord): Promise<void>;
   priorityPhotoIds: Set<string>;
   interactionsEnabled: boolean;
+  isSelecting: boolean;
+  selectedPhotoIds: Set<string>;
+  togglePhotoSelection(photo: GalleryPhotoRecord): void;
 };
 
 function GalleryGrid({
@@ -18,6 +21,9 @@ function GalleryGrid({
   toggleHeart,
   priorityPhotoIds,
   interactionsEnabled,
+  isSelecting,
+  selectedPhotoIds,
+  togglePhotoSelection,
 }: GalleryGridProps) {
   const [loadedPhotoIds, setLoadedPhotoIds] = useState<Set<string>>(
     () => new Set(),
@@ -32,6 +38,8 @@ function GalleryGrid({
       {group.photos.map((photo) => {
         const isToggling = togglingPhotoId === photo.id;
         const isPriority = priorityPhotoIds.has(photo.id);
+        const isSelected = selectedPhotoIds.has(photo.id);
+        const canSelect = photo.finalPhoto !== null;
         const displayedThumbnail = photo.finalPhoto
           ? photo.finalPhoto.variants.thumbnail
           : photo.variants.thumbnail;
@@ -67,7 +75,16 @@ function GalleryGrid({
         }
 
         return (
-          <article className="gallery-photo-card" key={photo.id}>
+          <article
+            className={[
+              "gallery-photo-card",
+              isSelected ? "gallery-photo-card-selected" : "",
+              isSelecting && !canSelect ? "gallery-photo-card-unavailable" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            key={photo.id}
+          >
             <button
               className="gallery-photo-button"
               type="button"
@@ -78,13 +95,28 @@ function GalleryGrid({
                   return;
                 }
 
+                if (isSelecting) {
+                  if (canSelect) {
+                    togglePhotoSelection(photo);
+                  }
+
+                  return;
+                }
+
                 openPhoto(photo);
               }}
               aria-label={
                 hasFailed
                   ? `Retry loading ${photo.originalFilename}`
-                  : `Open ${photo.originalFilename}`
+                  : isSelecting
+                    ? canSelect
+                      ? `${isSelected ? "Deselect" : "Select"} ${
+                          photo.originalFilename
+                        }`
+                      : `${photo.originalFilename} does not have a final image`
+                    : `Open ${photo.originalFilename}`
               }
+              aria-pressed={isSelecting ? isSelected : undefined}
             >
               <div
                 className={`gallery-image-frame ${
@@ -141,30 +173,49 @@ function GalleryGrid({
               </div>
             </button>
 
+            {isSelecting && (
+              <span
+                className={[
+                  "gallery-selection-indicator",
+                  isSelected ? "gallery-selection-indicator-selected" : "",
+                  !canSelect ? "gallery-selection-indicator-unavailable" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-hidden="true"
+              >
+                {isSelected ? "✓" : !canSelect ? "—" : ""}
+              </span>
+            )}
+
             {photo.finalPhoto && (
               <span className="gallery-final-badge">Final</span>
             )}
-            <button
-              className={`gallery-heart-button ${
-                photo.viewerHearted ? "gallery-heart-button-active" : ""
-              }`}
-              type="button"
-              disabled={!interactionsEnabled || isToggling}
-              onClick={() => void toggleHeart(photo)}
-              aria-pressed={photo.viewerHearted}
-              aria-label={
-                !interactionsEnabled
-                  ? `Gallery closed; ${photo.heartCount} edit requests for ${photo.originalFilename}`
-                  : photo.viewerHearted
-                    ? `Remove edit request for ${photo.originalFilename}`
-                    : `Request an edit of ${photo.originalFilename}`
-              }
-              title={interactionsEnabled ? undefined : "This gallery is closed"}
-            >
-              <span aria-hidden="true">♥</span>
+            {!isSelecting && (
+              <button
+                className={`gallery-heart-button ${
+                  photo.viewerHearted ? "gallery-heart-button-active" : ""
+                }`}
+                type="button"
+                disabled={!interactionsEnabled || isToggling}
+                onClick={() => void toggleHeart(photo)}
+                aria-pressed={photo.viewerHearted}
+                aria-label={
+                  !interactionsEnabled
+                    ? `Gallery closed; ${photo.heartCount} edit requests for ${photo.originalFilename}`
+                    : photo.viewerHearted
+                      ? `Remove edit request for ${photo.originalFilename}`
+                      : `Request an edit of ${photo.originalFilename}`
+                }
+                title={
+                  interactionsEnabled ? undefined : "This gallery is closed"
+                }
+              >
+                <span aria-hidden="true">♥</span>
 
-              <span>{photo.heartCount}</span>
-            </button>
+                <span>{photo.heartCount}</span>
+              </button>
+            )}
           </article>
         );
       })}
