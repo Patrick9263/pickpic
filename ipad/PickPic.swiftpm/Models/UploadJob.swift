@@ -21,8 +21,11 @@ struct UploadJob:
     let createdAt: Date
     var updatedAt: Date
     
-    var preparedAt: Date?
-    var errorMessage: String?
+    var preparedAt: Date? = nil
+    var errorMessage: String? = nil
+    
+    var conversionPreview: ConversionPreview? = nil
+    var conversionErrorMessage: String? = nil
     
     var photoCount: Int {
         photos.count

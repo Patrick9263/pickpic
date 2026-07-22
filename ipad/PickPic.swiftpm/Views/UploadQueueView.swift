@@ -17,14 +17,23 @@ struct UploadQueueView: View {
         List {
             ForEach(eventJobs) { job in
                 UploadJobRow(
-                    job: job
-                ) {
-                    Task {
-                        await uploadQueue.prepare(
-                            jobID: job.id
-                        )
+                    job: job,
+                    onPrepare: {
+                        Task {
+                            await uploadQueue.prepare(
+                                jobID: job.id
+                            )
+                        }
+                    },
+                    onConvert: {
+                        Task {
+                            await uploadQueue
+                                .convertTestPreview(
+                                    jobID: job.id
+                                )
+                        }
                     }
-                }
+                )
             }
             .onDelete(perform: deleteJobs)
         }
@@ -83,15 +92,15 @@ struct UploadQueueView: View {
             !selectedJobs.contains(
                 where: { job in
                     job.stage == .preparing
+                    || job.stage == .converting
                 }
             )
         else {
             deleteErrorMessage =
                 """
-                Wait for folder preparation to finish \
+                Wait for the current operation to finish \
                 before deleting this job.
                 """
-            
             showingDeleteError = true
             return
         }
@@ -116,6 +125,7 @@ struct UploadQueueView: View {
 private struct UploadJobRow: View {
     let job: UploadJob
     let onPrepare: () -> Void
+    let onConvert: () -> Void
     
     @State private var folderIsAccessible:
     Bool?
@@ -210,10 +220,75 @@ private struct UploadJobRow: View {
             .foregroundStyle(.secondary)
             
         case .prepared:
-            Label(
-                "To Edit and Edited folders are ready",
-                systemImage: "checkmark.circle"
-            )
+            if let preview = job.conversionPreview {
+                Label(
+                """
+                Test JPEG: \(preview.pixelWidth) × \
+                \(preview.pixelHeight)
+                """,
+                systemImage: "photo"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                
+                NavigationLink {
+                    ConversionPreviewView(
+                        job: job
+                    )
+                } label: {
+                    Label(
+                        "View Test Preview",
+                        systemImage:
+                            "photo.on.rectangle"
+                    )
+                }
+                
+                Button {
+                    onConvert()
+                } label: {
+                    Label(
+                        "Reconvert Test Photo",
+                        systemImage:
+                            "arrow.clockwise"
+                    )
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Label(
+                    "To Edit and Edited folders are ready",
+                    systemImage:
+                        "checkmark.circle"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                
+                Button {
+                    onConvert()
+                } label: {
+                    Label(
+                        "Convert Test Photo",
+                        systemImage:
+                            "photo.badge.arrow.down"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            
+            if let errorMessage =
+                job.conversionErrorMessage {
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
+            
+        case .converting:
+            HStack(spacing: 10) {
+                ProgressView()
+                
+                Text(
+                    "Converting the first photo…"
+                )
+            }
             .font(.subheadline)
             .foregroundStyle(.secondary)
             
@@ -235,8 +310,7 @@ private struct UploadJobRow: View {
             }
             .buttonStyle(.bordered)
             
-        case .converting,
-                .uploading,
+        case .uploading,
                 .completed:
             EmptyView()
         }
