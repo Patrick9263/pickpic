@@ -25,10 +25,18 @@ struct UploadQueueView: View {
                             )
                         }
                     },
-                    onConvert: {
+                    onConvertTest: {
                         Task {
                             await uploadQueue
                                 .convertTestPreview(
+                                    jobID: job.id
+                                )
+                        }
+                    },
+                    onConvertAll: {
+                        Task {
+                            await uploadQueue
+                                .convertAllPhotos(
                                     jobID: job.id
                                 )
                         }
@@ -93,6 +101,7 @@ struct UploadQueueView: View {
                 where: { job in
                     job.stage == .preparing
                     || job.stage == .converting
+                    || job.stage == .uploading
                 }
             )
         else {
@@ -125,7 +134,8 @@ struct UploadQueueView: View {
 private struct UploadJobRow: View {
     let job: UploadJob
     let onPrepare: () -> Void
-    let onConvert: () -> Void
+    let onConvertTest: () -> Void
+    let onConvertAll: () -> Void
     
     @State private var folderIsAccessible:
     Bool?
@@ -220,7 +230,15 @@ private struct UploadJobRow: View {
             .foregroundStyle(.secondary)
             
         case .prepared:
-            if let preview = job.conversionPreview {
+            Label(
+                "Workflow folders are ready",
+                systemImage: "checkmark.circle"
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            
+            if let preview =
+                job.conversionPreview {
                 Label(
                 """
                 Test JPEG: \(preview.pixelWidth) × \
@@ -244,7 +262,7 @@ private struct UploadJobRow: View {
                 }
                 
                 Button {
-                    onConvert()
+                    onConvertTest()
                 } label: {
                     Label(
                         "Reconvert Test Photo",
@@ -254,16 +272,8 @@ private struct UploadJobRow: View {
                 }
                 .buttonStyle(.bordered)
             } else {
-                Label(
-                    "To Edit and Edited folders are ready",
-                    systemImage:
-                        "checkmark.circle"
-                )
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                
                 Button {
-                    onConvert()
+                    onConvertTest()
                 } label: {
                     Label(
                         "Convert Test Photo",
@@ -271,8 +281,19 @@ private struct UploadJobRow: View {
                             "photo.badge.arrow.down"
                     )
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
             }
+            
+            Button {
+                onConvertAll()
+            } label: {
+                Label(
+                    "Convert All Photos",
+                    systemImage:
+                        "rectangle.stack.badge.play"
+                )
+            }
+            .buttonStyle(.borderedProminent)
             
             if let errorMessage =
                 job.conversionErrorMessage {
@@ -282,15 +303,111 @@ private struct UploadJobRow: View {
             }
             
         case .converting:
-            HStack(spacing: 10) {
-                ProgressView()
+            VStack(
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ProgressView(
+                    value:
+                        Double(
+                            job.conversionProcessedCount
+                        ),
+                    total:
+                        Double(
+                            max(job.photoCount, 1)
+                        )
+                )
                 
                 Text(
-                    "Converting the first photo…"
+                """
+                \(job.conversionProcessedCount) of \
+                \(job.photoCount) photos converted
+                """
+                )
+                .font(.subheadline)
+                
+                if let filename =
+                    job.conversionCurrentFilename {
+                    Text(filename)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                
+                Text(
+                """
+                Reading metadata, hashing the original, \
+                and creating the proof JPEG…
+                """
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            
+        case .readyToUpload:
+            let capturedAtCount =
+            job.preparedPhotos.filter { photo in
+                photo.metadata.capturedAt != nil
+            }
+            .count
+            
+            let locationCount =
+            job.preparedPhotos.filter { photo in
+                photo.metadata.latitude != nil
+                && photo.metadata.longitude
+                != nil
+            }
+            .count
+            
+            Label(
+            """
+            \(job.preparedPhotos.count) JPEGs are ready
+            """,
+            systemImage:
+                "tray.and.arrow.up.fill"
+            )
+            .font(.headline)
+            
+            LabeledContent(
+                "Prepared size",
+                value:
+                    ByteCountFormatter.string(
+                        fromByteCount:
+                            job.preparedByteCount,
+                        countStyle: .file
+                    )
+            )
+            
+            LabeledContent(
+                "Capture times",
+                value:
+                    "\(capturedAtCount) of \(job.photoCount)"
+            )
+            
+            LabeledContent(
+                "Locations",
+                value:
+                    "\(locationCount) of \(job.photoCount)"
+            )
+            
+            Text(
+            """
+            SHA-256 has been calculated from each \
+            original source file.
+            """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            
+            Button {
+                onConvertAll()
+            } label: {
+                Label(
+                    "Reconvert All Photos",
+                    systemImage: "arrow.clockwise"
                 )
             }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .buttonStyle(.bordered)
             
         case .failed:
             if let errorMessage =
@@ -310,9 +427,18 @@ private struct UploadJobRow: View {
             }
             .buttonStyle(.bordered)
             
-        case .uploading,
-                .completed:
-            EmptyView()
+        case .uploading:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Uploading…")
+            }
+            
+        case .completed:
+            Label(
+                "Upload completed",
+                systemImage:
+                    "checkmark.circle.fill"
+            )
         }
     }
     
