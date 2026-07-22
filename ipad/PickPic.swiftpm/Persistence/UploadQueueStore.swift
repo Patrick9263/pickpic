@@ -43,6 +43,10 @@ final class UploadQueueStore: ObservableObject {
     func remove(
         jobIDs: Set<UUID>
     ) throws {
+        let removedJobs = jobs.filter { job in
+            jobIDs.contains(job.id)
+        }
+        
         let updatedJobs = jobs.filter { job in
             !jobIDs.contains(job.id)
         }
@@ -51,6 +55,12 @@ final class UploadQueueStore: ObservableObject {
         
         jobs = updatedJobs
         loadErrorMessage = nil
+        
+        for job in removedJobs {
+            try? ImageConversionService.removePreview(
+                for: job.id
+            )
+        }
     }
     
     func prepare(
@@ -131,6 +141,84 @@ final class UploadQueueStore: ObservableObject {
         }
     }
     
+    func convertTestPreview(
+        jobID: UUID
+    ) async {
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.stage == .prepared
+        else {
+            return
+        }
+        
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .converting
+                job.conversionErrorMessage = nil
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            The conversion could not start: \
+            \(error.localizedDescription)
+            """
+            
+            return
+        }
+        
+        guard
+            let convertingJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+        
+        do {
+            let preview = try await Task.detached(
+                priority: .userInitiated
+            ) {
+                try ImageConversionService
+                    .createTestPreview(
+                        for: convertingJob
+                    )
+            }.value
+            
+            try updateJob(jobID) { job in
+                job.stage = .prepared
+                job.conversionPreview = preview
+                job.conversionErrorMessage = nil
+                job.updatedAt = preview.convertedAt
+            }
+        } catch {
+            let conversionError =
+            error.localizedDescription
+            
+            do {
+                try updateJob(jobID) { job in
+                    job.stage = .prepared
+                    job.conversionErrorMessage =
+                    conversionError
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                """
+                Conversion failed, and the job \
+                could not be saved: \
+                \(error.localizedDescription)
+                """
+            }
+        }
+    }
+    
     private func updateJob(
         _ jobID: UUID,
         change: (inout UploadJob) -> Void
@@ -176,17 +264,37 @@ final class UploadQueueStore: ObservableObject {
             
             for index in decodedJobs.indices {
                 switch decodedJobs[index].stage {
-                case .preparing,
-                        .converting,
-                        .uploading:
+                case .preparing:
                     decodedJobs[index].stage = .failed
                     decodedJobs[index].errorMessage =
                         """
-                        Processing was interrupted. \
+                        Folder preparation was interrupted. \
                         Try the job again.
                         """
-                    decodedJobs[index].updatedAt =
-                    Date()
+                    decodedJobs[index].updatedAt = Date()
+                    
+                    recoveredInterruptedJob = true
+                    
+                case .converting:
+                    decodedJobs[index].stage = .prepared
+                    decodedJobs[index]
+                        .conversionErrorMessage =
+                            """
+                            Image conversion was interrupted. \
+                            Try the conversion again.
+                            """
+                    decodedJobs[index].updatedAt = Date()
+                    
+                    recoveredInterruptedJob = true
+                    
+                case .uploading:
+                    decodedJobs[index].stage = .failed
+                    decodedJobs[index].errorMessage =
+                        """
+                        Uploading was interrupted. \
+                        Try the job again.
+                        """
+                    decodedJobs[index].updatedAt = Date()
                     
                     recoveredInterruptedJob = true
                     
