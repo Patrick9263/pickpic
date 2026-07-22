@@ -36,9 +36,12 @@ struct EventDetailView: View {
             
             Section("Photos") {
                 NavigationLink {
-                    PhotoImportPlaceholderView(event: event)
+                    PhotoImportView(event: event)
                 } label: {
-                    Label("Import Photos", systemImage: "photo.badge.plus")
+                    Label(
+                        "Import Photos",
+                        systemImage: "photo.badge.plus"
+                    )
                 }
                 
                 NavigationLink {
@@ -49,22 +52,6 @@ struct EventDetailView: View {
             }
         }
         .navigationTitle(event.title)
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct PhotoImportPlaceholderView: View {
-    let event: PickPicEvent
-    
-    var body: some View {
-        ContentUnavailableView(
-            "Import Photos",
-            systemImage: "photo.badge.plus",
-            description: Text(
-                "Photo selection for \(event.title) will be added next."
-            )
-        )
-        .navigationTitle("Import Photos")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
