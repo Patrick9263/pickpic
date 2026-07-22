@@ -3,7 +3,9 @@ import Foundation
 struct PickPicEvent: Identifiable, Hashable, Codable {
     enum Status: String, Codable, CaseIterable {
         case draft
+        case uploading
         case ready
+        case editing
         case completed
         case archived
         
@@ -11,10 +13,19 @@ struct PickPicEvent: Identifiable, Hashable, Codable {
             switch self {
             case .draft:
                 return "Draft"
+                
+            case .uploading:
+                return "Uploading"
+                
             case .ready:
                 return "Ready"
+                
+            case .editing:
+                return "Editing"
+                
             case .completed:
                 return "Completed"
+                
             case .archived:
                 return "Archived"
             }
@@ -24,10 +35,19 @@ struct PickPicEvent: Identifiable, Hashable, Codable {
             switch self {
             case .draft:
                 return "pencil"
+                
+            case .uploading:
+                return "arrow.up.circle"
+                
             case .ready:
                 return "checkmark.circle"
+                
+            case .editing:
+                return "slider.horizontal.3"
+                
             case .completed:
                 return "checkmark.seal"
+                
             case .archived:
                 return "archivebox"
             }
