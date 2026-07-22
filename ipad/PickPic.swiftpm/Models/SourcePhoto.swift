@@ -1,7 +1,17 @@
 import Foundation
 
-struct SourcePhoto: Identifiable, Hashable, Sendable {
-    enum Kind: String, Hashable, Sendable {
+struct SourcePhoto:
+    Identifiable,
+    Codable,
+    Hashable,
+    Sendable
+{
+    enum Kind:
+        String,
+        Codable,
+        Hashable,
+        Sendable
+    {
         case raw
         case jpeg
         
