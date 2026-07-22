@@ -25,8 +25,8 @@ enum APIClientError: LocalizedError {
             
         case .unexpectedResponse:
             return """
-            PickPic returned an unexpected response. Check the server address \
-            and Cloudflare Access policy.
+            PickPic returned a non-JSON response. Check the Cloudflare \
+            Access credentials and policy.
             """
             
         case let .server(statusCode, message):

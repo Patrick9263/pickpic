@@ -65,6 +65,23 @@ struct APIClient {
             )
         }
         
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField: "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard contentType.contains("application/json") else {
+            print(
+                "Unexpected events response:",
+                httpResponse.statusCode,
+                contentType
+            )
+            
+            throw APIClientError.unexpectedResponse
+        }
+        
         do {
             let responseBody = try decoder.decode(
                 EventListResponse.self,
@@ -73,67 +90,7 @@ struct APIClient {
             
             return responseBody.events
         } catch {
-            let contentType =
-            httpResponse.value(
-                forHTTPHeaderField: "Content-Type"
-            )
-            ?? "Missing"
-            
-            print("Events HTTP status:", httpResponse.statusCode)
-            print("Events Content-Type:", contentType)
-            
-            switch error {
-            case let DecodingError.keyNotFound(key, context):
-                let path = context.codingPath
-                    .map(\.stringValue)
-                    .joined(separator: ".")
-                
-                print(
-                    "Missing key:",
-                    key.stringValue,
-                    "at:",
-                    path
-                )
-                print("Details:", context.debugDescription)
-                
-            case let DecodingError.typeMismatch(type, context):
-                let path = context.codingPath
-                    .map(\.stringValue)
-                    .joined(separator: ".")
-                
-                print(
-                    "Type mismatch:",
-                    type,
-                    "at:",
-                    path
-                )
-                print("Details:", context.debugDescription)
-                
-            case let DecodingError.valueNotFound(type, context):
-                let path = context.codingPath
-                    .map(\.stringValue)
-                    .joined(separator: ".")
-                
-                print(
-                    "Missing value:",
-                    type,
-                    "at:",
-                    path
-                )
-                print("Details:", context.debugDescription)
-                
-            case let DecodingError.dataCorrupted(context):
-                let path = context.codingPath
-                    .map(\.stringValue)
-                    .joined(separator: ".")
-                
-                print("Corrupted data at:", path)
-                print("Details:", context.debugDescription)
-                
-            default:
-                print("Event decoding failed:", error)
-            }
-            
+            print("Event decoding failed:", error)
             throw APIClientError.invalidEventData
         }
     }
