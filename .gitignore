@@ -161,3 +161,12 @@ vite.config.ts.timestamp-*
 .dev.vars*
 !.dev.vars.example
 
+# Swift / Xcode
+**/.build/
+**/.swiftpm/xcode/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.ipa
+*.dSYM
+*.dSYM.zip
