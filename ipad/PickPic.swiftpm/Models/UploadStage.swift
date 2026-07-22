@@ -8,6 +8,7 @@ enum UploadStage:
 {
     case queued
     case preparing
+    case prepared
     case converting
     case uploading
     case completed
@@ -20,6 +21,9 @@ enum UploadStage:
             
         case .preparing:
             return "Preparing"
+            
+        case .prepared:
+            return "Ready to Convert"
             
         case .converting:
             return "Converting"
@@ -43,6 +47,9 @@ enum UploadStage:
         case .preparing:
             return "folder.badge.gearshape"
             
+        case .prepared:
+            return "checkmark.circle"
+            
         case .converting:
             return "photo.badge.arrow.down"
             
@@ -50,7 +57,7 @@ enum UploadStage:
             return "arrow.up.circle"
             
         case .completed:
-            return "checkmark.circle"
+            return "checkmark.circle.fill"
             
         case .failed:
             return "exclamationmark.triangle"

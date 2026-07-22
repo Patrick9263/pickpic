@@ -3,7 +3,8 @@ import Foundation
 
 @MainActor
 final class UploadQueueStore: ObservableObject {
-    @Published private(set) var jobs: [UploadJob] = []
+    @Published private(set)
+    var jobs: [UploadJob] = []
     
     @Published private(set)
     var loadErrorMessage: String?
@@ -52,6 +53,107 @@ final class UploadQueueStore: ObservableObject {
         loadErrorMessage = nil
     }
     
+    func prepare(
+        jobID: UUID
+    ) async {
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.stage == .queued
+                || currentJob.stage == .failed
+        else {
+            return
+        }
+        
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .preparing
+                job.errorMessage = nil
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                """
+                The upload job could not be updated: \
+                \(error.localizedDescription)
+                """
+            
+            return
+        }
+        
+        guard
+            let preparingJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+        
+        do {
+            let result = try await Task.detached(
+                priority: .userInitiated
+            ) {
+                try UploadPreparationService.prepare(
+                    job: preparingJob
+                )
+            }.value
+            
+            try updateJob(jobID) { job in
+                job.stage = .prepared
+                job.preparedAt = result.preparedAt
+                job.errorMessage = nil
+                job.updatedAt = result.preparedAt
+            }
+        } catch {
+            let preparationError =
+            error.localizedDescription
+            
+            do {
+                try updateJob(jobID) { job in
+                    job.stage = .failed
+                    job.errorMessage =
+                    preparationError
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                    """
+                    Preparation failed, and the upload \
+                    job could not be saved: \
+                    \(error.localizedDescription)
+                    """
+            }
+        }
+    }
+    
+    private func updateJob(
+        _ jobID: UUID,
+        change: (inout UploadJob) -> Void
+    ) throws {
+        guard
+            let index = jobs.firstIndex(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+        
+        var updatedJobs = jobs
+        change(&updatedJobs[index])
+        
+        try save(updatedJobs)
+        
+        jobs = updatedJobs
+        loadErrorMessage = nil
+    }
+    
     private func load() {
         guard FileManager.default.fileExists(
             atPath: storageURL.path
@@ -65,19 +167,47 @@ final class UploadQueueStore: ObservableObject {
                 contentsOf: storageURL
             )
             
-            let decodedJobs = try JSONDecoder().decode(
+            var decodedJobs = try JSONDecoder().decode(
                 [UploadJob].self,
                 from: data
             )
             
-            jobs = decodedJobs.sorted {
-                first,
-                second in
-                
+            var recoveredInterruptedJob = false
+            
+            for index in decodedJobs.indices {
+                switch decodedJobs[index].stage {
+                case .preparing,
+                        .converting,
+                        .uploading:
+                    decodedJobs[index].stage = .failed
+                    decodedJobs[index].errorMessage =
+                        """
+                        Processing was interrupted. \
+                        Try the job again.
+                        """
+                    decodedJobs[index].updatedAt =
+                    Date()
+                    
+                    recoveredInterruptedJob = true
+                    
+                case .queued,
+                        .prepared,
+                        .completed,
+                        .failed:
+                    break
+                }
+            }
+            
+            decodedJobs.sort { first, second in
                 first.createdAt > second.createdAt
             }
             
+            jobs = decodedJobs
             loadErrorMessage = nil
+            
+            if recoveredInterruptedJob {
+                try save(decodedJobs)
+            }
         } catch {
             jobs = []
             
