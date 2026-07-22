@@ -1,12 +1,11 @@
 import SwiftUI
 
 struct ContentView: View {
+    private let events = PickPicEvent.previewEvents
+    
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundColor(.accentColor)
-            Text("Hello, world!")
+        NavigationStack {
+            EventListView(events: events)
         }
     }
 }
