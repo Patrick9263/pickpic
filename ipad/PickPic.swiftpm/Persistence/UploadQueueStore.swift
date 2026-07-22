@@ -57,9 +57,15 @@ final class UploadQueueStore: ObservableObject {
         loadErrorMessage = nil
         
         for job in removedJobs {
-            try? ImageConversionService.removePreview(
-                for: job.id
-            )
+            try? ImageConversionService
+                .removePreview(
+                    for: job.id
+                )
+            
+            try? ImageConversionService
+                .removePreparedPhotos(
+                    for: job.id
+                )
         }
     }
     
@@ -219,6 +225,155 @@ final class UploadQueueStore: ObservableObject {
         }
     }
     
+    func convertAllPhotos(
+        jobID: UUID
+    ) async {
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.stage == .prepared
+                || currentJob.stage
+                == .readyToUpload
+        else {
+            return
+        }
+        
+        let startedAt = Date()
+        
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .converting
+                job.preparedPhotos = []
+                job.conversionProcessedCount = 0
+                job.conversionCurrentFilename =
+                nil
+                job.conversionStartedAt =
+                startedAt
+                job.conversionCompletedAt =
+                nil
+                job.conversionErrorMessage =
+                nil
+                job.updatedAt = startedAt
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            Batch conversion could not start: \
+            \(error.localizedDescription)
+            """
+            
+            return
+        }
+        
+        guard
+            let convertingJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+        
+        do {
+            try await Task.detached(
+                priority: .userInitiated
+            ) {
+                try ImageConversionService
+                    .resetPreparedPhotos(
+                        for: jobID
+                    )
+            }.value
+            
+            for (
+                index,
+                sourcePhoto
+            ) in convertingJob.photos.enumerated() {
+                try Task.checkCancellation()
+                
+                try updateJob(jobID) { job in
+                    job.conversionCurrentFilename =
+                    sourcePhoto.filename
+                    job.updatedAt = Date()
+                }
+                
+                let preparedPhoto =
+                try await Task.detached(
+                    priority: .userInitiated
+                ) {
+                    try ImageConversionService
+                        .createPreparedPhoto(
+                            sourcePhoto:
+                                sourcePhoto,
+                            index: index,
+                            job: convertingJob
+                        )
+                }.value
+                
+                try updateJob(jobID) { job in
+                    job.preparedPhotos.append(
+                        preparedPhoto
+                    )
+                    
+                    job.conversionProcessedCount =
+                    job.preparedPhotos.count
+                    
+                    job.updatedAt =
+                    preparedPhoto.preparedAt
+                }
+            }
+            
+            let completedAt = Date()
+            
+            try updateJob(jobID) { job in
+                job.stage = .readyToUpload
+                job.conversionCurrentFilename =
+                nil
+                job.conversionCompletedAt =
+                completedAt
+                job.conversionErrorMessage =
+                nil
+                job.updatedAt = completedAt
+            }
+        } catch {
+            let conversionError =
+            error.localizedDescription
+            
+            try? await Task.detached {
+                try ImageConversionService
+                    .removePreparedPhotos(
+                        for: jobID
+                    )
+            }.value
+            
+            do {
+                try updateJob(jobID) { job in
+                    job.stage = .prepared
+                    job.preparedPhotos = []
+                    job.conversionProcessedCount =
+                    0
+                    job.conversionCurrentFilename =
+                    nil
+                    job.conversionCompletedAt =
+                    nil
+                    job.conversionErrorMessage =
+                    conversionError
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                """
+                Conversion failed, and the queue \
+                could not be updated: \
+                \(error.localizedDescription)
+                """
+            }
+        }
+    }
+    
     private func updateJob(
         _ jobID: UUID,
         change: (inout UploadJob) -> Void
@@ -261,6 +416,8 @@ final class UploadQueueStore: ObservableObject {
             )
             
             var recoveredInterruptedJob = false
+            var interruptedConversionJobIDs:
+            [UUID] = []
             
             for index in decodedJobs.indices {
                 switch decodedJobs[index].stage {
@@ -272,19 +429,27 @@ final class UploadQueueStore: ObservableObject {
                         Try the job again.
                         """
                     decodedJobs[index].updatedAt = Date()
-                    
                     recoveredInterruptedJob = true
                     
                 case .converting:
+                    interruptedConversionJobIDs.append(
+                        decodedJobs[index].id
+                    )
                     decodedJobs[index].stage = .prepared
+                    decodedJobs[index].preparedPhotos = []
+                    decodedJobs[index]
+                        .conversionProcessedCount = 0
+                    decodedJobs[index]
+                        .conversionCurrentFilename = nil
+                    decodedJobs[index]
+                        .conversionCompletedAt = nil
                     decodedJobs[index]
                         .conversionErrorMessage =
                             """
-                            Image conversion was interrupted. \
-                            Try the conversion again.
+                            Batch conversion was interrupted. \
+                            Start the conversion again.
                             """
                     decodedJobs[index].updatedAt = Date()
-                    
                     recoveredInterruptedJob = true
                     
                 case .uploading:
@@ -295,11 +460,11 @@ final class UploadQueueStore: ObservableObject {
                         Try the job again.
                         """
                     decodedJobs[index].updatedAt = Date()
-                    
                     recoveredInterruptedJob = true
                     
                 case .queued,
                         .prepared,
+                        .readyToUpload,
                         .completed,
                         .failed:
                     break
@@ -315,6 +480,12 @@ final class UploadQueueStore: ObservableObject {
             
             if recoveredInterruptedJob {
                 try save(decodedJobs)
+            }
+            for jobID in interruptedConversionJobIDs {
+                try? ImageConversionService
+                    .removePreparedPhotos(
+                        for: jobID
+                    )
             }
         } catch {
             jobs = []

@@ -11,12 +11,14 @@ enum ImageConversionError: LocalizedError {
     case unableToDecode(String)
     case unableToCreateColorSpace
     case outputFileMissing
-    case outputTooLarge(Int64)
+    case outputTooLarge(String, Int64)
     
     var errorDescription: String? {
         switch self {
         case .noSourcePhotos:
-            return "This upload job does not contain any source photos."
+            return """
+            This upload job does not contain any source photos.
+            """
             
         case .sourceFolderUnavailable:
             return """
@@ -24,7 +26,9 @@ enum ImageConversionError: LocalizedError {
             """
             
         case let .sourcePhotoMissing(filename):
-            return "The source photo \(filename) could not be found."
+            return """
+            The source photo \(filename) could not be found.
+            """
             
         case let .unsupportedRAW(filename):
             return """
@@ -32,23 +36,33 @@ enum ImageConversionError: LocalizedError {
             """
             
         case let .unableToDecode(filename):
-            return "PickPic could not decode \(filename)."
+            return """
+            PickPic could not decode \(filename).
+            """
             
         case .unableToCreateColorSpace:
-            return "PickPic could not create the JPEG color space."
+            return """
+            PickPic could not create the JPEG color space.
+            """
             
         case .outputFileMissing:
-            return "The converted JPEG could not be read."
+            return """
+            The converted JPEG could not be read.
+            """
             
-        case let .outputTooLarge(byteSize):
-            let formattedSize = ByteCountFormatter.string(
+        case let .outputTooLarge(
+            filename,
+            byteSize
+        ):
+            let formattedSize =
+            ByteCountFormatter.string(
                 fromByteCount: byteSize,
                 countStyle: .file
             )
             
             return """
-            The test JPEG is \(formattedSize), which is larger than \
-            PickPic's 25 MB upload limit.
+            \(filename) produced a \(formattedSize) JPEG, \
+            which exceeds PickPic's 25 MB limit.
             """
         }
     }
@@ -60,6 +74,12 @@ enum ImageConversionService {
     
     private static let maximumJPEGBytes:
     Int64 = 25 * 1_024 * 1_024
+    
+    private struct RenderedJPEG {
+        let byteSize: Int64
+        let pixelWidth: Int
+        let pixelHeight: Int
+    }
     
     static func createTestPreview(
         for job: UploadJob
@@ -73,15 +93,218 @@ enum ImageConversionService {
                 )
                 ?? job.photos.first
         else {
-            throw ImageConversionError.noSourcePhotos
+            throw ImageConversionError
+                .noSourcePhotos
         }
         
+        return try withSourceFolder(
+            for: job
+        ) { folderURL in
+            let sourceURL =
+            try validatedSourceURL(
+                for: sourcePhoto,
+                inside: folderURL
+            )
+            
+            let outputFilename =
+            "test-preview.jpg"
+            
+            let outputURL = previewURL(
+                jobID: job.id,
+                outputFilename:
+                    outputFilename
+            )
+            
+            let renderedJPEG =
+            try renderJPEG(
+                sourceURL: sourceURL,
+                sourcePhoto: sourcePhoto,
+                outputURL: outputURL
+            )
+            
+            return ConversionPreview(
+                sourceFilename:
+                    sourcePhoto.filename,
+                outputFilename:
+                    outputFilename,
+                byteSize:
+                    renderedJPEG.byteSize,
+                pixelWidth:
+                    renderedJPEG.pixelWidth,
+                pixelHeight:
+                    renderedJPEG.pixelHeight,
+                convertedAt:
+                    Date()
+            )
+        }
+    }
+    
+    static func createPreparedPhoto(
+        sourcePhoto: SourcePhoto,
+        index: Int,
+        job: UploadJob
+    ) throws -> PreparedPhoto {
+        try withSourceFolder(
+            for: job
+        ) { folderURL in
+            let sourceURL =
+            try validatedSourceURL(
+                for: sourcePhoto,
+                inside: folderURL
+            )
+            
+            let metadata =
+            PhotoMetadataService.extract(
+                from: sourceURL
+            )
+            
+            let sourceSha256 =
+            try HashingService.sha256Hex(
+                for: sourceURL
+            )
+            
+            let outputFilename =
+            preparedOutputFilename(
+                for: sourcePhoto,
+                index: index
+            )
+            
+            let outputURL =
+            preparedPhotoURL(
+                jobID: job.id,
+                outputFilename:
+                    outputFilename
+            )
+            
+            let renderedJPEG =
+            try renderJPEG(
+                sourceURL: sourceURL,
+                sourcePhoto: sourcePhoto,
+                outputURL: outputURL
+            )
+            
+            return PreparedPhoto(
+                sourceFilename:
+                    sourcePhoto.filename,
+                outputFilename:
+                    outputFilename,
+                sourceSha256:
+                    sourceSha256,
+                byteSize:
+                    renderedJPEG.byteSize,
+                pixelWidth:
+                    renderedJPEG.pixelWidth,
+                pixelHeight:
+                    renderedJPEG.pixelHeight,
+                metadata:
+                    metadata,
+                preparedAt:
+                    Date()
+            )
+        }
+    }
+    
+    static func previewURL(
+        jobID: UUID,
+        outputFilename: String
+    ) -> URL {
+        previewDirectoryURL(
+            jobID: jobID
+        )
+        .appendingPathComponent(
+            outputFilename,
+            isDirectory: false
+        )
+    }
+    
+    static func preparedPhotoURL(
+        jobID: UUID,
+        outputFilename: String
+    ) -> URL {
+        preparedDirectoryURL(
+            jobID: jobID
+        )
+        .appendingPathComponent(
+            outputFilename,
+            isDirectory: false
+        )
+    }
+    
+    static func resetPreparedPhotos(
+        for jobID: UUID
+    ) throws {
+        let directoryURL =
+        preparedDirectoryURL(
+            jobID: jobID
+        )
+        
+        if FileManager.default.fileExists(
+            atPath: directoryURL.path
+        ) {
+            try FileManager.default.removeItem(
+                at: directoryURL
+            )
+        }
+        
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+    }
+    
+    static func removePreparedPhotos(
+        for jobID: UUID
+    ) throws {
+        let directoryURL =
+        preparedDirectoryURL(
+            jobID: jobID
+        )
+        
+        guard
+            FileManager.default.fileExists(
+                atPath: directoryURL.path
+            )
+        else {
+            return
+        }
+        
+        try FileManager.default.removeItem(
+            at: directoryURL
+        )
+    }
+    
+    static func removePreview(
+        for jobID: UUID
+    ) throws {
+        let directoryURL =
+        previewDirectoryURL(
+            jobID: jobID
+        )
+        
+        guard
+            FileManager.default.fileExists(
+                atPath: directoryURL.path
+            )
+        else {
+            return
+        }
+        
+        try FileManager.default.removeItem(
+            at: directoryURL
+        )
+    }
+    
+    private static func withSourceFolder<T>(
+        for job: UploadJob,
+        operation: (URL) throws -> T
+    ) throws -> T {
         let resolvedFolder =
         try FolderBookmarkService.resolve(
             job.folderBookmarkData
         )
         
-        let folderURL = resolvedFolder.url
+        let folderURL =
+        resolvedFolder.url
         
         let accessed =
         folderURL
@@ -97,27 +320,43 @@ enum ImageConversionService {
                 .stopAccessingSecurityScopedResource()
         }
         
+        return try operation(folderURL)
+    }
+    
+    private static func validatedSourceURL(
+        for sourcePhoto: SourcePhoto,
+        inside folderURL: URL
+    ) throws -> URL {
         let sourceURL =
         folderURL.appendingPathComponent(
             sourcePhoto.filename,
             isDirectory: false
         )
         
-        let sourceValues =
+        let values =
         try sourceURL.resourceValues(
             forKeys: [
                 .isRegularFileKey
             ]
         )
         
-        guard sourceValues.isRegularFile == true else {
+        guard values.isRegularFile == true else {
             throw ImageConversionError
                 .sourcePhotoMissing(
                     sourcePhoto.filename
                 )
         }
         
-        let sourceImage = try loadImage(
+        return sourceURL
+    }
+    
+    private static func renderJPEG(
+        sourceURL: URL,
+        sourcePhoto: SourcePhoto,
+        outputURL: URL
+    ) throws -> RenderedJPEG {
+        let sourceImage =
+        try loadImage(
             from: sourceURL,
             sourcePhoto: sourcePhoto
         )
@@ -126,13 +365,6 @@ enum ImageConversionService {
         try ImageVariantService.boundedImage(
             from: sourceImage,
             maxLongEdge: maxLongEdge
-        )
-        
-        let outputFilename = "test-preview.jpg"
-        
-        let outputURL = previewURL(
-            jobID: job.id,
-            outputFilename: outputFilename
         )
         
         let outputDirectory =
@@ -169,7 +401,8 @@ enum ImageConversionService {
         
         let options:
         [CIImageRepresentationOption: Any] = [
-            compressionOption: jpegQuality
+            compressionOption:
+                jpegQuality
         ]
         
         let context = CIContext(
@@ -193,69 +426,39 @@ enum ImageConversionService {
             ]
         )
         
-        guard outputValues.isRegularFile == true else {
-            throw ImageConversionError.outputFileMissing
+        guard
+            outputValues.isRegularFile == true
+        else {
+            throw ImageConversionError
+                .outputFileMissing
         }
         
         let byteSize =
         Int64(outputValues.fileSize ?? 0)
         
-        guard byteSize <= maximumJPEGBytes else {
+        guard
+            byteSize <= maximumJPEGBytes
+        else {
             try? FileManager.default.removeItem(
                 at: outputURL
             )
             
             throw ImageConversionError
-                .outputTooLarge(byteSize)
+                .outputTooLarge(
+                    sourcePhoto.filename,
+                    byteSize
+                )
         }
         
-        let outputExtent = outputImage.extent
+        let outputExtent =
+        outputImage.extent
         
-        return ConversionPreview(
-            sourceFilename:
-                sourcePhoto.filename,
-            outputFilename:
-                outputFilename,
-            byteSize:
-                byteSize,
+        return RenderedJPEG(
+            byteSize: byteSize,
             pixelWidth:
                 Int(outputExtent.width.rounded()),
             pixelHeight:
-                Int(outputExtent.height.rounded()),
-            convertedAt:
-                Date()
-        )
-    }
-    
-    static func previewURL(
-        jobID: UUID,
-        outputFilename: String
-    ) -> URL {
-        previewDirectoryURL(
-            jobID: jobID
-        )
-        .appendingPathComponent(
-            outputFilename,
-            isDirectory: false
-        )
-    }
-    
-    static func removePreview(
-        for jobID: UUID
-    ) throws {
-        let directoryURL =
-        previewDirectoryURL(
-            jobID: jobID
-        )
-        
-        guard FileManager.default.fileExists(
-            atPath: directoryURL.path
-        ) else {
-            return
-        }
-        
-        try FileManager.default.removeItem(
-            at: directoryURL
+                Int(outputExtent.height.rounded())
         )
     }
     
@@ -311,10 +514,63 @@ enum ImageConversionService {
         }
     }
     
+    private static func preparedOutputFilename(
+        for sourcePhoto: SourcePhoto,
+        index: Int
+    ) -> String {
+        let baseName =
+        (
+            sourcePhoto.filename
+            as NSString
+        )
+        .deletingPathExtension
+        
+        let usableBaseName =
+        baseName.isEmpty
+        ? "photo"
+        : baseName
+        
+        return String(
+            format:
+                "%04d-%@.jpg",
+            index + 1,
+            usableBaseName
+        )
+    }
+    
     private static func previewDirectoryURL(
         jobID: UUID
     ) -> URL {
-        let fileManager = FileManager.default
+        applicationSupportURL()
+            .appendingPathComponent(
+                "ConversionPreviews",
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                jobID.uuidString,
+                isDirectory: true
+            )
+    }
+    
+    private static func preparedDirectoryURL(
+        jobID: UUID
+    ) -> URL {
+        applicationSupportURL()
+            .appendingPathComponent(
+                "PreparedUploads",
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                jobID.uuidString,
+                isDirectory: true
+            )
+    }
+    
+    private static func applicationSupportURL()
+    -> URL
+    {
+        let fileManager =
+        FileManager.default
         
         let baseURL =
         fileManager.urls(
@@ -326,18 +582,9 @@ enum ImageConversionService {
             in: .userDomainMask
         )[0]
         
-        return baseURL
-            .appendingPathComponent(
-                "PickPic",
-                isDirectory: true
-            )
-            .appendingPathComponent(
-                "ConversionPreviews",
-                isDirectory: true
-            )
-            .appendingPathComponent(
-                jobID.uuidString,
-                isDirectory: true
-            )
+        return baseURL.appendingPathComponent(
+            "PickPic",
+            isDirectory: true
+        )
     }
 }
