@@ -45,9 +45,12 @@ struct EventDetailView: View {
                 }
                 
                 NavigationLink {
-                    UploadQueueView()
+                    UploadQueueView(event: event)
                 } label: {
-                    Label("Upload Queue", systemImage: "arrow.up.circle")
+                    Label(
+                        "Upload Queue",
+                        systemImage: "arrow.up.circle"
+                    )
                 }
             }
         }

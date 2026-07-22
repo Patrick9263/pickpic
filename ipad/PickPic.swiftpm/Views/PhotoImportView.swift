@@ -4,10 +4,18 @@ import UniformTypeIdentifiers
 struct PhotoImportView: View {
     let event: PickPicEvent
     
+    @EnvironmentObject private var uploadQueue:
+    UploadQueueStore
+    
     @StateObject private var viewModel =
     PhotoImportViewModel()
     
     @State private var showingFolderPicker = false
+    @State private var hasQueuedSelection = false
+    @State private var showingQueue = false
+    
+    @State private var showingQueueError = false
+    @State private var queueErrorMessage = ""
     
     var body: some View {
         List {
@@ -25,7 +33,8 @@ struct PhotoImportView: View {
                     
                     LabeledContent(
                         "Photos",
-                        value: "\(viewModel.photos.count)"
+                        value:
+                            "\(viewModel.photos.count)"
                     )
                     
                     LabeledContent(
@@ -40,8 +49,12 @@ struct PhotoImportView: View {
                     Section(
                         "Files (\(viewModel.photos.count))"
                     ) {
-                        ForEach(viewModel.photos) { photo in
-                            SourcePhotoRow(photo: photo)
+                        ForEach(
+                            viewModel.photos
+                        ) { photo in
+                            SourcePhotoRow(
+                                photo: photo
+                            )
                         }
                     }
                 }
@@ -50,7 +63,9 @@ struct PhotoImportView: View {
         .navigationTitle("Import Photos")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(
+                placement: .topBarTrailing
+            ) {
                 Button {
                     viewModel.clearError()
                     showingFolderPicker = true
@@ -65,12 +80,19 @@ struct PhotoImportView: View {
         .overlay {
             importState
         }
+        .safeAreaInset(edge: .bottom) {
+            if !viewModel.photos.isEmpty {
+                queueControls
+            }
+        }
         .fileImporter(
             isPresented: $showingFolderPicker,
             allowedContentTypes: [.folder]
         ) { result in
             switch result {
             case let .success(folderURL):
+                hasQueuedSelection = false
+                
                 Task {
                     await viewModel.scan(
                         folderURL: folderURL
@@ -81,6 +103,51 @@ struct PhotoImportView: View {
                 viewModel.showError(error)
             }
         }
+        .navigationDestination(
+            isPresented: $showingQueue
+        ) {
+            UploadQueueView(event: event)
+        }
+        .alert(
+            "Unable to Add Upload",
+            isPresented: $showingQueueError
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(queueErrorMessage)
+        }
+    }
+    
+    private var queueControls: some View {
+        VStack(spacing: 8) {
+            Button {
+                queueSelection()
+            } label: {
+                Label(
+                    hasQueuedSelection
+                    ? "View Upload Queue"
+                    : "Add to Upload Queue",
+                    systemImage:
+                        hasQueuedSelection
+                    ? "arrow.up.circle.fill"
+                    : "plus.circle.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            
+            Text(
+                """
+                This only saves the upload job. \
+                No source files are changed yet.
+                """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(.regularMaterial)
     }
     
     @ViewBuilder
@@ -98,7 +165,9 @@ struct PhotoImportView: View {
             } description: {
                 Text(errorMessage)
             } actions: {
-                Button("Choose Another Folder") {
+                Button(
+                    "Choose Another Folder"
+                ) {
                     viewModel.clearError()
                     showingFolderPicker = true
                 }
@@ -136,10 +205,35 @@ struct PhotoImportView: View {
                     """
                 )
             } actions: {
-                Button("Choose Another Folder") {
+                Button(
+                    "Choose Another Folder"
+                ) {
                     showingFolderPicker = true
                 }
             }
+        }
+    }
+    
+    private func queueSelection() {
+        if hasQueuedSelection {
+            showingQueue = true
+            return
+        }
+        
+        do {
+            let job =
+            try viewModel.makeUploadJob(
+                for: event
+            )
+            
+            try uploadQueue.add(job)
+            
+            hasQueuedSelection = true
+        } catch {
+            queueErrorMessage =
+            error.localizedDescription
+            
+            showingQueueError = true
         }
     }
     
@@ -158,11 +252,17 @@ private struct SourcePhotoRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: photo.kind.systemImage)
-                .frame(width: 28)
-                .foregroundStyle(.tint)
+            Image(
+                systemName:
+                    photo.kind.systemImage
+            )
+            .frame(width: 28)
+            .foregroundStyle(.tint)
             
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(
+                alignment: .leading,
+                spacing: 4
+            ) {
                 Text(photo.filename)
                     .lineLimit(1)
                 
@@ -175,7 +275,8 @@ private struct SourcePhotoRow: View {
             
             Text(
                 ByteCountFormatter.string(
-                    fromByteCount: photo.byteSize,
+                    fromByteCount:
+                        photo.byteSize,
                     countStyle: .file
                 )
             )
