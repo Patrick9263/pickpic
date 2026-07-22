@@ -2,6 +2,9 @@ import SwiftUI
 
 struct EventListView: View {
     let events: [PickPicEvent]
+    let isLoading: Bool
+    let errorMessage: String?
+    let onRefresh: () async -> Void
     
     var body: some View {
         List(events) { event in
@@ -13,8 +16,28 @@ struct EventListView: View {
         .navigationDestination(for: PickPicEvent.self) { event in
             EventDetailView(event: event)
         }
+        .refreshable {
+            await onRefresh()
+        }
         .overlay {
-            if events.isEmpty {
+            if isLoading && events.isEmpty {
+                ProgressView("Loading events…")
+            } else if let errorMessage, events.isEmpty {
+                ContentUnavailableView {
+                    Label(
+                        "Unable to Load Events",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                } description: {
+                    Text(errorMessage)
+                } actions: {
+                    Button("Try Again") {
+                        Task {
+                            await onRefresh()
+                        }
+                    }
+                }
+            } else if events.isEmpty {
                 ContentUnavailableView(
                     "No Events",
                     systemImage: "photo.on.rectangle.angled",
@@ -41,9 +64,12 @@ private struct EventRow: View {
                 Text(event.title)
                     .font(.headline)
                 
-                Label(event.status.title, systemImage: event.status.systemImage)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Label(
+                    event.status.title,
+                    systemImage: event.status.systemImage
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             }
             
             Spacer()
