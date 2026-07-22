@@ -16,7 +16,15 @@ struct UploadQueueView: View {
     var body: some View {
         List {
             ForEach(eventJobs) { job in
-                UploadJobRow(job: job)
+                UploadJobRow(
+                    job: job
+                ) {
+                    Task {
+                        await uploadQueue.prepare(
+                            jobID: job.id
+                        )
+                    }
+                }
             }
             .onDelete(perform: deleteJobs)
         }
@@ -67,10 +75,29 @@ struct UploadQueueView: View {
     private func deleteJobs(
         at offsets: IndexSet
     ) {
+        let selectedJobs = offsets.map { index in
+            eventJobs[index]
+        }
+        
+        guard
+            !selectedJobs.contains(
+                where: { job in
+                    job.stage == .preparing
+                }
+            )
+        else {
+            deleteErrorMessage =
+                """
+                Wait for folder preparation to finish \
+                before deleting this job.
+                """
+            
+            showingDeleteError = true
+            return
+        }
+        
         let jobIDs = Set(
-            offsets.map { index in
-                eventJobs[index].id
-            }
+            selectedJobs.map(\.id)
         )
         
         do {
@@ -88,6 +115,7 @@ struct UploadQueueView: View {
 
 private struct UploadJobRow: View {
     let job: UploadJob
+    let onPrepare: () -> Void
     
     @State private var folderIsAccessible:
     Bool?
@@ -142,15 +170,75 @@ private struct UploadJobRow: View {
             .foregroundStyle(.secondary)
             
             folderAccessLabel
+            preparationStatus
         }
         .padding(.vertical, 5)
-        .task(id: job.id) {
+        .task(id: job.updatedAt) {
             folderIsAccessible =
             FolderBookmarkService
                 .canAccessFolder(
                     using:
                         job.folderBookmarkData
                 )
+        }
+    }
+    
+    @ViewBuilder
+    private var preparationStatus: some View {
+        switch job.stage {
+        case .queued:
+            Button {
+                onPrepare()
+            } label: {
+                Label(
+                    "Prepare Upload",
+                    systemImage:
+                        "folder.badge.gearshape"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            
+        case .preparing:
+            HStack(spacing: 10) {
+                ProgressView()
+                
+                Text(
+                    "Creating To Edit and Edited…"
+                )
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            
+        case .prepared:
+            Label(
+                "To Edit and Edited folders are ready",
+                systemImage: "checkmark.circle"
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            
+        case .failed:
+            if let errorMessage =
+                job.errorMessage {
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
+            
+            Button {
+                onPrepare()
+            } label: {
+                Label(
+                    "Try Preparation Again",
+                    systemImage: "arrow.clockwise"
+                )
+            }
+            .buttonStyle(.bordered)
+            
+        case .converting,
+                .uploading,
+                .completed:
+            EmptyView()
         }
     }
     
