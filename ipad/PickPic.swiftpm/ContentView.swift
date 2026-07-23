@@ -13,28 +13,46 @@ struct ContentView: View {
         NavigationStack {
             EventListView(
                 events: viewModel.events,
-                isLoading: viewModel.isLoading,
-                errorMessage: viewModel.errorMessage
-            ) {
-                await viewModel.load(using: configuration)
-            }
+                isLoading:
+                    viewModel.isLoading,
+                errorMessage:
+                    viewModel.errorMessage,
+                onRefresh: {
+                    await viewModel.load(
+                        using: configuration
+                    )
+                },
+                onEventUpdated: {
+                    updatedEvent in
+                    
+                    viewModel.replaceEvent(
+                        updatedEvent
+                    )
+                }
+            )
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(
+                    placement: .topBarTrailing
+                ) {
                     Button {
                         showingSettings = true
                     } label: {
                         Label(
                             "Connection Settings",
-                            systemImage: "gearshape"
+                            systemImage:
+                                "gearshape"
                         )
                     }
                 }
             }
         }
         .environmentObject(configuration)
-        .sheet(isPresented: $showingSettings) {
+        .sheet(
+            isPresented: $showingSettings
+        ) {
             ConnectionSettingsView(
-                configuration: configuration
+                configuration:
+                    configuration
             )
         }
         .task(id: configuration.revision) {
@@ -42,7 +60,9 @@ struct ContentView: View {
                 showingSettings = true
             }
             
-            await viewModel.load(using: configuration)
+            await viewModel.load(
+                using: configuration
+            )
         }
     }
 }

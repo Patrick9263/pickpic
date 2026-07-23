@@ -4,6 +4,22 @@ struct EventListResponse: Decodable {
     let events: [PickPicEvent]
 }
 
+struct EventResponse: Decodable {
+    let event: PickPicEvent
+}
+
+struct EventPhotosResponse: Decodable {
+    let photos: [ServerPhotoSummary]
+}
+
+struct ServerPhotoSummary: Decodable {
+    let id: String
+}
+
+struct SetEventStatusRequest: Encodable {
+    let status: String
+}
+
 struct APIErrorResponse: Decodable {
     let error: String
 }
@@ -41,6 +57,8 @@ enum APIClientError: LocalizedError {
     )
     
     case invalidEventData
+    case invalidPhotoListResponse
+    
     case preparedFileMissing(String)
     case invalidUploadFilename(String)
     case invalidPhotoUploadResponse
@@ -69,6 +87,11 @@ enum APIClientError: LocalizedError {
         case .invalidEventData:
             return """
             PickPic returned event data that the app could not read.
+            """
+            
+        case .invalidPhotoListResponse:
+            return """
+            PickPic returned a photo list that the app could not read.
             """
             
         case let .preparedFileMissing(filename):
