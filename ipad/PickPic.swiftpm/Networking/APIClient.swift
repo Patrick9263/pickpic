@@ -309,6 +309,158 @@ struct APIClient {
         )
     }
     
+    func uploadFinalPhoto(
+        _ stagedUpload: StagedFinalUpload,
+        to photoID: String
+    ) async throws -> FinalPhotoUploadResponse {
+        let fileValues =
+        try? stagedUpload.fileURL.resourceValues(
+            forKeys: [
+                .isRegularFileKey
+            ]
+        )
+        
+        guard fileValues?.isRegularFile == true else {
+            throw APIClientError.preparedFileMissing(
+                stagedUpload.filename
+            )
+        }
+        
+        guard
+            let encodedFilename =
+                stagedUpload.filename
+                .addingPercentEncoding(
+                    withAllowedCharacters:
+                        Self.filenameHeaderAllowed
+                )
+        else {
+            throw APIClientError.invalidUploadFilename(
+                stagedUpload.filename
+            )
+        }
+        
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "photos")
+            .appending(path: photoID)
+            .appending(path: "final")
+        
+        var request = URLRequest(url: url)
+        
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 300
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+            "image/jpeg",
+            forHTTPHeaderField: "Content-Type"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        request.setValue(
+            encodedFilename,
+            forHTTPHeaderField: "X-File-Name"
+        )
+        
+        request.setValue(
+            stagedUpload.sha256,
+            forHTTPHeaderField:
+                "X-File-SHA256"
+        )
+        
+        request.setValue(
+            String(stagedUpload.byteSize),
+            forHTTPHeaderField:
+                "Content-Length"
+        )
+        
+        let (data, response) =
+        try await session.upload(
+            for: request,
+            fromFile: stagedUpload.fileURL
+        )
+        
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+        
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+            
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+            
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+        
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard
+            contentType.contains(
+                "application/json"
+            )
+        else {
+            throw APIClientError.unexpectedResponse
+        }
+        
+        do {
+            return try makeDecoder().decode(
+                FinalPhotoUploadResponse.self,
+                from: data
+            )
+        } catch {
+            print(
+                "Final photo decoding failed:",
+                error
+            )
+            
+            throw APIClientError
+                .invalidFinalPhotoUploadResponse
+        }
+    }
+    
     func fetchEventPhotos(
         eventID: String
     ) async throws -> [ServerPhotoRecord] {

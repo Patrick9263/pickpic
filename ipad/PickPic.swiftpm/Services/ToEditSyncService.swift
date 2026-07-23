@@ -104,15 +104,10 @@ enum ToEditSyncService {
         
         var copiedPhotoCount = 0
         var alreadyPresentCount = 0
-        var skippedFinalCount = 0
+        let skippedFinalCount = 0
         var missingFilenames: [String] = []
         
         for photo in likedPhotos {
-            if photo.workflowStatus == .final {
-                skippedFinalCount += 1
-                continue
-            }
-            
             let filename = photo.originalFilename
             
             let safeFilename =
