@@ -686,6 +686,118 @@ struct APIClient {
         }
     }
     
+    func setPhotoWorkflowStatus(
+        _ status: ServerPhotoWorkflowStatus,
+        for photoID: String
+    ) async throws -> PhotoWorkflowResponse {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "photos")
+            .appending(path: photoID)
+            .appending(path: "workflow")
+        
+        var request = URLRequest(url: url)
+        
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 30
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        request.httpBody = try JSONEncoder().encode(
+            SetPhotoWorkflowRequest(
+                status: status.rawValue
+            )
+        )
+        
+        let (data, response) =
+        try await session.data(for: request)
+        
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+        
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+            
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+            
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+        
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard
+            contentType.contains(
+                "application/json"
+            )
+        else {
+            throw APIClientError.unexpectedResponse
+        }
+        
+        do {
+            return try makeDecoder().decode(
+                PhotoWorkflowResponse.self,
+                from: data
+            )
+        } catch {
+            print(
+                "Photo workflow decoding failed:",
+                error
+            )
+            
+            throw APIClientError
+                .invalidPhotoWorkflowResponse
+        }
+    }
+    
     private func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         

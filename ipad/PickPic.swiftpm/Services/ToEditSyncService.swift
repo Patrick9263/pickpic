@@ -7,8 +7,10 @@ struct ToEditSyncResult:
     let likedPhotoCount: Int
     let copiedPhotoCount: Int
     let alreadyPresentCount: Int
-    let skippedFinalCount: Int
+    
+    let syncedFilenames: Set<String>
     let missingFilenames: [String]
+    
     let syncedAt: Date
 }
 
@@ -104,7 +106,7 @@ enum ToEditSyncService {
         
         var copiedPhotoCount = 0
         var alreadyPresentCount = 0
-        let skippedFinalCount = 0
+        var syncedFilenames: Set<String> = []
         var missingFilenames: [String] = []
         
         for photo in likedPhotos {
@@ -167,6 +169,7 @@ enum ToEditSyncService {
                 }
                 
                 alreadyPresentCount += 1
+                syncedFilenames.insert(filename)
                 continue
             }
             
@@ -176,13 +179,14 @@ enum ToEditSyncService {
             )
             
             copiedPhotoCount += 1
+            syncedFilenames.insert(filename)
         }
         
         return ToEditSyncResult(
             likedPhotoCount: likedPhotos.count,
             copiedPhotoCount: copiedPhotoCount,
             alreadyPresentCount: alreadyPresentCount,
-            skippedFinalCount: skippedFinalCount,
+            syncedFilenames: syncedFilenames,
             missingFilenames: missingFilenames,
             syncedAt: Date()
         )
