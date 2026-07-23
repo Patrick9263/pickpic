@@ -309,6 +309,228 @@ struct APIClient {
         )
     }
     
+    func fetchEventPhotoCount(
+        eventID: String
+    ) async throws -> Int {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+            .appending(path: "photos")
+        
+        var request = URLRequest(url: url)
+        
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        let (data, response) =
+        try await session.data(
+            for: request
+        )
+        
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+        
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+            
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+            
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+        
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard
+            contentType.contains(
+                "application/json"
+            )
+        else {
+            throw APIClientError.unexpectedResponse
+        }
+        
+        do {
+            let responseBody =
+            try makeDecoder().decode(
+                EventPhotosResponse.self,
+                from: data
+            )
+            
+            return responseBody.photos.count
+        } catch {
+            print(
+                "Event photo list decoding failed:",
+                error
+            )
+            
+            throw APIClientError
+                .invalidPhotoListResponse
+        }
+    }
+    
+    func setEventStatus(
+        _ status: PickPicEvent.Status,
+        for eventID: String
+    ) async throws -> PickPicEvent {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+            .appending(path: "status")
+        
+        var request = URLRequest(url: url)
+        
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 30
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        request.httpBody =
+        try JSONEncoder().encode(
+            SetEventStatusRequest(
+                status: status.rawValue
+            )
+        )
+        
+        let (data, response) =
+        try await session.data(
+            for: request
+        )
+        
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+        
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+            
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+            
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+        
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard
+            contentType.contains(
+                "application/json"
+            )
+        else {
+            throw APIClientError.unexpectedResponse
+        }
+        
+        do {
+            let responseBody =
+            try makeDecoder().decode(
+                EventResponse.self,
+                from: data
+            )
+            
+            return responseBody.event
+        } catch {
+            print(
+                "Event status decoding failed:",
+                error
+            )
+            
+            throw APIClientError.invalidEventData
+        }
+    }
+    
     private func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         

@@ -24,6 +24,37 @@ final class UploadQueueStore: ObservableObject {
         }
     }
     
+    func completedJobCount(
+        for eventID: String
+    ) -> Int {
+        jobs.filter { job in
+            job.eventID == eventID
+            && job.stage == .completed
+        }
+        .count
+    }
+    
+    func removeCompletedJobs(
+        for eventID: String
+    ) throws {
+        let completedJobIDs = Set(
+            jobs
+                .filter { job in
+                    job.eventID == eventID
+                    && job.stage == .completed
+                }
+                .map(\.id)
+        )
+        
+        guard !completedJobIDs.isEmpty else {
+            return
+        }
+        
+        try remove(
+            jobIDs: completedJobIDs
+        )
+    }
+    
     func add(
         _ job: UploadJob
     ) throws {

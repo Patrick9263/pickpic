@@ -1,17 +1,38 @@
 import SwiftUI
 
 struct EventDetailView: View {
-    let event: PickPicEvent
+    @State private var event:
+    PickPicEvent
+    
+    let onEventUpdated:
+    (PickPicEvent) -> Void
+    
+    init(
+        event: PickPicEvent,
+        onEventUpdated:
+        @escaping (PickPicEvent) -> Void
+    ) {
+        _event = State(
+            initialValue: event
+        )
+        
+        self.onEventUpdated =
+        onEventUpdated
+    }
     
     var body: some View {
         List {
             Section("Event") {
-                LabeledContent("Name", value: event.title)
+                LabeledContent(
+                    "Name",
+                    value: event.title
+                )
                 
                 LabeledContent {
                     Label(
                         event.status.title,
-                        systemImage: event.status.systemImage
+                        systemImage:
+                            event.status.systemImage
                     )
                 } label: {
                     Text("Status")
@@ -19,37 +40,65 @@ struct EventDetailView: View {
                 
                 LabeledContent(
                     "Created",
-                    value: event.createdAt.formatted(
-                        date: .long,
-                        time: .shortened
-                    )
+                    value:
+                        event.createdAt.formatted(
+                            date: .long,
+                            time: .shortened
+                        )
                 )
                 
                 LabeledContent(
                     "Updated",
-                    value: event.updatedAt.formatted(
-                        date: .long,
-                        time: .shortened
-                    )
+                    value:
+                        event.updatedAt.formatted(
+                            date: .long,
+                            time: .shortened
+                        )
                 )
             }
             
             Section("Photos") {
                 NavigationLink {
-                    PhotoImportView(event: event)
+                    PhotoImportView(
+                        event: event
+                    )
                 } label: {
                     Label(
                         "Import Photos",
-                        systemImage: "photo.badge.plus"
+                        systemImage:
+                            "photo.badge.plus"
                     )
                 }
                 
                 NavigationLink {
-                    UploadQueueView(event: event)
+                    UploadQueueView(
+                        event: event
+                    )
                 } label: {
                     Label(
                         "Upload Queue",
-                        systemImage: "arrow.up.circle"
+                        systemImage:
+                            "arrow.up.circle"
+                    )
+                }
+            }
+            
+            Section("Gallery") {
+                NavigationLink {
+                    PublishGalleryView(
+                        event: event
+                    ) { updatedEvent in
+                        event = updatedEvent
+                        
+                        onEventUpdated(
+                            updatedEvent
+                        )
+                    }
+                } label: {
+                    Label(
+                        "Publish & Share",
+                        systemImage:
+                            "square.and.arrow.up"
                     )
                 }
             }
