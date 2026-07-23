@@ -309,9 +309,9 @@ struct APIClient {
         )
     }
     
-    func fetchEventPhotoCount(
+    func fetchEventPhotos(
         eventID: String
-    ) async throws -> Int {
+    ) async throws -> [ServerPhotoRecord] {
         let url = baseURL
             .appending(path: "api")
             .appending(path: "admin")
@@ -342,9 +342,7 @@ struct APIClient {
         )
         
         let (data, response) =
-        try await session.data(
-            for: request
-        )
+        try await session.data(for: request)
         
         guard
             let httpResponse =
@@ -387,31 +385,36 @@ struct APIClient {
             .lowercased()
         ?? ""
         
-        guard
-            contentType.contains(
-                "application/json"
-            )
-        else {
+        guard contentType.contains(
+            "application/json"
+        ) else {
             throw APIClientError.unexpectedResponse
         }
         
         do {
-            let responseBody =
-            try makeDecoder().decode(
+            return try makeDecoder().decode(
                 EventPhotosResponse.self,
                 from: data
             )
-            
-            return responseBody.photos.count
+            .photos
         } catch {
             print(
-                "Event photo list decoding failed:",
+                "Event photo decoding failed:",
                 error
             )
             
             throw APIClientError
                 .invalidPhotoListResponse
         }
+    }
+    
+    func fetchEventPhotoCount(
+        eventID: String
+    ) async throws -> Int {
+        try await fetchEventPhotos(
+            eventID: eventID
+        )
+        .count
     }
     
     func setEventStatus(

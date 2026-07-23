@@ -9,11 +9,56 @@ struct EventResponse: Decodable {
 }
 
 struct EventPhotosResponse: Decodable {
-    let photos: [ServerPhotoSummary]
+    let photos: [ServerPhotoRecord]
 }
 
-struct ServerPhotoSummary: Decodable {
+enum ServerPhotoWorkflowStatus:
+    String,
+    Decodable,
+    Hashable,
+    Sendable
+{
+    case idle
+    case editing
+    case final
+    
+    var title: String {
+        switch self {
+        case .idle:
+            return "Waiting"
+            
+        case .editing:
+            return "Editing"
+            
+        case .final:
+            return "Final"
+        }
+    }
+    
+    var systemImage: String {
+        switch self {
+        case .idle:
+            return "clock"
+            
+        case .editing:
+            return "slider.horizontal.3"
+            
+        case .final:
+            return "checkmark.circle.fill"
+        }
+    }
+}
+
+struct ServerPhotoRecord:
+    Identifiable,
+    Decodable,
+    Hashable,
+    Sendable
+{
     let id: String
+    let originalFilename: String
+    let heartCount: Int
+    let workflowStatus: ServerPhotoWorkflowStatus
 }
 
 struct SetEventStatusRequest: Encodable {
@@ -26,10 +71,8 @@ struct APIErrorResponse: Decodable {
 
 struct PhotoUploadResponse: Decodable {
     let duplicate: Bool
-    
     let existingPhotoId: String?
     let duplicateVariant: String?
-    
     let photo: UploadedPhotoResponse?
 }
 
