@@ -224,13 +224,19 @@ enum EditedFolderService {
             )
         }
         
-        let eligibleBaseNames =
-        Set(photosByBaseName.keys)
+        let allServerBaseNames: Set<String> =
+        Set(
+            photos.map { photo in
+                normalizedBaseName(
+                    photo.originalFilename
+                )
+            }
+        )
         
         let unmatchedEditedFilenames =
         filesByBaseName
             .filter { baseName, _ in
-                !eligibleBaseNames.contains(
+                !allServerBaseNames.contains(
                     baseName
                 )
             }
