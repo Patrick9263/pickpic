@@ -12,6 +12,16 @@ struct EventPhotosResponse: Decodable {
     let photos: [ServerPhotoRecord]
 }
 
+struct SetPhotoWorkflowRequest: Encodable {
+    let status: String
+}
+
+struct PhotoWorkflowResponse: Decodable {
+    let photoId: String
+    let workflowStatus: ServerPhotoWorkflowStatus
+    let heartCount: Int
+}
+
 enum ServerPhotoWorkflowStatus:
     String,
     Decodable,
@@ -122,7 +132,7 @@ enum APIClientError: LocalizedError {
     
     case invalidEventData
     case invalidPhotoListResponse
-    
+    case invalidPhotoWorkflowResponse
     case preparedFileMissing(String)
     case invalidUploadFilename(String)
     case invalidPhotoUploadResponse
@@ -157,6 +167,11 @@ enum APIClientError: LocalizedError {
         case .invalidPhotoListResponse:
             return """
             PickPic returned a photo list that the app could not read.
+            """
+            
+        case .invalidPhotoWorkflowResponse:
+            return """
+            PickPic returned workflow data that the app could not read.
             """
             
         case let .preparedFileMissing(filename):

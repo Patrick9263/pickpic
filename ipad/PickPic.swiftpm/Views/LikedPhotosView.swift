@@ -262,31 +262,57 @@ struct LikedPhotosView: View {
                     "\(result.alreadyPresentCount)"
             )
             
-            if result.skippedFinalCount > 0 {
-                LabeledContent(
-                    "Already final",
-                    value:
-                        "\(result.skippedFinalCount)"
-                )
-            }
+            LabeledContent(
+                "Newly Marked Editing",
+                value: "\(viewModel.markedEditingCount)"
+            )
             
-            if !result.missingFilenames.isEmpty {
+            LabeledContent(
+                "Currently Editing",
+                value: "\(viewModel.editingLikedPhotoCount)"
+            )
+            
+            if !viewModel.workflowUpdateFailures.isEmpty {
                 VStack(
                     alignment: .leading,
                     spacing: 6
                 ) {
                     Label(
+            """
+            Unable to mark Editing \
+            (\(viewModel.workflowUpdateFailures.count))
+            """,
+            systemImage:
+                "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+                    
+                    ForEach(
+                        viewModel.workflowUpdateFailures,
+                        id: \.self
+                    ) { filename in
+                        Text(filename)
+                            .font(.caption)
+                    }
+                }
+            }
+            
+            if !viewModel.workflowUpdateFailures.isEmpty {
+                VStack(
+                    alignment: .leading,
+                    spacing: 6
+                ) {
+                    Label(     
                         """
-                        Missing source files \
-                        (\(result.missingFilenames.count))
+                        Unable to mark Editing \
+                        (\(viewModel.workflowUpdateFailures.count))
                         """,
                         systemImage:
                             "exclamationmark.triangle"
                     )
                     .foregroundStyle(.orange)
-                    
                     ForEach(
-                        result.missingFilenames,
+                        viewModel.workflowUpdateFailures,
                         id: \.self
                     ) { filename in
                         Text(filename)

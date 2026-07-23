@@ -20,6 +20,12 @@ final class LikedPhotosViewModel:
     @Published private(set)
     var syncResult: ToEditSyncResult?
     
+    @Published private(set)
+    var markedEditingCount = 0
+    
+    @Published private(set)
+    var workflowUpdateFailures: [String] = []
+    
     var likedPhotos: [ServerPhotoRecord] {
         photos
             .filter { photo in
@@ -32,6 +38,13 @@ final class LikedPhotosViewModel:
                     )
                 == .orderedAscending
             }
+    }
+    
+    var editingLikedPhotoCount: Int {
+        likedPhotos.filter { photo in
+            photo.workflowStatus == .editing
+        }
+        .count
     }
     
     func load(
@@ -76,6 +89,8 @@ final class LikedPhotosViewModel:
         
         isSyncing = true
         errorMessage = nil
+        markedEditingCount = 0
+        workflowUpdateFailures = []
         
         defer {
             isSyncing = false
@@ -92,7 +107,8 @@ final class LikedPhotosViewModel:
             
             photos = currentPhotos
             
-            syncResult = try await Task.detached(
+            let fileSyncResult =
+            try await Task.detached(
                 priority: .userInitiated
             ) {
                 try ToEditSyncService.sync(
@@ -101,6 +117,41 @@ final class LikedPhotosViewModel:
                 )
             }
             .value
+            
+            syncResult = fileSyncResult
+            
+            let photosToMarkEditing =
+            currentPhotos.filter { photo in
+                photo.heartCount > 0
+                && fileSyncResult
+                    .syncedFilenames
+                    .contains(
+                        photo.originalFilename
+                    )
+                && photo.workflowStatus
+                != .editing
+            }
+            
+            for photo in photosToMarkEditing {
+                do {
+                    _ = try await client
+                        .setPhotoWorkflowStatus(
+                            .editing,
+                            for: photo.id
+                        )
+                    
+                    markedEditingCount += 1
+                } catch {
+                    workflowUpdateFailures.append(
+                        photo.originalFilename
+                    )
+                }
+            }
+            
+            photos = try await client
+                .fetchEventPhotos(
+                    eventID: eventID
+                )
         } catch {
             errorMessage =
             error.localizedDescription
