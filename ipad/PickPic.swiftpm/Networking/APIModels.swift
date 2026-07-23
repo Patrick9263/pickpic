@@ -49,6 +49,16 @@ enum ServerPhotoWorkflowStatus:
     }
 }
 
+struct ServerFinalPhotoSummary:
+    Decodable,
+    Hashable,
+    Sendable
+{
+    let originalFilename: String
+    let byteSize: Int64
+    let uploadedAt: String
+}
+
 struct ServerPhotoRecord:
     Identifiable,
     Decodable,
@@ -59,6 +69,7 @@ struct ServerPhotoRecord:
     let originalFilename: String
     let heartCount: Int
     let workflowStatus: ServerPhotoWorkflowStatus
+    let finalPhoto: ServerFinalPhotoSummary?
 }
 
 struct SetEventStatusRequest: Encodable {
@@ -89,6 +100,16 @@ enum PhotoUploadOutcome: Sendable {
     )
 }
 
+struct FinalPhotoUploadResponse:
+    Decodable,
+    Sendable
+{
+    let photoId: String
+    let workflowStatus: ServerPhotoWorkflowStatus
+    let heartCount: Int
+    let finalPhoto: ServerFinalPhotoSummary
+}
+
 enum APIClientError: LocalizedError {
     case notConfigured
     case invalidResponse
@@ -105,6 +126,7 @@ enum APIClientError: LocalizedError {
     case preparedFileMissing(String)
     case invalidUploadFilename(String)
     case invalidPhotoUploadResponse
+    case invalidFinalPhotoUploadResponse
     
     var errorDescription: String? {
         switch self {
@@ -151,6 +173,11 @@ enum APIClientError: LocalizedError {
         case .invalidPhotoUploadResponse:
             return """
             PickPic returned upload data that the app could not read.
+            """
+            
+        case .invalidFinalPhotoUploadResponse:
+            return """
+            PickPic returned final-photo data that the app could not read.
             """
         }
     }

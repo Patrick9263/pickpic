@@ -90,6 +90,16 @@ struct EventDetailView: View {
                         systemImage: "heart.fill"
                     )
                 }
+                
+                NavigationLink {
+                    FinalUploadsView(event: event)
+                } label: {
+                    Label(
+                        "Upload Finals",
+                        systemImage:
+                            "arrow.up.circle.fill"
+                    )
+                }
             }
             
             Section("Gallery") {
