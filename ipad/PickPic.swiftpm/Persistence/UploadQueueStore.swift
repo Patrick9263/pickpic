@@ -248,14 +248,11 @@ final class UploadQueueStore: ObservableObject {
                 job.stage = .converting
                 job.preparedPhotos = []
                 job.conversionProcessedCount = 0
-                job.conversionCurrentFilename =
-                nil
-                job.conversionStartedAt =
-                startedAt
-                job.conversionCompletedAt =
-                nil
-                job.conversionErrorMessage =
-                nil
+                job.conversionCurrentFilename = nil
+                job.conversionStartedAt = startedAt
+                job.conversionCompletedAt = nil
+                job.conversionErrorMessage = nil
+                job.uploadProgress = .empty
                 job.updatedAt = startedAt
             }
         } catch {
@@ -374,6 +371,255 @@ final class UploadQueueStore: ObservableObject {
         }
     }
     
+    func uploadAllPhotos(
+        jobID: UUID,
+        using configuration:
+        APIConfigurationStore
+    ) async {
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.stage == .readyToUpload
+        else {
+            return
+        }
+        
+        guard
+            !currentJob.preparedPhotos.isEmpty,
+            currentJob.preparedPhotos.count
+                == currentJob.photoCount
+        else {
+            do {
+                try updateJob(jobID) { job in
+                    job.uploadProgress.errorMessage =
+                    """
+                    The prepared batch is incomplete. \
+                    Convert all photos again.
+                    """
+                    
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                error.localizedDescription
+            }
+            
+            return
+        }
+        
+        let client: APIClient
+        
+        do {
+            client = try configuration.makeClient()
+        } catch {
+            do {
+                try updateJob(jobID) { job in
+                    job.uploadProgress.errorMessage =
+                    error.localizedDescription
+                    
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                error.localizedDescription
+            }
+            
+            return
+        }
+        
+        let startedAt =
+        currentJob.uploadProgress.startedAt
+        ?? Date()
+        
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .uploading
+                
+                job.uploadProgress.startedAt =
+                startedAt
+                
+                job.uploadProgress.completedAt =
+                nil
+                
+                job.uploadProgress.currentFilename =
+                nil
+                
+                job.uploadProgress.errorMessage =
+                nil
+                
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            Uploading could not start: \
+            \(error.localizedDescription)
+            """
+            
+            return
+        }
+        
+        guard
+            let uploadingJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+        
+        var completedFilenames =
+        uploadingJob
+            .uploadProgress
+            .completedSourceFilenames
+        
+        for preparedPhoto
+                in uploadingJob.preparedPhotos {
+            if completedFilenames.contains(
+                preparedPhoto.sourceFilename
+            ) {
+                continue
+            }
+            
+            do {
+                try updateJob(jobID) { job in
+                    job.uploadProgress
+                        .currentFilename =
+                    preparedPhoto.sourceFilename
+                    
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                error.localizedDescription
+                
+                return
+            }
+            
+            let fileURL =
+            ImageConversionService
+                .preparedPhotoURL(
+                    jobID: jobID,
+                    outputFilename:
+                        preparedPhoto.outputFilename
+                )
+            
+            do {
+                let outcome =
+                try await client
+                    .uploadPreparedPhoto(
+                        preparedPhoto,
+                        from: fileURL,
+                        to: uploadingJob.eventID
+                    )
+                
+                let isDuplicate: Bool
+                
+                switch outcome {
+                case .uploaded:
+                    isDuplicate = false
+                    
+                case .duplicate:
+                    isDuplicate = true
+                }
+                
+                completedFilenames.insert(
+                    preparedPhoto.sourceFilename
+                )
+                
+                try updateJob(jobID) { job in
+                    job.uploadProgress
+                        .completedSourceFilenames
+                        .insert(
+                            preparedPhoto
+                                .sourceFilename
+                        )
+                    
+                    if isDuplicate {
+                        job.uploadProgress
+                            .duplicateSourceFilenames
+                            .insert(
+                                preparedPhoto
+                                    .sourceFilename
+                            )
+                    }
+                    
+                    job.uploadProgress
+                        .currentFilename = nil
+                    
+                    job.uploadProgress
+                        .errorMessage = nil
+                    
+                    job.updatedAt = Date()
+                }
+            } catch {
+                let uploadError =
+                error.localizedDescription
+                
+                do {
+                    try updateJob(jobID) { job in
+                        job.stage = .readyToUpload
+                        
+                        job.uploadProgress
+                            .currentFilename = nil
+                        
+                        job.uploadProgress
+                            .errorMessage =
+                        uploadError
+                        
+                        job.updatedAt = Date()
+                    }
+                } catch {
+                    loadErrorMessage =
+                    """
+                    Uploading failed, and the queue \
+                    could not be saved: \
+                    \(error.localizedDescription)
+                    """
+                }
+                
+                return
+            }
+        }
+        
+        let completedAt = Date()
+        
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .completed
+                
+                job.uploadProgress
+                    .currentFilename = nil
+                
+                job.uploadProgress
+                    .completedAt = completedAt
+                
+                job.uploadProgress
+                    .errorMessage = nil
+                
+                job.updatedAt = completedAt
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            Uploading finished, but completion \
+            could not be saved: \
+            \(error.localizedDescription)
+            """
+            
+            return
+        }
+        
+        try? ImageConversionService
+            .removePreparedPhotos(
+                for: jobID
+            )
+    }
+    
     private func updateJob(
         _ jobID: UUID,
         change: (inout UploadJob) -> Void
@@ -453,13 +699,20 @@ final class UploadQueueStore: ObservableObject {
                     recoveredInterruptedJob = true
                     
                 case .uploading:
-                    decodedJobs[index].stage = .failed
-                    decodedJobs[index].errorMessage =
+                    decodedJobs[index].stage =
+                        .readyToUpload
+                    decodedJobs[index]
+                        .uploadProgress
+                        .currentFilename = nil
+                    decodedJobs[index]
+                        .uploadProgress
+                        .errorMessage =
                         """
                         Uploading was interrupted. \
-                        Try the job again.
+                        Resume the remaining photos.
                         """
-                    decodedJobs[index].updatedAt = Date()
+                    decodedJobs[index].updatedAt =
+                    Date()
                     recoveredInterruptedJob = true
                     
                 case .queued,

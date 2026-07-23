@@ -6,6 +6,11 @@ struct APIClient {
     let clientSecret: String
     
     private let session: URLSession
+    private static let filenameHeaderAllowed =
+    CharacterSet(
+        charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    )
     
     init(
         baseURL: URL,
@@ -93,6 +98,215 @@ struct APIClient {
             print("Event decoding failed:", error)
             throw APIClientError.invalidEventData
         }
+    }
+    
+    func uploadPreparedPhoto(
+        _ preparedPhoto: PreparedPhoto,
+        from fileURL: URL,
+        to eventID: String
+    ) async throws -> PhotoUploadOutcome {
+        let fileValues = try? fileURL.resourceValues(
+            forKeys: [
+                .isRegularFileKey
+            ]
+        )
+        
+        guard fileValues?.isRegularFile == true else {
+            throw APIClientError.preparedFileMissing(
+                preparedPhoto.sourceFilename
+            )
+        }
+        
+        guard
+            let encodedFilename =
+                preparedPhoto.sourceFilename
+                .addingPercentEncoding(
+                    withAllowedCharacters:
+                        Self.filenameHeaderAllowed
+                )
+        else {
+            throw APIClientError.invalidUploadFilename(
+                preparedPhoto.sourceFilename
+            )
+        }
+        
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+            .appending(path: "photos")
+        
+        var request = URLRequest(url: url)
+        
+        request.httpMethod = "POST"
+        request.timeoutInterval = 180
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+            "image/jpeg",
+            forHTTPHeaderField: "Content-Type"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        request.setValue(
+            encodedFilename,
+            forHTTPHeaderField: "X-File-Name"
+        )
+        
+        request.setValue(
+            preparedPhoto.sourceSha256,
+            forHTTPHeaderField: "X-File-SHA256"
+        )
+        
+        request.setValue(
+            String(preparedPhoto.byteSize),
+            forHTTPHeaderField: "Content-Length"
+        )
+        
+        if let capturedAt =
+            preparedPhoto.metadata.capturedAt {
+            request.setValue(
+                capturedAt,
+                forHTTPHeaderField:
+                    "X-PickPic-Captured-At"
+            )
+        }
+        
+        if
+            let latitude =
+                preparedPhoto.metadata.latitude,
+            let longitude =
+                preparedPhoto.metadata.longitude
+        {
+            request.setValue(
+                String(latitude),
+                forHTTPHeaderField:
+                    "X-PickPic-Latitude"
+            )
+            
+            request.setValue(
+                String(longitude),
+                forHTTPHeaderField:
+                    "X-PickPic-Longitude"
+            )
+        }
+        
+        let (data, response) =
+        try await session.upload(
+            for: request,
+            fromFile: fileURL
+        )
+        
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+        
+        let responseContentType =
+        httpResponse.value(
+            forHTTPHeaderField: "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? JSONDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+            
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+            
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+        
+        guard
+            responseContentType.contains(
+                "application/json"
+            )
+        else {
+            throw APIClientError.unexpectedResponse
+        }
+        
+        let uploadResponse: PhotoUploadResponse
+        
+        do {
+            uploadResponse =
+            try JSONDecoder().decode(
+                PhotoUploadResponse.self,
+                from: data
+            )
+        } catch {
+            print(
+                "Photo upload decoding failed:",
+                error
+            )
+            
+            throw APIClientError
+                .invalidPhotoUploadResponse
+        }
+        
+        if uploadResponse.duplicate {
+            guard
+                let existingPhotoID =
+                    uploadResponse.existingPhotoId
+            else {
+                throw APIClientError
+                    .invalidPhotoUploadResponse
+            }
+            
+            return .duplicate(
+                existingPhotoID:
+                    existingPhotoID,
+                variant:
+                    uploadResponse.duplicateVariant
+            )
+        }
+        
+        guard
+            let photoID =
+                uploadResponse.photo?.id
+        else {
+            throw APIClientError
+                .invalidPhotoUploadResponse
+        }
+        
+        return .uploaded(
+            photoID: photoID
+        )
     }
     
     private func makeDecoder() -> JSONDecoder {

@@ -34,6 +34,8 @@ struct UploadJob:
     var conversionStartedAt: Date?
     var conversionCompletedAt: Date?
     
+    var uploadProgress: UploadProgress
+    
     var photoCount: Int {
         photos.count
     }
@@ -49,6 +51,28 @@ struct UploadJob:
             0
         ) { result, photo in
             result + photo.byteSize
+        }
+    }
+    
+    var uploadedPhotoCount: Int {
+        preparedPhotos.reduce(0) { count, photo in
+            if uploadProgress
+                .completedSourceFilenames
+                .contains(photo.sourceFilename) {
+                return count + 1
+            }
+            return count
+        }
+    }
+    
+    var duplicatePhotoCount: Int {
+        preparedPhotos.reduce(0) { count, photo in
+            if uploadProgress
+                .duplicateSourceFilenames
+                .contains(photo.sourceFilename) {
+                return count + 1
+            }
+            return count
         }
     }
     
@@ -77,7 +101,9 @@ struct UploadJob:
         conversionStartedAt:
         Date? = nil,
         conversionCompletedAt:
-        Date? = nil
+        Date? = nil,
+        uploadProgress:
+        UploadProgress = .empty
     ) {
         self.id = id
         self.eventID = eventID
@@ -104,6 +130,7 @@ struct UploadJob:
         conversionStartedAt
         self.conversionCompletedAt =
         conversionCompletedAt
+        self.uploadProgress = uploadProgress
     }
     
     private enum CodingKeys:
@@ -128,6 +155,7 @@ struct UploadJob:
         case conversionCurrentFilename
         case conversionStartedAt
         case conversionCompletedAt
+        case uploadProgress
     }
     
     init(
@@ -244,5 +272,12 @@ struct UploadJob:
             forKey:
                     .conversionCompletedAt
         )
+        
+        uploadProgress =
+        try container.decodeIfPresent(
+            UploadProgress.self,
+            forKey: .uploadProgress
+        )
+        ?? .empty
     }
 }
