@@ -31,6 +31,7 @@ struct ContentView: View {
                 }
             }
         }
+        .environmentObject(configuration)
         .sheet(isPresented: $showingSettings) {
             ConnectionSettingsView(
                 configuration: configuration

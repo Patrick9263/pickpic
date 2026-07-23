@@ -6,6 +6,9 @@ struct UploadQueueView: View {
     @EnvironmentObject private var uploadQueue:
     UploadQueueStore
     
+    @EnvironmentObject private var configuration:
+    APIConfigurationStore
+    
     @State private var showingDeleteError = false
     @State private var deleteErrorMessage = ""
     
@@ -38,6 +41,15 @@ struct UploadQueueView: View {
                             await uploadQueue
                                 .convertAllPhotos(
                                     jobID: job.id
+                                )
+                        }
+                    },
+                    onUpload: {
+                        Task {
+                            await uploadQueue
+                                .uploadAllPhotos(
+                                    jobID: job.id,
+                                    using: configuration
                                 )
                         }
                     }
@@ -110,6 +122,7 @@ struct UploadQueueView: View {
                 Wait for the current operation to finish \
                 before deleting this job.
                 """
+            
             showingDeleteError = true
             return
         }
@@ -133,12 +146,29 @@ struct UploadQueueView: View {
 
 private struct UploadJobRow: View {
     let job: UploadJob
+    
     let onPrepare: () -> Void
     let onConvertTest: () -> Void
     let onConvertAll: () -> Void
+    let onUpload: () -> Void
     
     @State private var folderIsAccessible:
     Bool?
+    
+    private var capturedAtCount: Int {
+        job.preparedPhotos.filter { photo in
+            photo.metadata.capturedAt != nil
+        }
+        .count
+    }
+    
+    private var locationCount: Int {
+        job.preparedPhotos.filter { photo in
+            photo.metadata.latitude != nil
+            && photo.metadata.longitude != nil
+        }
+        .count
+    }
     
     var body: some View {
         VStack(
@@ -240,11 +270,11 @@ private struct UploadJobRow: View {
             if let preview =
                 job.conversionPreview {
                 Label(
-                """
-                Test JPEG: \(preview.pixelWidth) × \
-                \(preview.pixelHeight)
-                """,
-                systemImage: "photo"
+                    """
+                    Test JPEG: \(preview.pixelWidth) × \
+                    \(preview.pixelHeight)
+                    """,
+                    systemImage: "photo"
                 )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
@@ -319,10 +349,10 @@ private struct UploadJobRow: View {
                 )
                 
                 Text(
-                """
-                \(job.conversionProcessedCount) of \
-                \(job.photoCount) photos converted
-                """
+                    """
+                    \(job.conversionProcessedCount) of \
+                    \(job.photoCount) photos converted
+                    """
                 )
                 .font(.subheadline)
                 
@@ -335,36 +365,22 @@ private struct UploadJobRow: View {
                 }
                 
                 Text(
-                """
-                Reading metadata, hashing the original, \
-                and creating the proof JPEG…
-                """
+                    """
+                    Reading metadata, hashing the original, \
+                    and creating the proof JPEG…
+                    """
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
             
         case .readyToUpload:
-            let capturedAtCount =
-            job.preparedPhotos.filter { photo in
-                photo.metadata.capturedAt != nil
-            }
-            .count
-            
-            let locationCount =
-            job.preparedPhotos.filter { photo in
-                photo.metadata.latitude != nil
-                && photo.metadata.longitude
-                != nil
-            }
-            .count
-            
             Label(
-            """
-            \(job.preparedPhotos.count) JPEGs are ready
-            """,
-            systemImage:
-                "tray.and.arrow.up.fill"
+                """
+                \(job.preparedPhotos.count) JPEGs are ready
+                """,
+                systemImage:
+                    "tray.and.arrow.up.fill"
             )
             .font(.headline)
             
@@ -390,24 +406,144 @@ private struct UploadJobRow: View {
                     "\(locationCount) of \(job.photoCount)"
             )
             
-            Text(
-            """
-            SHA-256 has been calculated from each \
-            original source file.
-            """
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            if job.uploadedPhotoCount > 0 {
+                ProgressView(
+                    value:
+                        Double(
+                            job.uploadedPhotoCount
+                        ),
+                    total:
+                        Double(
+                            max(job.photoCount, 1)
+                        )
+                )
+                
+                Text(
+                    """
+                    \(job.uploadedPhotoCount) of \
+                    \(job.photoCount) already uploaded
+                    """
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                
+                if job.duplicatePhotoCount > 0 {
+                    Text(
+                        """
+                        \(job.duplicatePhotoCount) matched \
+                        existing server photos.
+                        """
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            
+            if let errorMessage =
+                job.uploadProgress.errorMessage {
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
+            
+            Button {
+                onUpload()
+            } label: {
+                Label(
+                    job.uploadedPhotoCount > 0
+                    ? "Resume Upload"
+                    : "Upload Photos",
+                    systemImage:
+                        "arrow.up.circle.fill"
+                )
+            }
+            .buttonStyle(.borderedProminent)
             
             Button {
                 onConvertAll()
             } label: {
                 Label(
                     "Reconvert All Photos",
-                    systemImage: "arrow.clockwise"
+                    systemImage:
+                        "arrow.clockwise"
                 )
             }
             .buttonStyle(.bordered)
+            
+        case .uploading:
+            VStack(
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ProgressView(
+                    value:
+                        Double(
+                            job.uploadedPhotoCount
+                        ),
+                    total:
+                        Double(
+                            max(job.photoCount, 1)
+                        )
+                )
+                
+                Text(
+                    """
+                    \(job.uploadedPhotoCount) of \
+                    \(job.photoCount) photos uploaded
+                    """
+                )
+                .font(.subheadline)
+                
+                if let filename =
+                    job.uploadProgress
+                    .currentFilename {
+                    Text(filename)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                
+                Text(
+                    "Uploading prepared JPEG…"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            
+        case .completed:
+            Label(
+                """
+                \(job.uploadedPhotoCount) photos uploaded
+                """,
+                systemImage:
+                    "checkmark.circle.fill"
+            )
+            .font(.headline)
+            
+            if job.duplicatePhotoCount > 0 {
+                Label(
+                    """
+                    \(job.duplicatePhotoCount) were \
+                    already present
+                    """,
+                    systemImage:
+                        "rectangle.on.rectangle"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+            
+            if let completedAt =
+                job.uploadProgress.completedAt {
+                Text(
+                    completedAt.formatted(
+                        date: .abbreviated,
+                        time: .shortened
+                    )
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
             
         case .failed:
             if let errorMessage =
@@ -422,23 +558,11 @@ private struct UploadJobRow: View {
             } label: {
                 Label(
                     "Try Preparation Again",
-                    systemImage: "arrow.clockwise"
+                    systemImage:
+                        "arrow.clockwise"
                 )
             }
             .buttonStyle(.bordered)
-            
-        case .uploading:
-            HStack(spacing: 10) {
-                ProgressView()
-                Text("Uploading…")
-            }
-            
-        case .completed:
-            Label(
-                "Upload completed",
-                systemImage:
-                    "checkmark.circle.fill"
-            )
         }
     }
     
