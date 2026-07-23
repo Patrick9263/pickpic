@@ -81,6 +81,15 @@ struct EventDetailView: View {
                             "arrow.up.circle"
                     )
                 }
+                
+                NavigationLink {
+                    LikedPhotosView(event: event)
+                } label: {
+                    Label(
+                        "Liked Photos",
+                        systemImage: "heart.fill"
+                    )
+                }
             }
             
             Section("Gallery") {

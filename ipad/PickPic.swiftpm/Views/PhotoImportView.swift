@@ -6,6 +6,8 @@ struct PhotoImportView: View {
     
     @EnvironmentObject private var uploadQueue:
     UploadQueueStore
+    @EnvironmentObject private var eventFolders:
+    EventFolderStore
     
     @StateObject private var viewModel =
     PhotoImportViewModel()
@@ -225,14 +227,12 @@ struct PhotoImportView: View {
             try viewModel.makeUploadJob(
                 for: event
             )
-            
+            try eventFolders.save(job: job)
             try uploadQueue.add(job)
-            
             hasQueuedSelection = true
         } catch {
             queueErrorMessage =
             error.localizedDescription
-            
             showingQueueError = true
         }
     }
