@@ -10,6 +10,7 @@ final class UploadQueueStore: ObservableObject {
     var loadErrorMessage: String?
     
     private let storageURL: URL
+    private var runningPipelineJobIDs: Set<UUID> = []
     
     init() {
         storageURL = Self.makeStorageURL()
@@ -649,6 +650,69 @@ final class UploadQueueStore: ObservableObject {
             .removePreparedPhotos(
                 for: jobID
             )
+    }
+    
+    func runUploadPipeline(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) async {
+        guard !runningPipelineJobIDs.contains(jobID) else {
+            return
+        }
+        
+        runningPipelineJobIDs.insert(jobID)
+        
+        defer {
+            runningPipelineJobIDs.remove(jobID)
+        }
+        
+        guard let startingStage = stage(for: jobID) else {
+            return
+        }
+        
+        switch startingStage {
+        case .queued,
+                .failed:
+            await prepare(jobID: jobID)
+            
+            guard stage(for: jobID) == .prepared else {
+                return
+            }
+            
+        case .prepared,
+                .readyToUpload:
+            break
+            
+        case .preparing,
+                .converting,
+                .uploading,
+                .completed:
+            return
+        }
+        
+        if stage(for: jobID) == .prepared {
+            await convertAllPhotos(jobID: jobID)
+            
+            guard stage(for: jobID) == .readyToUpload else {
+                return
+            }
+        }
+        
+        if stage(for: jobID) == .readyToUpload {
+            await uploadAllPhotos(
+                jobID: jobID,
+                using: configuration
+            )
+        }
+    }
+    
+    private func stage(
+        for jobID: UUID
+    ) -> UploadStage? {
+        jobs.first { job in
+            job.id == jobID
+        }?
+            .stage
     }
     
     private func updateJob(
