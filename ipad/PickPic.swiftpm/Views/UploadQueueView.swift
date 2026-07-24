@@ -18,6 +18,29 @@ struct UploadQueueView: View {
     
     var body: some View {
         List {
+            if let message =
+                uploadQueue.storageCleanupMessage {
+                Section {
+                    Label(
+                        message,
+                        systemImage:
+                            "externaldrive.badge.checkmark"
+                    )
+                    .foregroundStyle(.secondary)
+                }
+            }
+            
+            if let message =
+                uploadQueue.storageErrorMessage {
+                Section {
+                    Label(
+                        message,
+                        systemImage:
+                            "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+                }
+            }
             ForEach(eventJobs) { job in
                 UploadJobRow(
                     job: job,
@@ -30,10 +53,10 @@ struct UploadQueueView: View {
                                 )
                         }
                     },
-                    onConvertTest: {
+                    onTestFirstPhoto: {
                         Task {
                             await uploadQueue
-                                .convertTestPreview(
+                                .runTestPreviewPipeline(
                                     jobID: job.id
                                 )
                         }
@@ -141,7 +164,7 @@ private struct UploadJobRow: View {
     let job: UploadJob
     
     let onContinue: () -> Void
-    let onConvertTest: () -> Void
+    let onTestFirstPhoto: () -> Void
     let onConvertAll: () -> Void
     
     @State private var folderIsAccessible:
@@ -234,16 +257,30 @@ private struct UploadJobRow: View {
             } label: {
                 Label(
                     "Start Upload",
-                    systemImage: "play.circle.fill"
+                    systemImage:
+                        "arrow.up.circle.fill"
                 )
+                .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
             
+            Button {
+                onTestFirstPhoto()
+            } label: {
+                Label(
+                    "Test First Photo",
+                    systemImage: "photo"
+                )
+                .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.bordered)
+            
             Text(
-            """
-            Creates the workflow folders, converts the \
-            batch, and uploads each proof in sequence.
-            """
+                """
+                Start Upload runs the complete batch. Test First \
+                Photo prepares the folders and creates one preview \
+                without uploading the event.
+                """
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -266,8 +303,7 @@ private struct UploadJobRow: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
             
-            if let preview =
-                job.conversionPreview {
+            if let preview = job.conversionPreview {
                 Label(
                     """
                     Test JPEG: \(preview.pixelWidth) × \
@@ -285,30 +321,30 @@ private struct UploadJobRow: View {
                 } label: {
                     Label(
                         "View Test Preview",
-                        systemImage:
-                            "photo.on.rectangle"
+                        systemImage: "eye"
                     )
+                    .labelStyle(.titleAndIcon)
                 }
                 
                 Button {
-                    onConvertTest()
+                    onTestFirstPhoto()
                 } label: {
                     Label(
                         "Reconvert Test Photo",
-                        systemImage:
-                            "arrow.clockwise"
+                        systemImage: "arrow.clockwise"
                     )
+                    .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(.bordered)
             } else {
                 Button {
-                    onConvertTest()
+                    onTestFirstPhoto()
                 } label: {
                     Label(
                         "Convert Test Photo",
-                        systemImage:
-                            "photo.badge.arrow.down"
+                        systemImage: "photo"
                     )
+                    .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(.bordered)
             }
@@ -319,8 +355,9 @@ private struct UploadJobRow: View {
                 Label(
                     "Continue Upload",
                     systemImage:
-                        "rectangle.stack.badge.play"
+                        "arrow.up.circle.fill"
                 )
+                .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
             
@@ -452,6 +489,20 @@ private struct UploadJobRow: View {
                 Text(errorMessage)
                     .font(.subheadline)
                     .foregroundStyle(.red)
+            }
+            
+            if job.conversionPreview != nil {
+                NavigationLink {
+                    ConversionPreviewView(
+                        job: job
+                    )
+                } label: {
+                    Label(
+                        "View Test Preview",
+                        systemImage: "eye"
+                    )
+                    .labelStyle(.titleAndIcon)
+                }
             }
             
             Button {

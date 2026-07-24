@@ -227,27 +227,6 @@ enum MultipartFormFileService {
     private static func multipartDirectoryURL()
     -> URL
     {
-        let fileManager =
-        FileManager.default
-        
-        let baseURL =
-        fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-        ?? fileManager.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0]
-        
-        return baseURL
-            .appendingPathComponent(
-                "PickPic",
-                isDirectory: true
-            )
-            .appendingPathComponent(
-                "MultipartUploads",
-                isDirectory: true
-            )
+        AppStorageService.multipartUploadsURL
     }
 }

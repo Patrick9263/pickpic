@@ -13,6 +13,10 @@ struct PickPicApp: App {
             ContentView()
                 .environmentObject(uploadQueue)
                 .environmentObject(eventFolders)
+                .task {
+                    await uploadQueue
+                        .performStorageMaintenance()
+                }
         }
     }
 }

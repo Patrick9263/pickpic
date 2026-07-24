@@ -9,12 +9,63 @@ final class UploadQueueStore: ObservableObject {
     @Published private(set)
     var loadErrorMessage: String?
     
+    @Published private(set)
+    var storageCleanupMessage: String?
+    
+    @Published private(set)
+    var storageErrorMessage: String?
+    
     private let storageURL: URL
     private var runningPipelineJobIDs: Set<UUID> = []
     
     init() {
         storageURL = Self.makeStorageURL()
         load()
+    }
+    
+    func performStorageMaintenance() async {
+        let jobsSnapshot = jobs
+        
+        do {
+            let result = try await Task.detached(
+                priority: .utility
+            ) {
+                try AppStorageService.cleanup(
+                    jobs: jobsSnapshot
+                )
+            }
+                .value
+            
+            storageErrorMessage = nil
+            
+            guard
+                result.removedItemCount > 0
+            else {
+                storageCleanupMessage = nil
+                return
+            }
+            
+            let reclaimedSize =
+            ByteCountFormatter.string(
+                fromByteCount:
+                    result.reclaimedBytes,
+                countStyle: .file
+            )
+            
+            storageCleanupMessage =
+            """
+            PickPic recovered \(reclaimedSize) of \
+            temporary storage.
+            """
+        } catch {
+            storageCleanupMessage = nil
+            
+            storageErrorMessage =
+            """
+            Temporary storage could not be cleaned: \
+            \(error.localizedDescription)
+            """
+        }
     }
     
     func jobs(
@@ -272,6 +323,37 @@ final class UploadQueueStore: ObservableObject {
                 || currentJob.stage
                 == .readyToUpload
         else {
+            return
+        }
+        
+        do {
+            try await Task.detached(
+                priority: .utility
+            ) {
+                try AppStorageService
+                    .ensureProofBatchCapacity(
+                        photoCount:
+                            currentJob.photoCount
+                    )
+            }
+            .value
+        } catch {
+            do {
+                try updateJob(jobID) { job in
+                    job.conversionErrorMessage =
+                    error.localizedDescription
+                    
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+            """
+            Storage could not be checked, and the \
+            queue could not be updated: \
+            \(error.localizedDescription)
+            """
+            }
+            
             return
         }
         
@@ -733,6 +815,56 @@ final class UploadQueueStore: ObservableObject {
         }
     }
     
+    func runTestPreviewPipeline(
+        jobID: UUID
+    ) async {
+        guard
+            !runningPipelineJobIDs.contains(jobID)
+        else {
+            return
+        }
+        
+        runningPipelineJobIDs.insert(jobID)
+        
+        defer {
+            runningPipelineJobIDs.remove(jobID)
+        }
+        
+        guard
+            let startingStage = stage(for: jobID)
+        else {
+            return
+        }
+        
+        switch startingStage {
+        case .queued,
+                .failed:
+            await prepare(jobID: jobID)
+            
+            guard !Task.isCancelled else {
+                return
+            }
+            
+            guard stage(for: jobID) == .prepared else {
+                return
+            }
+            
+        case .prepared:
+            break
+            
+        case .preparing,
+                .converting,
+                .readyToUpload,
+                .uploading,
+                .completed:
+            return
+        }
+        
+        await convertTestPreview(
+            jobID: jobID
+        )
+    }
+    
     private func stage(
         for jobID: UUID
     ) -> UploadStage? {
@@ -898,26 +1030,13 @@ final class UploadQueueStore: ObservableObject {
         )
     }
     
-    private static func makeStorageURL() -> URL {
-        let fileManager = FileManager.default
-        
-        let baseURL =
-        fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-        ?? fileManager.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0]
-        
-        return baseURL
+    private static func makeStorageURL()
+    -> URL
+    {
+        AppStorageService.rootURL
             .appendingPathComponent(
-                "PickPic",
-                isDirectory: true
-            )
-            .appendingPathComponent(
-                "upload-queue.json"
+                "upload-queue.json",
+                isDirectory: false
             )
     }
 }

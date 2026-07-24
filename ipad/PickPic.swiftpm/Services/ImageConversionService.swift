@@ -543,11 +543,8 @@ enum ImageConversionService {
     private static func previewDirectoryURL(
         jobID: UUID
     ) -> URL {
-        applicationSupportURL()
-            .appendingPathComponent(
-                "ConversionPreviews",
-                isDirectory: true
-            )
+        AppStorageService
+            .conversionPreviewsURL
             .appendingPathComponent(
                 jobID.uuidString,
                 isDirectory: true
@@ -557,36 +554,12 @@ enum ImageConversionService {
     private static func preparedDirectoryURL(
         jobID: UUID
     ) -> URL {
-        applicationSupportURL()
-            .appendingPathComponent(
-                "PreparedUploads",
-                isDirectory: true
-            )
+        AppStorageService
+            .preparedUploadsURL
             .appendingPathComponent(
                 jobID.uuidString,
                 isDirectory: true
             )
     }
     
-    private static func applicationSupportURL()
-    -> URL
-    {
-        let fileManager =
-        FileManager.default
-        
-        let baseURL =
-        fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-        ?? fileManager.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0]
-        
-        return baseURL.appendingPathComponent(
-            "PickPic",
-            isDirectory: true
-        )
-    }
 }

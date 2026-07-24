@@ -176,26 +176,13 @@ final class EventFolderStore: ObservableObject {
         )
     }
     
-    private static func makeStorageURL() -> URL {
-        let fileManager = FileManager.default
-        
-        let baseURL =
-        fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-        ?? fileManager.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0]
-        
-        return baseURL
+    private static func makeStorageURL()
+    -> URL
+    {
+        AppStorageService.rootURL
             .appendingPathComponent(
-                "PickPic",
-                isDirectory: true
-            )
-            .appendingPathComponent(
-                "event-folders.json"
+                "event-folders.json",
+                isDirectory: false
             )
     }
 }
