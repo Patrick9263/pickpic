@@ -246,20 +246,17 @@ struct LikedPhotosView: View {
         Section("Last Sync") {
             LabeledContent(
                 "Liked photos",
-                value:
-                    "\(result.likedPhotoCount)"
+                value: "\(result.likedPhotoCount)"
             )
             
             LabeledContent(
                 "Copied",
-                value:
-                    "\(result.copiedPhotoCount)"
+                value: "\(result.copiedPhotoCount)"
             )
             
             LabeledContent(
                 "Already in To Edit",
-                value:
-                    "\(result.alreadyPresentCount)"
+                value: "\(result.alreadyPresentCount)"
             )
             
             LabeledContent(
@@ -272,23 +269,23 @@ struct LikedPhotosView: View {
                 value: "\(viewModel.editingLikedPhotoCount)"
             )
             
-            if !viewModel.workflowUpdateFailures.isEmpty {
+            if !result.missingFilenames.isEmpty {
                 VStack(
                     alignment: .leading,
                     spacing: 6
                 ) {
                     Label(
-            """
-            Unable to mark Editing \
-            (\(viewModel.workflowUpdateFailures.count))
-            """,
-            systemImage:
-                "exclamationmark.triangle"
+                    """
+                    Missing source files \
+                    (\(result.missingFilenames.count))
+                    """,
+                    systemImage:
+                        "exclamationmark.triangle"
                     )
                     .foregroundStyle(.orange)
                     
                     ForEach(
-                        viewModel.workflowUpdateFailures,
+                        result.missingFilenames,
                         id: \.self
                     ) { filename in
                         Text(filename)
@@ -302,15 +299,16 @@ struct LikedPhotosView: View {
                     alignment: .leading,
                     spacing: 6
                 ) {
-                    Label(     
-                        """
-                        Unable to mark Editing \
-                        (\(viewModel.workflowUpdateFailures.count))
-                        """,
-                        systemImage:
-                            "exclamationmark.triangle"
+                    Label(
+                    """
+                    Unable to mark Editing \
+                    (\(viewModel.workflowUpdateFailures.count))
+                    """,
+                    systemImage:
+                        "exclamationmark.triangle"
                     )
                     .foregroundStyle(.orange)
+                    
                     ForEach(
                         viewModel.workflowUpdateFailures,
                         id: \.self

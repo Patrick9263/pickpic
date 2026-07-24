@@ -461,6 +461,132 @@ struct APIClient {
         }
     }
     
+    func uploadFinalVariants(
+        _ variants: GeneratedFinalVariants,
+        to photoID: String
+    ) async throws -> FinalVariantUploadResponse {
+        let multipartBody =
+        try MultipartFormFileService
+            .createFinalVariantsBody(
+                photoID: photoID,
+                variants: variants
+            )
+        
+        defer {
+            try? MultipartFormFileService.remove(
+                multipartBody
+            )
+        }
+        
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "photos")
+            .appending(path: photoID)
+            .appending(path: "variants")
+            .appending(path: "final")
+        
+        var request = URLRequest(url: url)
+        
+        request.httpMethod = "PUT"
+        request.timeoutInterval = 300
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+        """
+        multipart/form-data; \
+        boundary=\(multipartBody.boundary)
+        """,
+        forHTTPHeaderField:
+            "Content-Type"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        let (data, response) =
+        try await session.upload(
+            for: request,
+            fromFile:
+                multipartBody.fileURL
+        )
+        
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+        
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+            
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+            
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+        
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard contentType.contains(
+            "application/json"
+        ) else {
+            throw APIClientError.unexpectedResponse
+        }
+        
+        do {
+            return try makeDecoder().decode(
+                FinalVariantUploadResponse.self,
+                from: data
+            )
+        } catch {
+            print(
+                "Final variant decoding failed:",
+                error
+            )
+            
+            throw APIClientError
+                .invalidFinalVariantUploadResponse
+        }
+    }
+    
     func fetchEventPhotos(
         eventID: String
     ) async throws -> [ServerPhotoRecord] {

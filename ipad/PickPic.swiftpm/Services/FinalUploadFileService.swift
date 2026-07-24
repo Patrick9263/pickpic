@@ -5,6 +5,7 @@ struct StagedFinalUpload: Sendable {
     let filename: String
     let sha256: String
     let byteSize: Int64
+    let variants: GeneratedFinalVariants
 }
 
 enum FinalUploadFileError: LocalizedError {
@@ -159,11 +160,27 @@ enum FinalUploadFileService {
             for: stagedURL
         )
         
+        let variantsDirectory =
+        stagingDirectory
+            .appendingPathComponent(
+                "Variants",
+                isDirectory: true
+            )
+        
+        let variants =
+        try ImageVariantService
+            .createFinalVariants(
+                from: stagedURL,
+                outputDirectoryURL:
+                    variantsDirectory
+            )
+        
         return StagedFinalUpload(
             fileURL: stagedURL,
             filename: filename,
             sha256: sha256,
-            byteSize: byteSize
+            byteSize: byteSize,
+            variants: variants
         )
     }
     
