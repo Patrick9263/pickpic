@@ -125,6 +125,11 @@ enum FinalUploadFileService {
                 )
         }
         
+        try AppStorageService
+            .ensureFinalUploadCapacity(
+                finalByteSize: byteSize
+            )
+        
         let stagingDirectory =
         stagingDirectoryURL(
             photoID: candidate.photoID
@@ -206,28 +211,8 @@ enum FinalUploadFileService {
     private static func stagingDirectoryURL(
         photoID: String
     ) -> URL {
-        let fileManager =
-        FileManager.default
-        
-        let baseURL =
-        fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
-        ?? fileManager.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        )[0]
-        
-        return baseURL
-            .appendingPathComponent(
-                "PickPic",
-                isDirectory: true
-            )
-            .appendingPathComponent(
-                "FinalUploadStaging",
-                isDirectory: true
-            )
+        AppStorageService
+            .finalUploadStagingURL
             .appendingPathComponent(
                 photoID,
                 isDirectory: true

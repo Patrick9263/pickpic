@@ -16,6 +16,10 @@ struct PickPicApp: App {
             ContentView()
                 .environmentObject(uploadQueue)
                 .environmentObject(eventFolders)
+                .task {
+                    await uploadQueue
+                        .performStorageMaintenance()
+                }
                 .onAppear {
                     updateIdleTimer(
                         for: uploadQueue.jobs
@@ -28,7 +32,9 @@ struct PickPicApp: App {
                         for: jobs
                     )
                 }
-                .onChange(of: scenePhase) { _, newPhase in
+                .onChange(
+                    of: scenePhase
+                ) { _, newPhase in
                     switch newPhase {
                     case .active:
                         updateIdleTimer(
@@ -37,12 +43,12 @@ struct PickPicApp: App {
                         
                     case .inactive,
                             .background:
-                        UIApplication.shared.isIdleTimerDisabled =
-                        false
+                        UIApplication.shared
+                            .isIdleTimerDisabled = false
                         
                     @unknown default:
-                        UIApplication.shared.isIdleTimerDisabled =
-                        false
+                        UIApplication.shared
+                            .isIdleTimerDisabled = false
                     }
                 }
         }
@@ -51,28 +57,24 @@ struct PickPicApp: App {
     private func updateIdleTimer(
         for jobs: [UploadJob]
     ) {
-        let activeStages = jobs.compactMap {
-            job -> UploadStage? in
-            
+        let hasActiveProcessing =
+        jobs.contains { job in
             switch job.stage {
             case .preparing,
                     .converting,
                     .uploading:
-                return job.stage
+                return true
                 
             case .queued,
                     .prepared,
                     .readyToUpload,
                     .completed,
                     .failed:
-                return nil
+                return false
             }
         }
         
-        let shouldStayAwake =
-        !activeStages.isEmpty
-        
         UIApplication.shared.isIdleTimerDisabled =
-        shouldStayAwake
+        hasActiveProcessing
     }
 }
