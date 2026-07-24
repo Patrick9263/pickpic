@@ -16,8 +16,44 @@ struct UploadQueueView: View {
         uploadQueue.jobs(for: event.id)
     }
     
+    private var eventHasActiveProcessing: Bool {
+        eventJobs.contains { job in
+            switch job.stage {
+            case .preparing,
+                    .converting,
+                    .uploading:
+                return true
+                
+            case .queued,
+                    .prepared,
+                    .readyToUpload,
+                    .completed,
+                    .failed:
+                return false
+            }
+        }
+    }
+    
     var body: some View {
         List {
+            if eventHasActiveProcessing {
+                Section {
+                    Label(
+                        "Keep PickPic open",
+                        systemImage: "hourglass"
+                    )
+                    .font(.headline)
+                    Text(
+                        """
+                        Folder preparation, conversion, and uploads \
+                        currently run in the foreground. The iPad \
+                        will stay awake while processing.
+                        """
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+            }
             ForEach(eventJobs) { job in
                 UploadJobRow(
                     job: job,
