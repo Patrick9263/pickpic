@@ -410,7 +410,9 @@ enum ImageConversionService {
                 .cacheIntermediates: false
             ]
         )
-        
+        defer {
+            context.clearCaches()
+        }
         try context.writeJPEGRepresentation(
             of: outputImage,
             to: outputURL,
