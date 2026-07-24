@@ -31,6 +31,7 @@ struct FinalUploadsView: View {
                 viewModel.scanResult {
                 summarySection(scanResult)
                 readyFinalsSection(scanResult)
+                variantRepairsSection(scanResult)
                 issuesSection(scanResult)
             } else if viewModel.isLoading {
                 Section {
@@ -63,6 +64,48 @@ struct FinalUploadsView: View {
                 }
             }
             
+            if
+                let optimizedCount =
+                    viewModel.lastOptimizedCount,
+                optimizedCount > 0
+            {
+                Section("Last Optimization") {
+                    Label(
+            """
+            \(optimizedCount) final \
+            \(optimizedCount == 1
+                ? "image"
+                : "images") optimized
+            """,
+            systemImage:
+                "checkmark.circle.fill"
+                    )
+                    .foregroundStyle(.green)
+                }
+            }
+            
+            if !viewModel.variantUploadFailures.isEmpty {
+                Section("Optimization Needs Retry") {
+                    Label(
+            """
+            Full final images were uploaded, but some \
+            optimized images need another attempt.
+            """,
+            systemImage:
+                "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+                    
+                    ForEach(
+                        viewModel.variantUploadFailures,
+                        id: \.self
+                    ) { filename in
+                        Text(filename)
+                            .font(.caption)
+                    }
+                }
+            }
+            
             if let errorMessage =
                 viewModel.errorMessage {
                 Section {
@@ -86,6 +129,9 @@ struct FinalUploadsView: View {
                 let scanResult =
                     viewModel.scanResult,
                 !scanResult.candidates.isEmpty
+                    || !scanResult
+                    .variantRepairCandidates
+                    .isEmpty
             {
                 uploadControls(
                     scanResult: scanResult,
@@ -191,6 +237,12 @@ struct FinalUploadsView: View {
                 "Missing edited JPEGs",
                 value:
                     "\(result.missingSourceFilenames.count)"
+            )
+            
+            LabeledContent(
+                "Needs optimization",
+                value:
+                    "\(result.variantRepairCandidates.count)"
             )
         }
     }
@@ -346,31 +398,45 @@ struct FinalUploadsView: View {
         scanResult: FinalUploadScanResult,
         reference: EventFolderReference
     ) -> some View {
-        VStack(spacing: 8) {
-            if viewModel.isUploading {
+        VStack(spacing: 10) {
+            if
+                viewModel.isUploading
+                    || viewModel.isRepairingVariants
+            {
+                let completedCount =
+                viewModel.isRepairingVariants
+                ? viewModel.optimizedCount
+                : viewModel.uploadedCount
+                
+                let totalCount =
+                viewModel.isRepairingVariants
+                ? scanResult
+                    .variantRepairCandidates
+                    .count
+                : scanResult.candidates.count
+                
                 ProgressView(
                     value:
-                        Double(
-                            viewModel.uploadedCount
-                        ),
+                        Double(completedCount),
                     total:
                         Double(
-                            max(
-                                scanResult
-                                    .candidates
-                                    .count,
-                                1
-                            )
+                            max(totalCount, 1)
                         )
                 )
                 
                 Text(
-                    """
-                    \(viewModel.uploadedCount) of \
-                    \(scanResult.candidates.count) uploaded
-                    """
+                """
+                \(completedCount) of \(totalCount) complete
+                """
                 )
                 .font(.subheadline)
+                
+                if let currentStep =
+                    viewModel.currentStep {
+                    Text(currentStep)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 
                 if let filename =
                     viewModel.currentFilename {
@@ -381,42 +447,110 @@ struct FinalUploadsView: View {
                 }
             }
             
-            Button {
-                Task {
-                    await viewModel.uploadAll(
-                        eventID: event.id,
-                        reference: reference,
-                        using: configuration
-                    )
-                }
-            } label: {
-                if viewModel.isUploading {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        
-                        Text("Uploading Finals…")
+            if !scanResult.candidates.isEmpty {
+                Button {
+                    Task {
+                        await viewModel.uploadAll(
+                            eventID: event.id,
+                            reference: reference,
+                            using: configuration
+                        )
                     }
-                    .frame(maxWidth: .infinity)
-                } else {
+                } label: {
                     Label(
-                        """
-                        Upload \(scanResult.candidates.count) \
-                        \(scanResult.candidates.count == 1
-                            ? "Final"
-                            : "Finals")
-                        """,
-                        systemImage:
-                            "arrow.up.circle.fill"
+                    """
+                    Upload \(scanResult.candidates.count) \
+                    \(scanResult.candidates.count == 1
+                        ? "Final"
+                        : "Finals")
+                    """,
+                    systemImage:
+                        "arrow.up.circle.fill"
                     )
                     .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(viewModel.isBusy)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(viewModel.isUploading)
+            
+            if
+                !scanResult
+                    .variantRepairCandidates
+                    .isEmpty
+            {
+                Button {
+                    Task {
+                        await viewModel
+                            .repairMissingVariants(
+                                eventID: event.id,
+                                reference: reference,
+                                using: configuration
+                            )
+                    }
+                } label: {
+                    Label(
+                    """
+                    Optimize \
+                    \(scanResult.variantRepairCandidates.count) \
+                    Existing \
+                    \(scanResult.variantRepairCandidates.count == 1
+                        ? "Final"
+                        : "Finals")
+                    """,
+                    systemImage:
+                        "photo.stack"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(viewModel.isBusy)
+            }
         }
         .padding()
         .background(.regularMaterial)
+    }
+    
+    private func variantRepairsSection(
+        _ result: FinalUploadScanResult
+    ) -> some View {
+        Section(
+        """
+        Finals Needing Optimized Images \
+        (\(result.variantRepairCandidates.count))
+        """
+        ) {
+            if result.variantRepairCandidates.isEmpty {
+                Text(
+                """
+                All matching final images have thumbnails \
+                and previews.
+                """
+                )
+                .foregroundStyle(.secondary)
+            } else {
+                ForEach(
+                    result.variantRepairCandidates
+                ) { candidate in
+                    VStack(
+                        alignment: .leading,
+                        spacing: 5
+                    ) {
+                        Text(candidate.editedFilename)
+                        
+                        Text(
+                        """
+                        Full final is already uploaded. \
+                        Thumbnail and preview are missing.
+                        """
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
     }
     
     private func reload() async {

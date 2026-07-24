@@ -23,6 +23,9 @@ struct FinalUploadScanResult:
     let eligiblePhotoCount: Int
     let candidates: [FinalUploadCandidate]
     
+    let variantRepairCandidates:
+    [FinalUploadCandidate]
+    
     let missingSourceFilenames: [String]
     let unmatchedEditedFilenames: [String]
     let ambiguousMatches: [String]

@@ -266,11 +266,65 @@ enum EditedFolderService {
         ambiguousMatches.sort()
         oversizedEditedFilenames.sort()
         
+        let variantRepairCandidates:
+        [FinalUploadCandidate] =
+        photos.compactMap { photo in
+            guard
+                photo.workflowStatus == .final,
+                photo.heartCount == 0,
+                let finalPhoto = photo.finalPhoto,
+                !finalPhoto.variants.isComplete
+            else {
+                return nil
+            }
+            
+            let baseName = normalizedBaseName(
+                photo.originalFilename
+            )
+            
+            guard
+                let editedMatches =
+                    filesByBaseName[baseName],
+                editedMatches.count == 1
+            else {
+                return nil
+            }
+            
+            let editedFile = editedMatches[0]
+            
+            guard
+                editedFile.byteSize
+                    <= maximumFinalJPEGBytes
+            else {
+                return nil
+            }
+            
+            return FinalUploadCandidate(
+                photoID: photo.id,
+                sourceFilename:
+                    photo.originalFilename,
+                editedFilename:
+                    editedFile.url.lastPathComponent,
+                byteSize:
+                    editedFile.byteSize,
+                isReplacement: true
+            )
+        }
+        .sorted { first, second in
+            first.sourceFilename
+                .localizedStandardCompare(
+                    second.sourceFilename
+                )
+            == .orderedAscending
+        }
+        
         return FinalUploadScanResult(
             eligiblePhotoCount:
                 eligiblePhotos.count,
             candidates:
                 candidates,
+            variantRepairCandidates:
+                variantRepairCandidates,
             missingSourceFilenames:
                 missingSourceFilenames,
             unmatchedEditedFilenames:

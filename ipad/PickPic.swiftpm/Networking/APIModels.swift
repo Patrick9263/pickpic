@@ -59,6 +59,31 @@ enum ServerPhotoWorkflowStatus:
     }
 }
 
+struct ServerImageVariantRecord:
+    Decodable,
+    Hashable,
+    Sendable
+{
+    let imageUrl: String
+    let contentType: String
+    let byteSize: Int64
+    let width: Int
+    let height: Int
+    let createdAt: String
+}
+
+struct ServerImageVariantSet:
+    Decodable,
+    Hashable,
+    Sendable
+{
+    let thumbnail: ServerImageVariantRecord?
+    let preview: ServerImageVariantRecord?
+    var isComplete: Bool {
+        thumbnail != nil && preview != nil
+    }
+}
+
 struct ServerFinalPhotoSummary:
     Decodable,
     Hashable,
@@ -67,6 +92,16 @@ struct ServerFinalPhotoSummary:
     let originalFilename: String
     let byteSize: Int64
     let uploadedAt: String
+    let variants: ServerImageVariantSet
+}
+
+struct FinalVariantUploadResponse:
+    Decodable,
+    Sendable
+{
+    let photoId: String
+    let sourceKind: String
+    let variants: ServerImageVariantSet
 }
 
 struct ServerPhotoRecord:
@@ -137,6 +172,7 @@ enum APIClientError: LocalizedError {
     case invalidUploadFilename(String)
     case invalidPhotoUploadResponse
     case invalidFinalPhotoUploadResponse
+    case invalidFinalVariantUploadResponse
     
     var errorDescription: String? {
         switch self {
@@ -193,6 +229,12 @@ enum APIClientError: LocalizedError {
         case .invalidFinalPhotoUploadResponse:
             return """
             PickPic returned final-photo data that the app could not read.
+            """
+            
+        case .invalidFinalVariantUploadResponse:
+            return """
+            PickPic returned optimized-image data that the app \
+            could not read.
             """
         }
     }
