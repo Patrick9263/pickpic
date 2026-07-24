@@ -21,11 +21,13 @@ struct UploadQueueView: View {
             ForEach(eventJobs) { job in
                 UploadJobRow(
                     job: job,
-                    onPrepare: {
+                    onContinue: {
                         Task {
-                            await uploadQueue.prepare(
-                                jobID: job.id
-                            )
+                            await uploadQueue
+                                .runUploadPipeline(
+                                    jobID: job.id,
+                                    using: configuration
+                                )
                         }
                     },
                     onConvertTest: {
@@ -41,15 +43,6 @@ struct UploadQueueView: View {
                             await uploadQueue
                                 .convertAllPhotos(
                                     jobID: job.id
-                                )
-                        }
-                    },
-                    onUpload: {
-                        Task {
-                            await uploadQueue
-                                .uploadAllPhotos(
-                                    jobID: job.id,
-                                    using: configuration
                                 )
                         }
                     }
@@ -147,10 +140,9 @@ struct UploadQueueView: View {
 private struct UploadJobRow: View {
     let job: UploadJob
     
-    let onPrepare: () -> Void
+    let onContinue: () -> Void
     let onConvertTest: () -> Void
     let onConvertAll: () -> Void
-    let onUpload: () -> Void
     
     @State private var folderIsAccessible:
     Bool?
@@ -238,20 +230,27 @@ private struct UploadJobRow: View {
         switch job.stage {
         case .queued:
             Button {
-                onPrepare()
+                onContinue()
             } label: {
                 Label(
-                    "Prepare Upload",
-                    systemImage:
-                        "folder.badge.gearshape"
+                    "Start Upload",
+                    systemImage: "play.circle.fill"
                 )
             }
             .buttonStyle(.borderedProminent)
             
+            Text(
+            """
+            Creates the workflow folders, converts the \
+            batch, and uploads each proof in sequence.
+            """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            
         case .preparing:
             HStack(spacing: 10) {
                 ProgressView()
-                
                 Text(
                     "Creating To Edit and Edited…"
                 )
@@ -315,15 +314,24 @@ private struct UploadJobRow: View {
             }
             
             Button {
-                onConvertAll()
+                onContinue()
             } label: {
                 Label(
-                    "Convert All Photos",
+                    "Continue Upload",
                     systemImage:
                         "rectangle.stack.badge.play"
                 )
             }
             .buttonStyle(.borderedProminent)
+            
+            Text(
+                """
+                Converts the full batch and begins uploading \
+                automatically.
+                """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
             
             if let errorMessage =
                 job.conversionErrorMessage {
@@ -447,7 +455,7 @@ private struct UploadJobRow: View {
             }
             
             Button {
-                onUpload()
+                onContinue()
             } label: {
                 Label(
                     job.uploadedPhotoCount > 0
@@ -554,15 +562,14 @@ private struct UploadJobRow: View {
             }
             
             Button {
-                onPrepare()
+                onContinue()
             } label: {
                 Label(
-                    "Try Preparation Again",
-                    systemImage:
-                        "arrow.clockwise"
+                    "Try Upload Again",
+                    systemImage: "arrow.clockwise"
                 )
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderedProminent)
         }
     }
     
