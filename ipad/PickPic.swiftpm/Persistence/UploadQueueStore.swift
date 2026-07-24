@@ -223,10 +223,12 @@ final class UploadQueueStore: ObservableObject {
             let preview = try await Task.detached(
                 priority: .userInitiated
             ) {
-                try ImageConversionService
-                    .createTestPreview(
-                        for: convertingJob
-                    )
+                try autoreleasepool {
+                    try ImageConversionService
+                        .createTestPreview(
+                            for: convertingJob
+                        )
+                }
             }.value
             
             try updateJob(jobID) { job in
@@ -333,13 +335,14 @@ final class UploadQueueStore: ObservableObject {
                 try await Task.detached(
                     priority: .userInitiated
                 ) {
-                    try ImageConversionService
-                        .createPreparedPhoto(
-                            sourcePhoto:
-                                sourcePhoto,
-                            index: index,
-                            job: convertingJob
-                        )
+                    try autoreleasepool {
+                        try ImageConversionService
+                            .createPreparedPhoto(
+                                sourcePhoto: sourcePhoto,
+                                index: index,
+                                job: convertingJob
+                            )
+                    }
                 }.value
                 
                 try updateJob(jobID) { job in
@@ -509,8 +512,28 @@ final class UploadQueueStore: ObservableObject {
             .uploadProgress
             .completedSourceFilenames
         
-        for preparedPhoto
-                in uploadingJob.preparedPhotos {
+        for preparedPhoto in uploadingJob.preparedPhotos {
+            if Task.isCancelled {
+                do {
+                    try updateJob(jobID) { job in
+                        job.stage = .readyToUpload
+                        job.uploadProgress.currentFilename = nil
+                        job.uploadProgress.errorMessage =
+                        "Uploading was cancelled. Resume the remaining photos."
+                        job.updatedAt = Date()
+                    }
+                } catch {
+                    loadErrorMessage =
+                """
+                Uploading was cancelled, but the queue \
+                could not be updated: \
+                \(error.localizedDescription)
+                """
+                }
+                
+                return
+            }
+            
             if completedFilenames.contains(
                 preparedPhoto.sourceFilename
             ) {
@@ -674,7 +697,9 @@ final class UploadQueueStore: ObservableObject {
         case .queued,
                 .failed:
             await prepare(jobID: jobID)
-            
+            guard !Task.isCancelled else {
+                return   
+            }
             guard stage(for: jobID) == .prepared else {
                 return
             }
@@ -692,7 +717,9 @@ final class UploadQueueStore: ObservableObject {
         
         if stage(for: jobID) == .prepared {
             await convertAllPhotos(jobID: jobID)
-            
+            guard !Task.isCancelled else {
+                return
+            }
             guard stage(for: jobID) == .readyToUpload else {
                 return
             }

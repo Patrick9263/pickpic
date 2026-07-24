@@ -216,6 +216,9 @@ enum ImageVariantService {
                 .cacheIntermediates: false
             ]
         )
+        defer {
+            context.clearCaches()
+        }
         
         let preview =
         try renderJPEG(
