@@ -69,8 +69,9 @@ struct UploadQueueView: View {
                     Text(
                         """
                         Folder preparation, conversion, and uploads \
-                        currently run in the foreground. The iPad \
-                        will stay awake while processing.
+                        currently run in the foreground. Keep PickPic \
+                        open, and temporarily increase Auto-Lock for \
+                        longer batches.
                         """
                     )
                     .font(.subheadline)
@@ -522,6 +523,13 @@ private struct UploadJobRow: View {
             
             if let errorMessage =
                 job.uploadProgress.errorMessage {
+                Text(errorMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(.red)
+            }
+            
+            if let errorMessage =
+                job.conversionErrorMessage {
                 Text(errorMessage)
                     .font(.subheadline)
                     .foregroundStyle(.red)
