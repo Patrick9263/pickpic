@@ -1,6 +1,29 @@
 import Combine
 import Foundation
 
+private enum UploadQueuePipelineError:
+    LocalizedError
+{
+    case originalOptimizationFailed(
+        filename: String,
+        reason: String
+    )
+    
+    var errorDescription: String? {
+        switch self {
+        case let .originalOptimizationFailed(
+            filename,
+            reason
+        ):
+            return """
+            \(filename) uploaded, but its optimized web versions could \
+            not be created. Resume the upload to retry without \
+            duplicating the full photo. \(reason)
+            """
+        }
+    }
+}
+
 @MainActor
 final class UploadQueueStore: ObservableObject {
     @Published private(set)
@@ -683,13 +706,43 @@ final class UploadQueueStore: ObservableObject {
                     )
                 
                 let isDuplicate: Bool
+                let photoID: String
+                let shouldUploadOriginalVariants: Bool
                 
                 switch outcome {
-                case .uploaded:
+                case let .uploaded(uploadedPhotoID):
                     isDuplicate = false
+                    photoID = uploadedPhotoID
+                    shouldUploadOriginalVariants = true
                     
-                case .duplicate:
+                case let .duplicate(
+                    existingPhotoID,
+                    variant
+                ):
                     isDuplicate = true
+                    photoID = existingPhotoID
+                    shouldUploadOriginalVariants =
+                    variant != "final"
+                }
+                
+                if shouldUploadOriginalVariants {
+                    do {
+                        try await uploadOriginalVariants(
+                            from: fileURL,
+                            photoID: photoID,
+                            jobID: jobID,
+                            using: client
+                        )
+                    } catch {
+                        throw UploadQueuePipelineError
+                            .originalOptimizationFailed(
+                                filename:
+                                    preparedPhoto
+                                        .sourceFilename,
+                                reason:
+                                    error.localizedDescription
+                            )
+                    }
                 }
                 
                 completedFilenames.insert(
@@ -783,6 +836,51 @@ final class UploadQueueStore: ObservableObject {
             .removePreparedPhotos(
                 for: jobID
             )
+    }
+    
+    private func uploadOriginalVariants(
+        from sourceURL: URL,
+        photoID: String,
+        jobID: UUID,
+        using client: APIClient
+    ) async throws {
+        let outputDirectoryURL =
+        AppStorageService.imageVariantStagingURL
+            .appendingPathComponent(
+                jobID.uuidString,
+                isDirectory: true
+            )
+            .appendingPathComponent(
+                UUID().uuidString,
+                isDirectory: true
+            )
+        
+        defer {
+            try? FileManager.default.removeItem(
+                at: outputDirectoryURL
+            )
+        }
+        
+        let variants =
+        try await Task.detached(
+            priority: .utility
+        ) {
+            try autoreleasepool {
+                try ImageVariantService
+                    .createImageVariants(
+                        from: sourceURL,
+                        outputDirectoryURL:
+                            outputDirectoryURL
+                    )
+            }
+        }
+        .value
+        
+        _ = try await client.uploadImageVariants(
+            variants,
+            sourceKind: .original,
+            to: photoID
+        )
     }
     
     func runUploadPipeline(

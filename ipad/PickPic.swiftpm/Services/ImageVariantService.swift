@@ -159,6 +159,17 @@ enum ImageVariantService {
         from sourceURL: URL,
         outputDirectoryURL: URL
     ) throws -> GeneratedFinalVariants {
+        try createImageVariants(
+            from: sourceURL,
+            outputDirectoryURL:
+                outputDirectoryURL
+        )
+    }
+    
+    static func createImageVariants(
+        from sourceURL: URL,
+        outputDirectoryURL: URL
+    ) throws -> GeneratedFinalVariants {
         guard
             let sourceImage =
                 CIImage(

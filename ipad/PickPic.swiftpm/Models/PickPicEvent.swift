@@ -18,13 +18,13 @@ struct PickPicEvent: Identifiable, Hashable, Codable {
                 return "Uploading"
                 
             case .ready:
-                return "Ready"
+                return "Open"
                 
             case .editing:
                 return "Editing"
                 
             case .completed:
-                return "Completed"
+                return "Closed"
                 
             case .archived:
                 return "Archived"

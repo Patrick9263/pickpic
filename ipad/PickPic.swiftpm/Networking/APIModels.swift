@@ -72,6 +72,15 @@ enum ServerPhotoWorkflowStatus:
     }
 }
 
+
+enum ServerPhotoVariantSourceKind:
+    String,
+    Sendable
+{
+    case original
+    case final
+}
+
 struct ServerImageVariantRecord:
     Decodable,
     Hashable,

@@ -95,6 +95,13 @@ enum AppStorageService {
         )
     }
     
+    static var imageVariantStagingURL: URL {
+        rootURL.appendingPathComponent(
+            "ImageVariantStaging",
+            isDirectory: true
+        )
+    }
+    
     static var multipartUploadsURL: URL {
         rootURL.appendingPathComponent(
             "MultipartUploads",
@@ -211,6 +218,18 @@ enum AppStorageService {
         
         reclaimedBytes +=
         finalStagingResult.reclaimedBytes
+        
+        let variantStagingResult =
+        try cleanupChildren(
+            inside: imageVariantStagingURL,
+            keepingNames: []
+        )
+        
+        removedItemCount +=
+        variantStagingResult.removedItemCount
+        
+        reclaimedBytes +=
+        variantStagingResult.reclaimedBytes
         
         let multipartResult =
         try cleanupChildren(

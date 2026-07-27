@@ -582,9 +582,22 @@ struct APIClient {
         _ variants: GeneratedFinalVariants,
         to photoID: String
     ) async throws -> FinalVariantUploadResponse {
+        try await uploadImageVariants(
+            variants,
+            sourceKind: .final,
+            to: photoID
+        )
+    }
+    
+    func uploadImageVariants(
+        _ variants: GeneratedFinalVariants,
+        sourceKind:
+        ServerPhotoVariantSourceKind,
+        to photoID: String
+    ) async throws -> FinalVariantUploadResponse {
         let multipartBody =
         try MultipartFormFileService
-            .createFinalVariantsBody(
+            .createImageVariantsBody(
                 photoID: photoID,
                 variants: variants
             )
@@ -601,7 +614,7 @@ struct APIClient {
             .appending(path: "photos")
             .appending(path: photoID)
             .appending(path: "variants")
-            .appending(path: "final")
+            .appending(path: sourceKind.rawValue)
         
         var request = URLRequest(url: url)
         
@@ -695,7 +708,7 @@ struct APIClient {
             )
         } catch {
             print(
-                "Final variant decoding failed:",
+                "Image variant decoding failed:",
                 error
             )
             
