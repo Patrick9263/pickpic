@@ -8,6 +8,19 @@ struct EventResponse: Decodable {
     let event: PickPicEvent
 }
 
+struct CreateEventRequest: Encodable {
+    let title: String
+}
+
+struct UpdateEventRequest: Encodable {
+    let title: String
+}
+
+struct DeleteEventResponse: Decodable {
+    let deleted: Bool
+    let eventId: String
+}
+
 struct EventPhotosResponse: Decodable {
     let photos: [ServerPhotoRecord]
 }
@@ -166,6 +179,8 @@ enum APIClientError: LocalizedError {
     )
     
     case invalidEventData
+    case invalidEventMutationResponse
+    case invalidEventDeletionResponse
     case invalidPhotoListResponse
     case invalidPhotoWorkflowResponse
     case preparedFileMissing(String)
@@ -198,6 +213,16 @@ enum APIClientError: LocalizedError {
         case .invalidEventData:
             return """
             PickPic returned event data that the app could not read.
+            """
+            
+        case .invalidEventMutationResponse:
+            return """
+            PickPic returned updated event data that the app could not read.
+            """
+            
+        case .invalidEventDeletionResponse:
+            return """
+            PickPic did not confirm that the event was deleted.
             """
             
         case .invalidPhotoListResponse:

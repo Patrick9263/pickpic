@@ -100,6 +100,123 @@ struct APIClient {
         }
     }
     
+    func createEvent(
+        title: String
+    ) async throws -> PickPicEvent {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+        
+        var request = makeAdminJSONRequest(
+            url: url
+        )
+        
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(
+            CreateEventRequest(
+                title: title
+            )
+        )
+        
+        return try await performEventMutation(
+            request
+        )
+    }
+    
+    func updateEvent(
+        title: String,
+        eventID: String
+    ) async throws -> PickPicEvent {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+        
+        var request = makeAdminJSONRequest(
+            url: url
+        )
+        
+        request.httpMethod = "PUT"
+        request.httpBody = try JSONEncoder().encode(
+            UpdateEventRequest(
+                title: title
+            )
+        )
+        
+        return try await performEventMutation(
+            request
+        )
+    }
+    
+    func deleteEvent(
+        eventID: String
+    ) async throws {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 60
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        let (data, response) =
+        try await session.data(
+            for: request
+        )
+        
+        try validateJSONResponse(
+            data: data,
+            response: response
+        )
+        
+        do {
+            let deletionResponse =
+            try makeDecoder().decode(
+                DeleteEventResponse.self,
+                from: data
+            )
+            
+            guard
+                deletionResponse.deleted,
+                deletionResponse.eventId == eventID
+            else {
+                throw APIClientError
+                    .invalidEventDeletionResponse
+            }
+        } catch let error as APIClientError {
+            throw error
+        } catch {
+            print(
+                "Event deletion decoding failed:",
+                error
+            )
+            
+            throw APIClientError
+                .invalidEventDeletionResponse
+        }
+    }
+    
     func uploadPreparedPhoto(
         _ preparedPhoto: PreparedPhoto,
         from fileURL: URL,
@@ -921,6 +1038,121 @@ struct APIClient {
             
             throw APIClientError
                 .invalidPhotoWorkflowResponse
+        }
+    }
+    
+    private func makeAdminJSONRequest(
+        url: URL
+    ) -> URLRequest {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+        
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+        
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+        
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+        
+        return request
+    }
+    
+    private func performEventMutation(
+        _ request: URLRequest
+    ) async throws -> PickPicEvent {
+        let (data, response) =
+        try await session.data(
+            for: request
+        )
+        
+        try validateJSONResponse(
+            data: data,
+            response: response
+        )
+        
+        do {
+            return try makeDecoder().decode(
+                EventResponse.self,
+                from: data
+            )
+            .event
+        } catch {
+            print(
+                "Event mutation decoding failed:",
+                error
+            )
+            
+            throw APIClientError
+                .invalidEventMutationResponse
+        }
+    }
+    
+    private func validateJSONResponse(
+        data: Data,
+        response: URLResponse
+    ) throws {
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+        
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+            
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+            
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+        
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+        
+        guard
+            contentType.contains(
+                "application/json"
+            )
+        else {
+            throw APIClientError.unexpectedResponse
         }
     }
     

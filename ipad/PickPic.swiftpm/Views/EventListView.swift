@@ -6,9 +6,16 @@ struct EventListView: View {
     let errorMessage: String?
     
     let onRefresh: () async -> Void
+    let onCreateEvent:
+    (String) async throws -> Void
     
     let onEventUpdated:
     (PickPicEvent) -> Void
+    
+    let onEventDeleted:
+    (String) -> Void
+    
+    @State private var showingCreateEvent = false
     
     var body: some View {
         List {
@@ -55,11 +62,36 @@ struct EventListView: View {
             EventDetailView(
                 event: event,
                 onEventUpdated:
-                    onEventUpdated
+                    onEventUpdated,
+                onEventDeleted:
+                    onEventDeleted
             )
         }
         .refreshable {
             await onRefresh()
+        }
+        .toolbar {
+            ToolbarItem(
+                placement: .topBarTrailing
+            ) {
+                Button {
+                    showingCreateEvent = true
+                } label: {
+                    Label(
+                        "New Event",
+                        systemImage: "plus"
+                    )
+                }
+            }
+        }
+        .sheet(
+            isPresented: $showingCreateEvent
+        ) {
+            EventTitleEditorView(
+                navigationTitle: "New Event",
+                saveButtonTitle: "Create",
+                onSave: onCreateEvent
+            )
         }
         .overlay {
             if events.isEmpty {
@@ -91,16 +123,25 @@ struct EventListView: View {
                 }
             }
         } else {
-            ContentUnavailableView(
-                "No Events",
-                systemImage:
-                    "photo.on.rectangle.angled",
-                description: Text(
+            ContentUnavailableView {
+                Label(
+                    "No Events",
+                    systemImage:
+                        "photo.on.rectangle.angled"
+                )
+            } description: {
+                Text(
                     """
-                    Your PickPic events will appear here.
+                    Create an event to start importing and \
+                    sharing photos.
                     """
                 )
-            )
+            } actions: {
+                Button("Create Event") {
+                    showingCreateEvent = true
+                }
+                .buttonStyle(.borderedProminent)
+            }
         }
     }
 }
