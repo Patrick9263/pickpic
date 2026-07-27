@@ -36,6 +36,21 @@ struct UploadQueueView: View {
     
     var body: some View {
         List {
+            if
+                let message =
+                    uploadQueue.recoveryMessage,
+                !eventJobs.isEmpty
+            {
+                Section {
+                    Label(
+                        message,
+                        systemImage:
+                            "clock.arrow.circlepath"
+                    )
+                    .foregroundStyle(.secondary)
+                }
+            }
+            
             if let message =
                 uploadQueue.storageCleanupMessage {
                 Section {

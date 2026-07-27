@@ -230,6 +230,36 @@ enum ImageConversionService {
         )
     }
     
+    static func preparedBatchIsAvailable(
+        for job: UploadJob
+    ) -> Bool {
+        guard
+            !job.preparedPhotos.isEmpty,
+            job.preparedPhotos.count
+                == job.photoCount
+        else {
+            return false
+        }
+        
+        return job.preparedPhotos.allSatisfy { photo in
+            let fileURL = preparedPhotoURL(
+                jobID: job.id,
+                outputFilename:
+                    photo.outputFilename
+            )
+            
+            let values = try? fileURL.resourceValues(
+                forKeys: [
+                    .isRegularFileKey,
+                    .fileSizeKey
+                ]
+            )
+            
+            return values?.isRegularFile == true
+            && (values?.fileSize ?? 0) > 0
+        }
+    }
+    
     static func resetPreparedPhotos(
         for jobID: UUID
     ) throws {

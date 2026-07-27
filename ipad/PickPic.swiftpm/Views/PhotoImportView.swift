@@ -19,8 +19,61 @@ struct PhotoImportView: View {
     @State private var showingQueueError = false
     @State private var queueErrorMessage = ""
     
+    private var eventJobs: [UploadJob] {
+        uploadQueue.jobs(for: event.id)
+    }
+    
+    private var unfinishedJobCount: Int {
+        eventJobs.filter { job in
+            job.stage != .completed
+        }
+        .count
+    }
+    
+    private var restoredJob: UploadJob? {
+        eventJobs.first { job in
+            job.stage != .completed
+        }
+        ?? eventJobs.first
+    }
+    
     var body: some View {
         List {
+            if !eventJobs.isEmpty {
+                Section("Saved Upload Queue") {
+                    LabeledContent(
+                        "Upload jobs",
+                        value: "\(eventJobs.count)"
+                    )
+                    
+                    LabeledContent(
+                        "Still to finish",
+                        value: "\(unfinishedJobCount)"
+                    )
+                    
+                    if let restoredJob {
+                        LabeledContent(
+                            "Latest folder",
+                            value: restoredJob.folderName
+                        )
+                    }
+                    
+                    Button {
+                        showingQueue = true
+                    } label: {
+                        Label(
+                            unfinishedJobCount > 0
+                            ? "Continue Existing Upload"
+                            : "View Completed Uploads",
+                            systemImage:
+                                unfinishedJobCount > 0
+                            ? "clock.arrow.circlepath"
+                            : "checkmark.circle"
+                        )
+                    }
+                }
+            }
+            
             if let folderName = viewModel.folderName {
                 Section("Selection") {
                     LabeledContent(
@@ -73,7 +126,9 @@ struct PhotoImportView: View {
                     showingFolderPicker = true
                 } label: {
                     Label(
-                        "Choose Folder",
+                        eventJobs.isEmpty
+                        ? "Choose Folder"
+                        : "Choose Another Folder",
                         systemImage: "folder"
                     )
                 }
@@ -118,6 +173,9 @@ struct PhotoImportView: View {
         } message: {
             Text(queueErrorMessage)
         }
+        .task(id: event.id) {
+            restoreQueuedSelection()
+        }
     }
     
     private var queueControls: some View {
@@ -140,10 +198,15 @@ struct PhotoImportView: View {
             .controlSize(.large)
             
             Text(
-                """
-                This only saves the upload job. \
-                No source files are changed yet.
-                """
+                hasQueuedSelection
+                ? """
+                  This saved selection is already in the upload queue. \
+                  Choose another folder to add a separate batch.
+                  """
+                : """
+                  This saves a resumable upload job. No source files \
+                  are changed until the upload starts.
+                  """
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -173,8 +236,17 @@ struct PhotoImportView: View {
                     viewModel.clearError()
                     showingFolderPicker = true
                 }
+                
+                if !eventJobs.isEmpty {
+                    Button("View Existing Queue") {
+                        showingQueue = true
+                    }
+                }
             }
-        } else if viewModel.folderName == nil {
+        } else if
+            viewModel.folderName == nil,
+            eventJobs.isEmpty
+        {
             ContentUnavailableView {
                 Label(
                     "Choose an Event Folder",
@@ -192,7 +264,10 @@ struct PhotoImportView: View {
                     showingFolderPicker = true
                 }
             }
-        } else if viewModel.photos.isEmpty {
+        } else if
+            viewModel.folderName != nil,
+            viewModel.photos.isEmpty
+        {
             ContentUnavailableView {
                 Label(
                     "No Supported Photos",
@@ -216,6 +291,18 @@ struct PhotoImportView: View {
         }
     }
     
+    private func restoreQueuedSelection() {
+        guard let restoredJob else {
+            return
+        }
+        
+        viewModel.restoreSelection(
+            from: restoredJob
+        )
+        
+        hasQueuedSelection = true
+    }
+    
     private func queueSelection() {
         if hasQueuedSelection {
             showingQueue = true
@@ -230,6 +317,7 @@ struct PhotoImportView: View {
             try eventFolders.save(job: job)
             try uploadQueue.add(job)
             hasQueuedSelection = true
+            showingQueue = true
         } catch {
             queueErrorMessage =
             error.localizedDescription

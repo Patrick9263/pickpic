@@ -15,6 +15,9 @@ final class UploadQueueStore: ObservableObject {
     @Published private(set)
     var storageErrorMessage: String?
     
+    @Published private(set)
+    var recoveryMessage: String?
+    
     private let storageURL: URL
     private var runningPipelineJobIDs: Set<UUID> = []
     
@@ -359,6 +362,20 @@ final class UploadQueueStore: ObservableObject {
         
         let startedAt = Date()
         
+        let sourceFilenames = Set(
+            currentJob.photos.map(\.filename)
+        )
+        
+        let preservedCompletedFilenames =
+        currentJob.uploadProgress
+            .completedSourceFilenames
+            .intersection(sourceFilenames)
+        
+        let preservedDuplicateFilenames =
+        currentJob.uploadProgress
+            .duplicateSourceFilenames
+            .intersection(sourceFilenames)
+        
         do {
             try updateJob(jobID) { job in
                 job.stage = .converting
@@ -368,7 +385,18 @@ final class UploadQueueStore: ObservableObject {
                 job.conversionStartedAt = startedAt
                 job.conversionCompletedAt = nil
                 job.conversionErrorMessage = nil
-                job.uploadProgress = .empty
+                job.uploadProgress = UploadProgress(
+                    completedSourceFilenames:
+                        preservedCompletedFilenames,
+                    duplicateSourceFilenames:
+                        preservedDuplicateFilenames,
+                    currentFilename: nil,
+                    startedAt:
+                        currentJob.uploadProgress
+                            .startedAt,
+                    completedAt: nil,
+                    errorMessage: nil
+                )
                 job.updatedAt = startedAt
             }
         } catch {
@@ -902,6 +930,7 @@ final class UploadQueueStore: ObservableObject {
             atPath: storageURL.path
         ) else {
             jobs = []
+            recoveryMessage = nil
             return
         }
         
@@ -915,7 +944,9 @@ final class UploadQueueStore: ObservableObject {
                 from: data
             )
             
-            var recoveredInterruptedJob = false
+            var changedRecoveredState = false
+            var interruptedJobCount = 0
+            var unavailablePreparedBatchCount = 0
             var interruptedConversionJobIDs:
             [UUID] = []
             
@@ -929,7 +960,8 @@ final class UploadQueueStore: ObservableObject {
                         Try the job again.
                         """
                     decodedJobs[index].updatedAt = Date()
-                    recoveredInterruptedJob = true
+                    changedRecoveredState = true
+                    interruptedJobCount += 1
                     
                 case .converting:
                     interruptedConversionJobIDs.append(
@@ -950,7 +982,8 @@ final class UploadQueueStore: ObservableObject {
                             Start the conversion again.
                             """
                     decodedJobs[index].updatedAt = Date()
-                    recoveredInterruptedJob = true
+                    changedRecoveredState = true
+                    interruptedJobCount += 1
                     
                 case .uploading:
                     decodedJobs[index].stage =
@@ -965,9 +998,9 @@ final class UploadQueueStore: ObservableObject {
                         Uploading was interrupted. \
                         Resume the remaining photos.
                         """
-                    decodedJobs[index].updatedAt =
-                    Date()
-                    recoveredInterruptedJob = true
+                    decodedJobs[index].updatedAt = Date()
+                    changedRecoveredState = true
+                    interruptedJobCount += 1
                     
                 case .queued,
                         .prepared,
@@ -975,6 +1008,35 @@ final class UploadQueueStore: ObservableObject {
                         .completed,
                         .failed:
                     break
+                }
+                
+                if decodedJobs[index].stage == .readyToUpload,
+                    !ImageConversionService
+                        .preparedBatchIsAvailable(
+                            for: decodedJobs[index]
+                        )
+                {
+                    decodedJobs[index].stage = .prepared
+                    decodedJobs[index].preparedPhotos = []
+                    decodedJobs[index]
+                        .conversionProcessedCount = 0
+                    decodedJobs[index]
+                        .conversionCurrentFilename = nil
+                    decodedJobs[index]
+                        .conversionCompletedAt = nil
+                    decodedJobs[index]
+                        .conversionErrorMessage =
+                        """
+                        The prepared JPEGs were not available after \
+                        relaunching PickPic. Convert the batch again. \
+                        Already-uploaded progress was preserved.
+                        """
+                    decodedJobs[index]
+                        .uploadProgress
+                        .currentFilename = nil
+                    decodedJobs[index].updatedAt = Date()
+                    changedRecoveredState = true
+                    unavailablePreparedBatchCount += 1
                 }
             }
             
@@ -985,9 +1047,42 @@ final class UploadQueueStore: ObservableObject {
             jobs = decodedJobs
             loadErrorMessage = nil
             
-            if recoveredInterruptedJob {
+            let unfinishedJobCount = decodedJobs.filter { job in
+                job.stage != .completed
+            }
+            .count
+            
+            if unavailablePreparedBatchCount > 0 {
+                recoveryMessage =
+                """
+                PickPic restored \(unfinishedJobCount) unfinished \
+                upload\(unfinishedJobCount == 1 ? "" : "s"). \
+                \(unavailablePreparedBatchCount) batch\(unavailablePreparedBatchCount == 1 ? "" : "es") \
+                must be converted again; completed upload progress \
+                was preserved.
+                """
+            } else if interruptedJobCount > 0 {
+                recoveryMessage =
+                """
+                PickPic restored \(unfinishedJobCount) unfinished \
+                upload\(unfinishedJobCount == 1 ? "" : "s"). \
+                Interrupted work is ready to continue.
+                """
+            } else if unfinishedJobCount > 0 {
+                recoveryMessage =
+                """
+                PickPic restored \(unfinishedJobCount) saved \
+                upload\(unfinishedJobCount == 1 ? "" : "s") \
+                from the previous session.
+                """
+            } else {
+                recoveryMessage = nil
+            }
+            
+            if changedRecoveredState {
                 try save(decodedJobs)
             }
+            
             for jobID in interruptedConversionJobIDs {
                 try? ImageConversionService
                     .removePreparedPhotos(
@@ -996,6 +1091,7 @@ final class UploadQueueStore: ObservableObject {
             }
         } catch {
             jobs = []
+            recoveryMessage = nil
             
             loadErrorMessage =
                 """

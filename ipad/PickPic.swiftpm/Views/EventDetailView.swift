@@ -52,6 +52,13 @@ struct EventDetailView: View {
         )
     }
     
+    private var unfinishedEventJobCount: Int {
+        eventJobs.filter { job in
+            job.stage != .completed
+        }
+        .count
+    }
+    
     private var eventHasActiveProcessing: Bool {
         eventJobs.contains { job in
             switch job.stage {
@@ -114,7 +121,9 @@ struct EventDetailView: View {
                     )
                 } label: {
                     Label(
-                        "Import Photos",
+                        eventJobs.isEmpty
+                        ? "Import Photos"
+                        : "Add More Photos",
                         systemImage:
                             "photo.badge.plus"
                     )
@@ -125,11 +134,27 @@ struct EventDetailView: View {
                         event: event
                     )
                 } label: {
-                    Label(
-                        "Upload Queue",
-                        systemImage:
-                            "arrow.up.circle"
-                    )
+                    HStack {
+                        Label(
+                            unfinishedEventJobCount > 0
+                            ? "Continue Upload"
+                            : "Upload Queue",
+                            systemImage:
+                                unfinishedEventJobCount > 0
+                            ? "clock.arrow.circlepath"
+                            : "arrow.up.circle"
+                        )
+                        
+                        Spacer()
+                        
+                        if unfinishedEventJobCount > 0 {
+                            Text(
+                                "\(unfinishedEventJobCount)"
+                            )
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 
                 NavigationLink {
