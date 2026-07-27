@@ -172,7 +172,7 @@ struct EventDetailView: View {
                 }
             }
             
-            Section("Manage Event") {
+            Section {
                 Button {
                     showingRenameEvent = true
                 } label: {
@@ -208,6 +208,8 @@ struct EventDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("Manage Event")
             } footer: {
                 Text(
                     """
