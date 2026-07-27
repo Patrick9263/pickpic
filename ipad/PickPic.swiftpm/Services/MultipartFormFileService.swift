@@ -13,6 +13,16 @@ enum MultipartFormFileService {
         photoID: String,
         variants: GeneratedFinalVariants
     ) throws -> MultipartUploadBody {
+        try createImageVariantsBody(
+            photoID: photoID,
+            variants: variants
+        )
+    }
+    
+    static func createImageVariantsBody(
+        photoID: String,
+        variants: GeneratedFinalVariants
+    ) throws -> MultipartUploadBody {
         let boundary =
         "PickPic-\(UUID().uuidString)"
         

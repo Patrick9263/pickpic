@@ -28,6 +28,12 @@ struct EventDetailView: View {
     @State private var showingDeleteError = false
     @State private var deleteErrorMessage = ""
     
+    @State private var isUpdatingStatus = false
+    @State private var showingArchiveConfirmation = false
+    @State private var showingStatusError = false
+    @State private var statusErrorMessage = ""
+    @State private var showingGalleryStatusPicker = false
+    
     init(
         event: PickPicEvent,
         onEventUpdated:
@@ -77,30 +83,64 @@ struct EventDetailView: View {
         }
     }
     
+    private var displayedGalleryStatus:
+    PickPicEvent.Status
+    {
+        switch event.status {
+        case .ready,
+                .completed,
+                .archived:
+            return event.status
+            
+        case .draft,
+                .uploading,
+                .editing:
+            return .draft
+        }
+    }
+    
+    private var galleryStatusTitle: String {
+        switch displayedGalleryStatus {
+        case .draft:
+            return "Draft"
+            
+        case .ready:
+            return "Open"
+            
+        case .completed:
+            return "Closed"
+            
+        case .archived:
+            return "Archived"
+            
+        case .uploading,
+                .editing:
+            return "Draft"
+        }
+    }
+    
+    private var selectableGalleryStatuses:
+    [PickPicEvent.Status]
+    {
+        [
+            .draft,
+            .ready,
+            .completed,
+            .archived
+        ]
+    }
+    
     var body: some View {
         List {
             Section("Event") {
-                LabeledContent(
-                    "Name",
-                    value: event.title
-                )
-                
-                LabeledContent {
-                    Label(
-                        event.status.title,
-                        systemImage:
-                            event.status.systemImage
-                    )
-                } label: {
-                    Text("Status")
-                }
+                galleryStatusMenu
                 
                 LabeledContent(
                     "Created",
                     value:
                         event.createdAt.formatted(
-                            date: .long,
-                            time: .shortened
+                            date: .abbreviated,
+                            time: .omitted
                         )
                 )
                 
@@ -108,7 +148,7 @@ struct EventDetailView: View {
                     "Updated",
                     value:
                         event.updatedAt.formatted(
-                            date: .long,
+                            date: .abbreviated,
                             time: .shortened
                         )
                 )
@@ -206,7 +246,10 @@ struct EventDetailView: View {
                         systemImage: "pencil"
                     )
                 }
-                .disabled(isDeleting)
+                .disabled(
+                    isDeleting
+                    || isUpdatingStatus
+                )
                 
                 Button(
                     role: .destructive
@@ -220,6 +263,7 @@ struct EventDetailView: View {
                 }
                 .disabled(
                     isDeleting
+                    || isUpdatingStatus
                     || eventHasActiveProcessing
                 )
                 
@@ -286,6 +330,31 @@ struct EventDetailView: View {
             }
         }
         .alert(
+            "Archive \(event.title)?",
+            isPresented:
+                $showingArchiveConfirmation
+        ) {
+            Button(
+                "Archive Event",
+                role: .destructive
+            ) {
+                Task {
+                    await updateGalleryStatus(
+                        .archived
+                    )
+                }
+            }
+            
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                """
+                Archiving makes the public gallery unavailable. You can \
+                restore it later by changing the status to Open or Closed.
+                """
+            )
+        }
+        .alert(
             "Delete \(event.title)?",
             isPresented:
                 $showingDeleteConfirmation
@@ -309,12 +378,243 @@ struct EventDetailView: View {
             )
         }
         .alert(
+            "Unable to Change Status",
+            isPresented: $showingStatusError
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(statusErrorMessage)
+        }
+        .alert(
             "Unable to Delete Event",
             isPresented: $showingDeleteError
         ) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(deleteErrorMessage)
+        }
+    }
+    
+    private var galleryStatusMenu: some View {
+        LabeledContent {
+            Button {
+                showingGalleryStatusPicker = true
+            } label: {
+                HStack(spacing: 6) {
+                    if isUpdatingStatus {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(
+                            systemName:
+                                gallerySystemImage(
+                                    for:
+                                        displayedGalleryStatus
+                                )
+                        )
+
+                        Text(galleryStatusTitle)
+
+                        Image(
+                            systemName: "chevron.down"
+                        )
+                        .font(.caption2.weight(.semibold))
+                    }
+                }
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    .thinMaterial,
+                    in: Capsule()
+                )
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(
+                isDeleting
+                || isUpdatingStatus
+                || eventHasActiveProcessing
+            )
+            .popover(
+                isPresented:
+                    $showingGalleryStatusPicker,
+                attachmentAnchor: .rect(.bounds),
+                arrowEdge: .top
+            ) {
+                VStack(spacing: 0) {
+                    Text("Gallery Status")
+                        .font(.headline)
+                        .frame(
+                            maxWidth: .infinity,
+                            alignment: .leading
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+
+                    Divider()
+
+                    ForEach(
+                        selectableGalleryStatuses,
+                        id: \.self
+                    ) { status in
+                        Button {
+                            showingGalleryStatusPicker = false
+
+                            requestGalleryStatus(
+                                status
+                            )
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(
+                                    systemName:
+                                        gallerySystemImage(
+                                            for: status
+                                        )
+                                )
+                                .frame(width: 20)
+
+                                Text(
+                                    galleryTitle(
+                                        for: status
+                                    )
+                                )
+
+                                Spacer()
+
+                                if status
+                                    == displayedGalleryStatus
+                                {
+                                    Image(
+                                        systemName: "checkmark"
+                                    )
+                                    .font(.body.weight(.semibold))
+                                }
+                            }
+                            .foregroundStyle(
+                                status
+                                    == displayedGalleryStatus
+                                ? .secondary
+                                : .primary
+                            )
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(
+                            status
+                            == displayedGalleryStatus
+                        )
+                    }
+                }
+                .frame(minWidth: 220)
+                .padding(.vertical, 4)
+                .presentationCompactAdaptation(
+                    .popover
+                )
+            }
+        } label: {
+            Text("Gallery Status")
+        }
+    }
+
+    private func galleryTitle(
+        for status: PickPicEvent.Status
+    ) -> String {
+        switch status {
+        case .draft:
+            return "Draft"
+            
+        case .ready:
+            return "Open"
+            
+        case .completed:
+            return "Closed"
+            
+        case .archived:
+            return "Archived"
+            
+        case .uploading,
+                .editing:
+            return "Draft"
+        }
+    }
+    
+    private func gallerySystemImage(
+        for status: PickPicEvent.Status
+    ) -> String {
+        switch status {
+        case .draft,
+                .uploading,
+                .editing:
+            return "pencil"
+            
+        case .ready:
+            return "globe"
+            
+        case .completed:
+            return "checkmark.circle"
+            
+        case .archived:
+            return "archivebox"
+        }
+    }
+    
+    private func requestGalleryStatus(
+        _ status: PickPicEvent.Status
+    ) {
+        guard
+            status != displayedGalleryStatus,
+            !isUpdatingStatus,
+            !eventHasActiveProcessing
+        else {
+            return
+        }
+        
+        if status == .archived {
+            showingArchiveConfirmation = true
+            return
+        }
+        
+        Task {
+            await updateGalleryStatus(
+                status
+            )
+        }
+    }
+    
+    private func updateGalleryStatus(
+        _ status: PickPicEvent.Status
+    ) async {
+        guard !isUpdatingStatus else {
+            return
+        }
+        
+        isUpdatingStatus = true
+        
+        defer {
+            isUpdatingStatus = false
+        }
+        
+        do {
+            let client =
+            try configuration.makeClient()
+            
+            let updatedEvent =
+            try await client.setEventStatus(
+                status,
+                for: event.id
+            )
+            
+            event = updatedEvent
+            onEventUpdated(updatedEvent)
+        } catch {
+            statusErrorMessage =
+            error.localizedDescription
+            
+            showingStatusError = true
         }
     }
     
