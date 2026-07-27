@@ -11,8 +11,8 @@ struct UploadJob:
     let eventID: String
     let eventTitle: String
     
-    let folderName: String
-    let folderBookmarkData: Data
+    var folderName: String
+    var folderBookmarkData: Data
     
     let photos: [SourcePhoto]
     
