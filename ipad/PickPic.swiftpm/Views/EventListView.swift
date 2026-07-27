@@ -15,6 +15,9 @@ struct EventListView: View {
     let onEventDeleted:
     (String) -> Void
     
+    @EnvironmentObject private var uploadQueue:
+    UploadQueueStore
+    
     @State private var showingCreateEvent = false
     
     var body: some View {
@@ -51,7 +54,35 @@ struct EventListView: View {
             
             ForEach(events) { event in
                 NavigationLink(value: event) {
-                    EventRow(event: event)
+                    let jobs = uploadQueue.jobs(
+                        for: event.id
+                    )
+                    
+                    EventRow(
+                        event: event,
+                        unfinishedJobCount:
+                            jobs.filter { job in
+                                job.stage != .completed
+                            }
+                            .count,
+                        activeJobCount:
+                            jobs.filter { job in
+                                switch job.stage {
+                                case .preparing,
+                                        .converting,
+                                        .uploading:
+                                    return true
+                                    
+                                case .queued,
+                                        .prepared,
+                                        .readyToUpload,
+                                        .completed,
+                                        .failed:
+                                    return false
+                                }
+                            }
+                            .count
+                    )
                 }
             }
         }
@@ -148,6 +179,20 @@ struct EventListView: View {
 
 private struct EventRow: View {
     let event: PickPicEvent
+    let unfinishedJobCount: Int
+    let activeJobCount: Int
+    
+    private var uploadStatusText: String {
+        if activeJobCount > 0 {
+            return activeJobCount == 1
+            ? "Upload in progress"
+            : "\(activeJobCount) uploads in progress"
+        }
+        
+        return unfinishedJobCount == 1
+        ? "1 upload to continue"
+        : "\(unfinishedJobCount) uploads to continue"
+    }
     
     var body: some View {
         HStack(spacing: 14) {
@@ -173,6 +218,22 @@ private struct EventRow: View {
                 )
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                
+                if unfinishedJobCount > 0 {
+                    Label(
+                        uploadStatusText,
+                        systemImage:
+                            activeJobCount > 0
+                        ? "arrow.up.circle.fill"
+                        : "clock.arrow.circlepath"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(
+                        activeJobCount > 0
+                        ? Color.accentColor
+                        : Color.orange
+                    )
+                }
             }
             
             Spacer()

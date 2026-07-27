@@ -52,6 +52,23 @@ final class PhotoImportViewModel: ObservableObject {
         }
     }
     
+    func restoreSelection(
+        from job: UploadJob
+    ) {
+        guard
+            !isScanning,
+            folderName == nil
+        else {
+            return
+        }
+        
+        folderName = job.folderName
+        folderBookmarkData =
+        job.folderBookmarkData
+        photos = job.photos
+        errorMessage = nil
+    }
+    
     func scan(
         folderURL: URL
     ) async {
