@@ -22,11 +22,22 @@ struct ContentView: View {
                         using: configuration
                     )
                 },
+                onCreateEvent: { title in
+                    try await viewModel.createEvent(
+                        title: title,
+                        using: configuration
+                    )
+                },
                 onEventUpdated: {
                     updatedEvent in
                     
                     viewModel.replaceEvent(
                         updatedEvent
+                    )
+                },
+                onEventDeleted: { eventID in
+                    viewModel.removeEvent(
+                        eventID: eventID
                     )
                 }
             )

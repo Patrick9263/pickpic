@@ -53,6 +53,31 @@ final class EventListViewModel:
         }
     }
     
+    func createEvent(
+        title: String,
+        using configuration:
+        APIConfigurationStore
+    ) async throws {
+        let client =
+        try configuration.makeClient()
+        
+        let createdEvent =
+        try await client.createEvent(
+            title: title
+        )
+        
+        events.removeAll { event in
+            event.id == createdEvent.id
+        }
+        
+        events.insert(
+            createdEvent,
+            at: 0
+        )
+        
+        errorMessage = nil
+    }
+    
     func replaceEvent(
         _ updatedEvent: PickPicEvent
     ) {
@@ -67,5 +92,13 @@ final class EventListViewModel:
         }
         
         events[index] = updatedEvent
+    }
+    
+    func removeEvent(
+        eventID: String
+    ) {
+        events.removeAll { event in
+            event.id == eventID
+        }
     }
 }
