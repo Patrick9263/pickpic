@@ -395,60 +395,74 @@ struct EventDetailView: View {
     }
     
     private var galleryStatusMenu: some View {
-        Menu {
-            ForEach(
-                selectableGalleryStatuses,
-                id: \.self
-            ) { status in
-                Button {
-                    requestGalleryStatus(
-                        status
-                    )
-                } label: {
-                    Label(
-                        galleryTitle(
-                            for: status
-                        ),
-                        systemImage:
-                            gallerySystemImage(
+        LabeledContent {
+            Menu {
+                ForEach(
+                    selectableGalleryStatuses,
+                    id: \.self
+                ) { status in
+                    Button {
+                        requestGalleryStatus(
+                            status
+                        )
+                    } label: {
+                        Label(
+                            galleryTitle(
                                 for: status
-                            )
+                            ),
+                            systemImage:
+                                gallerySystemImage(
+                                    for: status
+                                )
+                        )
+                    }
+                    .disabled(
+                        status
+                        == displayedGalleryStatus
                     )
                 }
-                .disabled(
-                    status
-                    == displayedGalleryStatus
+            } label: {
+                HStack(spacing: 6) {
+                    if isUpdatingStatus {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(
+                            systemName:
+                                gallerySystemImage(
+                                    for:
+                                        displayedGalleryStatus
+                                )
+                        )
+                        
+                        Text(galleryStatusTitle)
+                        
+                        Image(
+                            systemName:
+                                "chevron.up.chevron.down"
+                        )
+                        .font(.caption2.weight(.semibold))
+                    }
+                }
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    .thinMaterial,
+                    in: Capsule()
                 )
+                .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .disabled(
+                isDeleting
+                || isUpdatingStatus
+                || eventHasActiveProcessing
+            )
         } label: {
-            HStack {
-                Text("Gallery Status")
-                    .foregroundStyle(.primary)
-                
-                Spacer()
-                
-                if isUpdatingStatus {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Label(
-                        galleryStatusTitle,
-                        systemImage:
-                            gallerySystemImage(
-                                for:
-                                    displayedGalleryStatus
-                            )
-                    )
-                    .foregroundStyle(.secondary)
-                }
-            }
-            .contentShape(Rectangle())
+            Text("Gallery Status")
         }
-        .disabled(
-            isDeleting
-            || isUpdatingStatus
-            || eventHasActiveProcessing
-        )
     }
     
     private func galleryTitle(
