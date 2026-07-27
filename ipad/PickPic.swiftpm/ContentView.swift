@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var configuration =
-    APIConfigurationStore()
+    @EnvironmentObject private var configuration:
+    APIConfigurationStore
     
     @StateObject private var viewModel =
     EventListViewModel()

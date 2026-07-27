@@ -192,3 +192,92 @@ enum ToEditSyncService {
         )
     }
 }
+
+struct RequestedPhotoSyncResult: Sendable {
+    let photos: [ServerPhotoRecord]
+    let fileResult: ToEditSyncResult
+    let markedEditingCount: Int
+    let workflowUpdateFailures: [String]
+}
+
+@MainActor
+enum RequestedPhotoSyncService {
+    private static var activeEventIDs: Set<String> = []
+
+    static func sync(
+        eventID: String,
+        reference: EventFolderReference,
+        using client: APIClient
+    ) async throws -> RequestedPhotoSyncResult? {
+        guard activeEventIDs.insert(eventID).inserted else {
+            return nil
+        }
+
+        defer {
+            activeEventIDs.remove(eventID)
+        }
+
+        let currentPhotos =
+        try await client.fetchEventPhotos(
+            eventID: eventID
+        )
+
+        let fileResult =
+        try await Task.detached(
+            priority: .userInitiated
+        ) {
+            try ToEditSyncService.sync(
+                reference: reference,
+                photos: currentPhotos
+            )
+        }
+        .value
+
+        let photosToMarkEditing =
+        currentPhotos.filter { photo in
+            photo.heartCount > 0
+            && fileResult.syncedFilenames.contains(
+                photo.originalFilename
+            )
+            && photo.workflowStatus == .idle
+        }
+
+        var markedEditingCount = 0
+        var workflowUpdateFailures: [String] = []
+
+        for photo in photosToMarkEditing {
+            do {
+                _ = try await client
+                    .setPhotoWorkflowStatus(
+                        .editing,
+                        for: photo.id
+                    )
+
+                markedEditingCount += 1
+            } catch {
+                workflowUpdateFailures.append(
+                    photo.originalFilename
+                )
+            }
+        }
+
+        let refreshedPhotos: [ServerPhotoRecord]
+
+        if photosToMarkEditing.isEmpty {
+            refreshedPhotos = currentPhotos
+        } else {
+            refreshedPhotos =
+            try await client.fetchEventPhotos(
+                eventID: eventID
+            )
+        }
+
+        return RequestedPhotoSyncResult(
+            photos: refreshedPhotos,
+            fileResult: fileResult,
+            markedEditingCount: markedEditingCount,
+            workflowUpdateFailures:
+                workflowUpdateFailures
+        )
+    }
+}

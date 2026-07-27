@@ -26,6 +26,11 @@ struct LikedPhotosView: View {
     var body: some View {
         List {
             eventFolderSection
+
+            if folderReference != nil {
+                automaticSyncSection
+            }
+
             likedPhotosSection
             
             if let syncResult =
@@ -62,10 +67,7 @@ struct LikedPhotosView: View {
         .navigationTitle("Liked Photos")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {
-            await viewModel.load(
-                eventID: event.id,
-                using: configuration
-            )
+            await refreshAndSync()
         }
         .toolbar {
             ToolbarItem(
@@ -73,10 +75,7 @@ struct LikedPhotosView: View {
             ) {
                 Button {
                     Task {
-                        await viewModel.load(
-                            eventID: event.id,
-                            using: configuration
-                        )
+                        await refreshAndSync()
                     }
                 } label: {
                     Label(
@@ -106,12 +105,12 @@ struct LikedPhotosView: View {
                         HStack(spacing: 10) {
                             ProgressView()
                             
-                            Text("Syncing to To Edit…")
+                            Text("Syncing requested photos…")
                         }
                         .frame(maxWidth: .infinity)
                     } else {
                         Label(
-                            "Sync Liked Photos to To Edit",
+                            "Sync Now",
                             systemImage:
                                 "folder.badge.plus"
                         )
@@ -136,6 +135,10 @@ struct LikedPhotosView: View {
                         folderURL,
                         for: event
                     )
+
+                    Task {
+                        await refreshAndSync()
+                    }
                 } catch {
                     viewModel.showError(error)
                 }
@@ -145,10 +148,7 @@ struct LikedPhotosView: View {
             }
         }
         .task(id: event.id) {
-            await viewModel.load(
-                eventID: event.id,
-                using: configuration
-            )
+            await refreshAndSync()
         }
     }
     
@@ -210,6 +210,42 @@ struct LikedPhotosView: View {
         }
     }
     
+    private var automaticSyncSection: some View {
+        Section("Automatic Sync") {
+            Label(
+                """
+                PickPic checks saved event folders for newly liked \
+                photos about every 30 seconds while the app is open.
+                """,
+                systemImage:
+                    "arrow.triangle.2.circlepath"
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+            if let lastCheckedAt =
+                viewModel.lastCheckedAt {
+                LabeledContent(
+                    "Last checked",
+                    value:
+                        lastCheckedAt.formatted(
+                            date: .omitted,
+                            time: .shortened
+                        )
+                )
+            }
+
+            Text(
+                """
+                Requested RAW files are copied into To Edit. \
+                Originals are never moved or deleted.
+                """
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
     private var likedPhotosSection: some View {
         Section(
             "Liked Photos (\(viewModel.likedPhotos.count))"
@@ -328,6 +364,14 @@ struct LikedPhotosView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+    }
+
+    private func refreshAndSync() async {
+        await viewModel.refreshAndSync(
+            eventID: event.id,
+            reference: folderReference,
+            using: configuration
+        )
     }
 }
 
