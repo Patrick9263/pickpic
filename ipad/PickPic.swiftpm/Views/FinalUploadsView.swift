@@ -3,6 +3,16 @@ import UniformTypeIdentifiers
 
 struct FinalUploadsView: View {
     let event: PickPicEvent
+    let automaticallyUploadReadyFinals: Bool
+
+    init(
+        event: PickPicEvent,
+        automaticallyUploadReadyFinals: Bool = false
+    ) {
+        self.event = event
+        self.automaticallyUploadReadyFinals =
+        automaticallyUploadReadyFinals
+    }
     
     @EnvironmentObject private var configuration:
     APIConfigurationStore
@@ -14,6 +24,7 @@ struct FinalUploadsView: View {
     FinalUploadsViewModel()
     
     @State private var showingFolderPicker = false
+    @State private var hasAttemptedAutomaticUpload = false
     
     private var folderReference:
     EventFolderReference?
@@ -122,6 +133,7 @@ struct FinalUploadsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable {
             await reload()
+            await startAutomaticUploadIfNeeded()
         }
         .safeAreaInset(edge: .bottom) {
             if
@@ -160,6 +172,7 @@ struct FinalUploadsView: View {
         }
         .task(id: folderReference?.updatedAt) {
             await reload()
+            await startAutomaticUploadIfNeeded()
         }
     }
     
@@ -553,6 +566,27 @@ struct FinalUploadsView: View {
         }
     }
     
+    private func startAutomaticUploadIfNeeded() async {
+        guard
+            automaticallyUploadReadyFinals,
+            !hasAttemptedAutomaticUpload,
+            let folderReference,
+            let scanResult = viewModel.scanResult,
+            !scanResult.candidates.isEmpty,
+            !viewModel.isBusy
+        else {
+            return
+        }
+
+        hasAttemptedAutomaticUpload = true
+
+        await viewModel.uploadAll(
+            eventID: event.id,
+            reference: folderReference,
+            using: configuration
+        )
+    }
+
     private func reload() async {
         guard let folderReference else {
             return

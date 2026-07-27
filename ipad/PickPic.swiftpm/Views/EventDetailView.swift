@@ -207,12 +207,36 @@ struct EventDetailView: View {
                 }
                 
                 NavigationLink {
+                    FinalUploadsView(
+                        event: event,
+                        automaticallyUploadReadyFinals: true
+                    )
+                } label: {
+                    VStack(
+                        alignment: .leading,
+                        spacing: 3
+                    ) {
+                        Label(
+                            "Upload Ready Finals",
+                            systemImage:
+                                "bolt.circle.fill"
+                        )
+
+                        Text(
+                            "Scans Edited and starts uploading matches."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                NavigationLink {
                     FinalUploadsView(event: event)
                 } label: {
                     Label(
-                        "Upload Finals",
+                        "Review Finals",
                         systemImage:
-                            "arrow.up.circle.fill"
+                            "photo.stack"
                     )
                 }
             }
