@@ -204,8 +204,6 @@ struct EventTitleEditorView: View {
     @State private var isSaving = false
     @State private var errorMessage: String?
     
-    @FocusState private var titleIsFocused: Bool
-    
     init(
         navigationTitle: String,
         saveButtonTitle: String,
@@ -253,7 +251,6 @@ struct EventTitleEditorView: View {
                         "Event name",
                         text: $title
                     )
-                    .focused($titleIsFocused)
                     .textInputAutocapitalization(.words)
                     .submitLabel(.done)
                     .onSubmit {
@@ -324,9 +321,6 @@ struct EventTitleEditorView: View {
                             )
                         )
                 }
-            }
-            .task {
-                titleIsFocused = true
             }
         }
     }
