@@ -1,5 +1,77 @@
+import Combine
 import SwiftUI
 import UIKit
+
+struct AppFeedbackMessage:
+    Identifiable,
+    Hashable
+{
+    let id: UUID
+    let title: String
+    let detail: String
+    let systemImage: String
+
+    init(
+        title: String,
+        detail: String,
+        systemImage: String
+    ) {
+        id = UUID()
+        self.title = title
+        self.detail = detail
+        self.systemImage = systemImage
+    }
+}
+
+@MainActor
+final class AppFeedbackStore:
+    ObservableObject
+{
+    @Published private(set)
+    var message: AppFeedbackMessage?
+
+    private var dismissalTask:
+    Task<Void, Never>?
+
+    func show(
+        title: String,
+        detail: String,
+        systemImage: String
+    ) {
+        dismissalTask?.cancel()
+
+        let newMessage = AppFeedbackMessage(
+            title: title,
+            detail: detail,
+            systemImage: systemImage
+        )
+
+        message = newMessage
+
+        dismissalTask = Task {
+            do {
+                try await Task<Never, Never>
+                    .sleep(
+                        for: .seconds(5)
+                    )
+            } catch {
+                return
+            }
+
+            guard message?.id == newMessage.id else {
+                return
+            }
+
+            message = nil
+        }
+    }
+
+    func dismiss() {
+        dismissalTask?.cancel()
+        dismissalTask = nil
+        message = nil
+    }
+}
 
 @main
 struct PickPicApp: App {
@@ -12,6 +84,12 @@ struct PickPicApp: App {
     @StateObject private var eventFolders =
     EventFolderStore()
 
+    @StateObject private var feedback =
+    AppFeedbackStore()
+
+    @State private var previousJobStages:
+    [UUID: UploadStage] = [:]
+
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -20,6 +98,7 @@ struct PickPicApp: App {
                 .environmentObject(configuration)
                 .environmentObject(uploadQueue)
                 .environmentObject(eventFolders)
+                .environmentObject(feedback)
                 .task {
                     await uploadQueue
                         .performStorageMaintenance()
@@ -46,6 +125,13 @@ struct PickPicApp: App {
                     }
                 }
                 .onAppear {
+                    previousJobStages = Dictionary(
+                        uniqueKeysWithValues:
+                            uploadQueue.jobs.map { job in
+                                (job.id, job.stage)
+                            }
+                    )
+
                     updateIdleTimer(
                         for: uploadQueue.jobs
                     )
@@ -54,6 +140,10 @@ struct PickPicApp: App {
                     uploadQueue.$jobs
                 ) { jobs in
                     updateIdleTimer(
+                        for: jobs
+                    )
+
+                    handleUploadFeedback(
                         for: jobs
                     )
                 }
@@ -143,6 +233,9 @@ struct PickPicApp: App {
             return
         }
 
+        var copiedPhotoCount = 0
+        var syncedEventCount = 0
+
         for reference in references {
             guard !Task.isCancelled else {
                 return
@@ -157,12 +250,18 @@ struct PickPicApp: App {
             }
 
             do {
-                _ = try await RequestedPhotoSyncService
+                if let result = try await RequestedPhotoSyncService
                     .sync(
                         eventID: reference.eventID,
                         reference: reference,
                         using: client
-                    )
+                    ),
+                    result.fileResult.copiedPhotoCount > 0
+                {
+                    copiedPhotoCount +=
+                    result.fileResult.copiedPhotoCount
+                    syncedEventCount += 1
+                }
             } catch {
                 print(
                     "Automatic requested-photo sync failed for event \(reference.eventID):",
@@ -170,6 +269,63 @@ struct PickPicApp: App {
                 )
             }
         }
+
+        guard copiedPhotoCount > 0 else {
+            return
+        }
+
+        let eventDescription =
+        syncedEventCount == 1
+        ? "1 event"
+        : "\(syncedEventCount) events"
+
+        let fileDescription =
+        copiedPhotoCount == 1
+        ? "file"
+        : "files"
+
+        feedback.show(
+            title: "Liked photos synced",
+            detail:
+                "Copied \(copiedPhotoCount) RAW \(fileDescription) into To Edit across \(eventDescription).",
+            systemImage: "heart.circle.fill"
+        )
+    }
+
+    @MainActor
+    private func handleUploadFeedback(
+        for jobs: [UploadJob]
+    ) {
+        let currentStages = Dictionary(
+            uniqueKeysWithValues:
+                jobs.map { job in
+                    (job.id, job.stage)
+                }
+        )
+
+        guard !previousJobStages.isEmpty else {
+            previousJobStages = currentStages
+            return
+        }
+
+        for job in jobs {
+            guard
+                job.stage == .completed,
+                previousJobStages[job.id]
+                    != .completed
+            else {
+                continue
+            }
+
+            feedback.show(
+                title: "Proof upload complete",
+                detail:
+                    "\(job.eventTitle): \(job.newlyUploadedPhotoCount) uploaded, \(job.duplicatePhotoCount) already existed, and \(job.optimizedPhotoCount) optimized.",
+                systemImage: "checkmark.circle.fill"
+            )
+        }
+
+        previousJobStages = currentStages
     }
 
     private func updateIdleTimer(

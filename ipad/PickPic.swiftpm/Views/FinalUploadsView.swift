@@ -19,6 +19,9 @@ struct FinalUploadsView: View {
     
     @EnvironmentObject private var eventFolders:
     EventFolderStore
+
+    @EnvironmentObject private var feedback:
+    AppFeedbackStore
     
     @StateObject private var viewModel =
     FinalUploadsViewModel()
@@ -56,43 +59,11 @@ struct FinalUploadsView: View {
                 }
             }
             
-            if let uploadedCount =
-                viewModel.lastUploadedCount,
-               uploadedCount > 0
-            {
-                Section("Last Upload") {
-                    Label(
-                        """
-                        \(uploadedCount) final \
-                        \(uploadedCount == 1
-                            ? "photo"
-                            : "photos") uploaded
-                        """,
-                        systemImage:
-                            "checkmark.circle.fill"
-                    )
-                    .foregroundStyle(.green)
-                }
-            }
-            
             if
-                let optimizedCount =
-                    viewModel.lastOptimizedCount,
-                optimizedCount > 0
+                (viewModel.lastUploadedCount ?? 0) > 0
+                || (viewModel.lastOptimizedCount ?? 0) > 0
             {
-                Section("Last Optimization") {
-                    Label(
-            """
-            \(optimizedCount) final \
-            \(optimizedCount == 1
-                ? "image"
-                : "images") optimized
-            """,
-            systemImage:
-                "checkmark.circle.fill"
-                    )
-                    .foregroundStyle(.green)
-                }
+                lastOperationSection
             }
             
             if !viewModel.variantUploadFailures.isEmpty {
@@ -417,30 +388,22 @@ struct FinalUploadsView: View {
                     || viewModel.isRepairingVariants
             {
                 let completedCount =
-                viewModel.isRepairingVariants
-                ? viewModel.optimizedCount
-                : viewModel.uploadedCount
-                
-                let totalCount =
-                viewModel.isRepairingVariants
-                ? scanResult
-                    .variantRepairCandidates
-                    .count
-                : scanResult.candidates.count
+                viewModel.completedOperationCount
+
+                let totalCount = max(
+                    viewModel.operationTotalCount,
+                    1
+                )
                 
                 ProgressView(
                     value:
                         Double(completedCount),
                     total:
-                        Double(
-                            max(totalCount, 1)
-                        )
+                        Double(totalCount)
                 )
                 
                 Text(
-                """
-                \(completedCount) of \(totalCount) complete
-                """
+                    "\(completedCount) of \(viewModel.operationTotalCount) complete"
                 )
                 .font(.subheadline)
                 
@@ -458,15 +421,24 @@ struct FinalUploadsView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+
+                TimelineView(
+                    .periodic(
+                        from: .now,
+                        by: 1
+                    )
+                ) { context in
+                    activeOperationMetrics(
+                        at: context.date
+                    )
+                }
             }
             
             if !scanResult.candidates.isEmpty {
                 Button {
                     Task {
-                        await viewModel.uploadAll(
-                            eventID: event.id,
-                            reference: reference,
-                            using: configuration
+                        await uploadFinals(
+                            reference: reference
                         )
                     }
                 } label: {
@@ -494,12 +466,9 @@ struct FinalUploadsView: View {
             {
                 Button {
                     Task {
-                        await viewModel
-                            .repairMissingVariants(
-                                eventID: event.id,
-                                reference: reference,
-                                using: configuration
-                            )
+                        await repairFinalVariants(
+                            reference: reference
+                        )
                     }
                 } label: {
                     Label(
@@ -566,6 +535,244 @@ struct FinalUploadsView: View {
         }
     }
     
+    private var lastOperationSection: some View {
+        Section(
+            viewModel.lastOperationWasVariantRepair
+            ? "Last Optimization"
+            : "Last Final Upload"
+        ) {
+            if viewModel.lastOperationWasVariantRepair {
+                Label(
+                    viewModel.errorMessage == nil
+                    ? "Optimization complete"
+                    : "Optimization stopped",
+                    systemImage:
+                        viewModel.errorMessage == nil
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.triangle.fill"
+                )
+                .foregroundStyle(
+                    viewModel.errorMessage == nil
+                    ? Color.green
+                    : Color.orange
+                )
+
+                LabeledContent(
+                    "Optimized",
+                    value:
+                        "\(viewModel.lastOptimizedCount ?? 0)"
+                )
+            } else {
+                Label(
+                    viewModel.errorMessage == nil
+                    ? "Final upload complete"
+                    : "Final upload stopped",
+                    systemImage:
+                        viewModel.errorMessage == nil
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.triangle.fill"
+                )
+                .foregroundStyle(
+                    viewModel.errorMessage == nil
+                    ? Color.green
+                    : Color.orange
+                )
+
+                LabeledContent(
+                    "Uploaded finals",
+                    value:
+                        "\(viewModel.lastUploadedCount ?? 0)"
+                )
+
+                LabeledContent(
+                    "Optimized",
+                    value:
+                        "\(viewModel.lastOptimizedCount ?? 0)"
+                )
+
+                LabeledContent(
+                    "Optimization retries",
+                    value:
+                        "\(viewModel.variantUploadFailures.count)"
+                )
+            }
+
+            LabeledContent(
+                "Failed",
+                value:
+                    viewModel.errorMessage == nil
+                    ? "0"
+                    : "1"
+            )
+
+            if let duration =
+                viewModel.lastOperationDuration {
+                LabeledContent(
+                    "Elapsed",
+                    value:
+                        formattedDuration(duration)
+                )
+
+                if
+                    duration > 0.5,
+                    viewModel.lastProcessedByteCount > 0
+                {
+                    let bytesPerSecond =
+                    Double(
+                        viewModel.lastProcessedByteCount
+                    ) / duration
+
+                    LabeledContent(
+                        "Average speed",
+                        value:
+                            formattedByteRate(
+                                bytesPerSecond
+                            )
+                    )
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func activeOperationMetrics(
+        at date: Date
+    ) -> some View {
+        if let elapsed =
+            viewModel.operationElapsedDuration(
+                at: date
+            )
+        {
+            LabeledContent(
+                "Elapsed",
+                value:
+                    formattedDuration(elapsed)
+            )
+        }
+
+        if let bytesPerSecond =
+            viewModel.averageOperationBytesPerSecond(
+                at: date
+            )
+        {
+            LabeledContent(
+                "Average speed",
+                value:
+                    formattedByteRate(
+                        bytesPerSecond
+                    )
+            )
+        }
+
+        if let remaining =
+            viewModel.estimatedOperationRemainingDuration(
+                at: date
+            )
+        {
+            LabeledContent(
+                "Estimated remaining",
+                value:
+                    "About \(formattedDuration(remaining))"
+            )
+        }
+    }
+
+    private func uploadFinals(
+        reference: EventFolderReference
+    ) async {
+        await viewModel.uploadAll(
+            eventID: event.id,
+            reference: reference,
+            using: configuration
+        )
+
+        guard let uploadedCount =
+            viewModel.lastUploadedCount,
+            uploadedCount > 0
+        else {
+            return
+        }
+
+        let optimizedCount =
+        viewModel.lastOptimizedCount
+        ?? 0
+
+        let retryCount =
+        viewModel.variantUploadFailures.count
+
+        let retryDetail =
+        retryCount > 0
+        ? ", \(retryCount) need optimization retry"
+        : ""
+
+        feedback.show(
+            title: "Final upload complete",
+            detail:
+                "\(event.title): \(uploadedCount) uploaded, \(optimizedCount) optimized\(retryDetail).",
+            systemImage: "checkmark.circle.fill"
+        )
+    }
+
+    private func repairFinalVariants(
+        reference: EventFolderReference
+    ) async {
+        await viewModel.repairMissingVariants(
+            eventID: event.id,
+            reference: reference,
+            using: configuration
+        )
+
+        guard let optimizedCount =
+            viewModel.lastOptimizedCount,
+            optimizedCount > 0
+        else {
+            return
+        }
+
+        feedback.show(
+            title: "Final images optimized",
+            detail:
+                "\(event.title): repaired \(optimizedCount) final \(optimizedCount == 1 ? "image" : "images").",
+            systemImage: "checkmark.circle.fill"
+        )
+    }
+
+    private func formattedDuration(
+        _ duration: TimeInterval
+    ) -> String {
+        let totalSeconds = max(
+            Int(duration.rounded()),
+            0
+        )
+
+        let hours = totalSeconds / 3_600
+        let minutes =
+        (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+
+        return "\(seconds)s"
+    }
+
+    private func formattedByteRate(
+        _ bytesPerSecond: Double
+    ) -> String {
+        let formatted = ByteCountFormatter.string(
+            fromByteCount:
+                Int64(bytesPerSecond),
+            countStyle: .file
+        )
+
+        return "\(formatted)/s"
+    }
+
     private func startAutomaticUploadIfNeeded() async {
         guard
             automaticallyUploadReadyFinals,
@@ -580,10 +787,8 @@ struct FinalUploadsView: View {
 
         hasAttemptedAutomaticUpload = true
 
-        await viewModel.uploadAll(
-            eventID: event.id,
-            reference: folderReference,
-            using: configuration
+        await uploadFinals(
+            reference: folderReference
         )
     }
 

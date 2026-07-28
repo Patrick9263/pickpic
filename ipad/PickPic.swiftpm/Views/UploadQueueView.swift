@@ -608,6 +608,17 @@ private struct UploadJobRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+
+                TimelineView(
+                    .periodic(
+                        from: .now,
+                        by: 1
+                    )
+                ) { context in
+                    conversionTiming(
+                        at: context.date
+                    )
+                }
                 
                 Text(
                     """
@@ -643,6 +654,13 @@ private struct UploadJobRow: View {
                     "tray.and.arrow.up.fill"
             )
             .font(.headline)
+
+            if job.uploadedPhotoCount > 0 {
+                uploadProgressDetails(
+                    at: Date(),
+                    showsEstimate: false
+                )
+            }
             
             LabeledContent(
                 "Prepared size",
@@ -665,39 +683,6 @@ private struct UploadJobRow: View {
                 value:
                     "\(locationCount) of \(job.photoCount)"
             )
-            
-            if job.uploadedPhotoCount > 0 {
-                ProgressView(
-                    value:
-                        Double(
-                            job.uploadedPhotoCount
-                        ),
-                    total:
-                        Double(
-                            max(job.photoCount, 1)
-                        )
-                )
-                
-                Text(
-                    """
-                    \(job.uploadedPhotoCount) of \
-                    \(job.photoCount) already uploaded
-                    """
-                )
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                
-                if job.duplicatePhotoCount > 0 {
-                    Text(
-                        """
-                        \(job.duplicatePhotoCount) matched \
-                        existing server photos.
-                        """
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            }
             
             if let failure =
                 job.uploadProgress.lastFailure {
@@ -809,7 +794,7 @@ private struct UploadJobRow: View {
                 Text(
                     """
                     \(job.uploadedPhotoCount) of \
-                    \(job.photoCount) photos uploaded
+                    \(job.photoCount) photos complete
                     """
                 )
                 .font(.subheadline)
@@ -829,6 +814,24 @@ private struct UploadJobRow: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                TimelineView(
+                    .periodic(
+                        from: .now,
+                        by: 1
+                    )
+                ) { context in
+                    uploadProgressDetails(
+                        at: context.date,
+                        showsEstimate: true
+                    )
+                }
+
+                Text(
+                    "Average speed includes the proof JPEG plus thumbnail and preview processing."
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
 
                 Button {
                     onPause()
@@ -851,34 +854,37 @@ private struct UploadJobRow: View {
             
         case .completed:
             Label(
-                """
-                \(job.uploadedPhotoCount) photos uploaded
-                """,
+                "Upload complete",
                 systemImage:
                     "checkmark.circle.fill"
             )
             .font(.headline)
-            
+            .foregroundStyle(.green)
+
+            uploadProgressDetails(
+                at:
+                    job.uploadProgress.completedAt
+                    ?? job.updatedAt,
+                showsEstimate: false
+            )
+
+            LabeledContent(
+                "Failed",
+                value: "0"
+            )
+
             if job.duplicatePhotoCount > 0 {
-                Label(
-                    """
-                    \(job.duplicatePhotoCount) were \
-                    already present
-                    """,
-                    systemImage:
-                        "rectangle.on.rectangle"
+                Text(
+                    "Already-existing photos skipped a duplicate full upload."
                 )
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundStyle(.secondary)
             }
             
             if let completedAt =
                 job.uploadProgress.completedAt {
                 Text(
-                    completedAt.formatted(
-                        date: .abbreviated,
-                        time: .shortened
-                    )
+                    "Finished \(completedAt.formatted(date: .abbreviated, time: .shortened))"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -904,6 +910,157 @@ private struct UploadJobRow: View {
         }
     }
     
+    @ViewBuilder
+    private func conversionTiming(
+        at date: Date
+    ) -> some View {
+        if let startedAt =
+            job.conversionStartedAt {
+            let elapsed = max(
+                date.timeIntervalSince(
+                    startedAt
+                ),
+                0
+            )
+
+            LabeledContent(
+                "Elapsed",
+                value:
+                    formattedDuration(elapsed)
+            )
+
+            if
+                job.conversionProcessedCount > 0,
+                job.conversionProcessedCount
+                    < job.photoCount
+            {
+                let averageSecondsPerPhoto =
+                elapsed / Double(
+                    job.conversionProcessedCount
+                )
+
+                let remaining =
+                averageSecondsPerPhoto
+                * Double(
+                    job.photoCount
+                    - job.conversionProcessedCount
+                )
+
+                LabeledContent(
+                    "Estimated remaining",
+                    value:
+                        "About \(formattedDuration(remaining))"
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func uploadProgressDetails(
+        at date: Date,
+        showsEstimate: Bool
+    ) -> some View {
+        LabeledContent(
+            "New uploads",
+            value:
+                "\(job.newlyUploadedPhotoCount)"
+        )
+
+        LabeledContent(
+            "Already existed",
+            value:
+                "\(job.duplicatePhotoCount)"
+        )
+
+        LabeledContent(
+            "Optimized",
+            value:
+                "\(job.optimizedPhotoCount)"
+        )
+
+        LabeledContent(
+            "Remaining",
+            value:
+                "\(max(job.photoCount - job.uploadedPhotoCount, 0))"
+        )
+
+        let elapsed = job.uploadElapsedDuration(
+            at: date
+        )
+
+        if elapsed > 0 {
+            LabeledContent(
+                "Active elapsed",
+                value:
+                    formattedDuration(elapsed)
+            )
+        }
+
+        if let bytesPerSecond =
+            job.averageUploadBytesPerSecond(
+                at: date
+            )
+        {
+            LabeledContent(
+                "Average speed",
+                value:
+                    formattedByteRate(
+                        bytesPerSecond
+                    )
+            )
+        }
+
+        if
+            showsEstimate,
+            let remainingDuration =
+                job.estimatedUploadRemainingDuration(
+                    at: date
+                )
+        {
+            LabeledContent(
+                "Estimated remaining",
+                value:
+                    "About \(formattedDuration(remainingDuration))"
+            )
+        }
+    }
+
+    private func formattedDuration(
+        _ duration: TimeInterval
+    ) -> String {
+        let totalSeconds = max(
+            Int(duration.rounded()),
+            0
+        )
+
+        let hours = totalSeconds / 3_600
+        let minutes =
+        (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+
+        return "\(seconds)s"
+    }
+
+    private func formattedByteRate(
+        _ bytesPerSecond: Double
+    ) -> String {
+        let formatted = ByteCountFormatter.string(
+            fromByteCount:
+                Int64(bytesPerSecond),
+            countStyle: .file
+        )
+
+        return "\(formatted)/s"
+    }
+
     @ViewBuilder
     private var folderAccessLabel: some View {
         switch folderIsAccessible {
