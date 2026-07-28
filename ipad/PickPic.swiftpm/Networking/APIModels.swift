@@ -136,7 +136,89 @@ struct ServerPhotoRecord:
     let originalFilename: String
     let heartCount: Int
     let workflowStatus: ServerPhotoWorkflowStatus
+    let variants: ServerImageVariantSet
     let finalPhoto: ServerFinalPhotoSummary?
+}
+
+struct EventPhotoStatistics:
+    Hashable,
+    Sendable
+{
+    let uploadedProofCount: Int
+    let likedPhotoCount: Int
+    let totalHeartCount: Int
+    let editingPhotoCount: Int
+    let uploadedFinalCount: Int
+    let missingVariantPhotoCount: Int
+
+    static let empty = EventPhotoStatistics(
+        uploadedProofCount: 0,
+        likedPhotoCount: 0,
+        totalHeartCount: 0,
+        editingPhotoCount: 0,
+        uploadedFinalCount: 0,
+        missingVariantPhotoCount: 0
+    )
+
+    init(
+        uploadedProofCount: Int,
+        likedPhotoCount: Int,
+        totalHeartCount: Int,
+        editingPhotoCount: Int,
+        uploadedFinalCount: Int,
+        missingVariantPhotoCount: Int
+    ) {
+        self.uploadedProofCount =
+        uploadedProofCount
+        self.likedPhotoCount =
+        likedPhotoCount
+        self.totalHeartCount =
+        totalHeartCount
+        self.editingPhotoCount =
+        editingPhotoCount
+        self.uploadedFinalCount =
+        uploadedFinalCount
+        self.missingVariantPhotoCount =
+        missingVariantPhotoCount
+    }
+
+    init(photos: [ServerPhotoRecord]) {
+        uploadedProofCount = photos.count
+
+        likedPhotoCount =
+        photos.filter { photo in
+            photo.heartCount > 0
+        }
+        .count
+
+        totalHeartCount =
+        photos.reduce(0) { total, photo in
+            total + photo.heartCount
+        }
+
+        editingPhotoCount =
+        photos.filter { photo in
+            photo.workflowStatus == .editing
+        }
+        .count
+
+        uploadedFinalCount =
+        photos.filter { photo in
+            photo.finalPhoto != nil
+        }
+        .count
+
+        missingVariantPhotoCount =
+        photos.filter { photo in
+            !photo.variants.isComplete
+            || (
+                photo.finalPhoto != nil
+                && photo.finalPhoto?.variants
+                    .isComplete == false
+            )
+        }
+        .count
+    }
 }
 
 struct SetEventStatusRequest: Encodable {
