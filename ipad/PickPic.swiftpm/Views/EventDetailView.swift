@@ -6,6 +6,9 @@ struct EventDetailView: View {
     
     let onEventUpdated:
     (PickPicEvent) -> Void
+
+    let onEventStatisticsUpdated:
+    (String, EventPhotoStatistics) -> Void
     
     let onEventDeleted:
     (String) -> Void
@@ -33,11 +36,30 @@ struct EventDetailView: View {
     @State private var showingStatusError = false
     @State private var statusErrorMessage = ""
     @State private var showingGalleryStatusPicker = false
+
+    @State private var dashboardStatistics:
+    EventPhotoStatistics?
+
+    @State private var dashboardReadyFinalCount:
+    Int?
+
+    @State private var dashboardToEditFileCount:
+    Int?
+
+    @State private var isLoadingDashboard = false
+    @State private var dashboardErrorMessage: String?
+    @State private var dashboardFolderMessage: String?
+    @State private var dashboardLastUpdatedAt: Date?
     
     init(
         event: PickPicEvent,
         onEventUpdated:
         @escaping (PickPicEvent) -> Void,
+        onEventStatisticsUpdated:
+        @escaping (
+            String,
+            EventPhotoStatistics
+        ) -> Void,
         onEventDeleted:
         @escaping (String) -> Void
     ) {
@@ -47,6 +69,9 @@ struct EventDetailView: View {
         
         self.onEventUpdated =
         onEventUpdated
+
+        self.onEventStatisticsUpdated =
+        onEventStatisticsUpdated
         
         self.onEventDeleted =
         onEventDeleted
@@ -154,6 +179,62 @@ struct EventDetailView: View {
                 )
             }
             
+            Section {
+                EventDetailDashboard(
+                    statistics: dashboardStatistics,
+                    readyFinalCount:
+                        dashboardReadyFinalCount,
+                    toEditFileCount:
+                        dashboardToEditFileCount,
+                    incompleteUploadCount:
+                        unfinishedEventJobCount,
+                    isLoading:
+                        isLoadingDashboard
+                )
+
+                if let dashboardErrorMessage {
+                    Label(
+                        dashboardErrorMessage,
+                        systemImage:
+                            "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                }
+
+                if let dashboardFolderMessage {
+                    Label(
+                        dashboardFolderMessage,
+                        systemImage: "folder"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            } header: {
+                HStack {
+                    Text("Dashboard")
+
+                    Spacer()
+
+                    if isLoadingDashboard {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else if let dashboardLastUpdatedAt {
+                        Text(
+                            dashboardLastUpdatedAt.formatted(
+                                date: .omitted,
+                                time: .shortened
+                            )
+                        )
+                        .font(.caption2)
+                    }
+                }
+            } footer: {
+                Text(
+                    "Pull down to refresh server and Edited-folder statistics."
+                )
+            }
+
             Section("Photos") {
                 NavigationLink {
                     PhotoImportView(
@@ -313,6 +394,14 @@ struct EventDetailView: View {
                 )
             }
         }
+        .refreshable {
+            await loadDashboard()
+        }
+        .onAppear {
+            Task {
+                await loadDashboard()
+            }
+        }
         .navigationTitle(event.title)
         .navigationBarTitleDisplayMode(.inline)
         .disabled(isDeleting)
@@ -419,6 +508,122 @@ struct EventDetailView: View {
         }
     }
     
+    @MainActor
+    private func loadDashboard() async {
+        guard
+            !isLoadingDashboard,
+            configuration.isConfigured
+        else {
+            return
+        }
+
+        isLoadingDashboard = true
+        dashboardErrorMessage = nil
+        dashboardFolderMessage = nil
+
+        defer {
+            isLoadingDashboard = false
+        }
+
+        do {
+            let client =
+            try configuration.makeClient()
+
+            let photos =
+            try await client.fetchEventPhotos(
+                eventID: event.id
+            )
+
+            let statistics =
+            EventPhotoStatistics(
+                photos: photos
+            )
+
+            dashboardStatistics = statistics
+            onEventStatisticsUpdated(
+                event.id,
+                statistics
+            )
+
+            dashboardLastUpdatedAt = Date()
+
+            guard let reference =
+                eventFolders.reference(
+                    for: event.id
+                )
+            else {
+                dashboardReadyFinalCount = nil
+                dashboardToEditFileCount = nil
+                dashboardFolderMessage =
+                    "Folder statistics require a saved event folder."
+                return
+            }
+
+            var folderMessages: [String] = []
+
+            do {
+                dashboardToEditFileCount =
+                try await Task.detached(
+                    priority: .utility
+                ) {
+                    try EventDashboardFolderService
+                        .countToEditPhotos(
+                            reference: reference,
+                            photos: photos
+                        )
+                }
+                .value
+            } catch {
+                dashboardToEditFileCount = nil
+                folderMessages.append(
+                    "To Edit could not be counted: \(error.localizedDescription)"
+                )
+            }
+
+            do {
+                let scanResult =
+                try await Task.detached(
+                    priority: .utility
+                ) {
+                    try EditedFolderService.scan(
+                        reference: reference,
+                        photos: photos
+                    )
+                }
+                .value
+
+                dashboardReadyFinalCount =
+                scanResult.candidates.count
+            } catch let folderError as EditedFolderError {
+                switch folderError {
+                case .editedFolderMissing:
+                    dashboardReadyFinalCount = 0
+
+                case .eventFolderUnavailable:
+                    dashboardReadyFinalCount = nil
+                    folderMessages.append(
+                        folderError.localizedDescription
+                    )
+                }
+            } catch {
+                dashboardReadyFinalCount = nil
+                folderMessages.append(
+                    "Ready Finals could not be counted: \(error.localizedDescription)"
+                )
+            }
+
+            dashboardFolderMessage =
+            folderMessages.isEmpty
+            ? nil
+            : folderMessages.joined(
+                separator: " "
+            )
+        } catch {
+            dashboardErrorMessage =
+            error.localizedDescription
+        }
+    }
+
     private var galleryStatusMenu: some View {
         LabeledContent {
             Button {
@@ -707,6 +912,263 @@ struct EventDetailView: View {
             error.localizedDescription
             
             showingDeleteError = true
+        }
+    }
+}
+
+private struct EventDetailDashboard: View {
+    let statistics: EventPhotoStatistics?
+    let readyFinalCount: Int?
+    let toEditFileCount: Int?
+    let incompleteUploadCount: Int
+    let isLoading: Bool
+
+    private let columns = [
+        GridItem(
+            .adaptive(minimum: 112),
+            spacing: 12
+        )
+    ]
+
+    var body: some View {
+        LazyVGrid(
+            columns: columns,
+            spacing: 12
+        ) {
+            EventDetailStatistic(
+                title: "Proofs",
+                value: value(
+                    statistics?.uploadedProofCount
+                ),
+                systemImage: "photo"
+            )
+
+            EventDetailStatistic(
+                title: "Liked Photos",
+                value: value(
+                    statistics?.likedPhotoCount
+                ),
+                systemImage: "heart.fill"
+            )
+
+            EventDetailStatistic(
+                title: "In To Edit",
+                value: value(
+                    toEditFileCount
+                ),
+                systemImage: "folder.fill"
+            )
+
+            EventDetailStatistic(
+                title: "Editing",
+                value: value(
+                    statistics?.editingPhotoCount
+                ),
+                systemImage:
+                    "slider.horizontal.3"
+            )
+
+            EventDetailStatistic(
+                title: "Ready Finals",
+                value: value(
+                    readyFinalCount
+                ),
+                systemImage:
+                    "bolt.circle.fill"
+            )
+
+            EventDetailStatistic(
+                title: "Uploaded Finals",
+                value: value(
+                    statistics?.uploadedFinalCount
+                ),
+                systemImage:
+                    "checkmark.seal.fill"
+            )
+
+            EventDetailStatistic(
+                title: "Needs Web Versions",
+                value: value(
+                    statistics?
+                        .missingVariantPhotoCount
+                ),
+                systemImage:
+                    "exclamationmark.triangle"
+            )
+
+            EventDetailStatistic(
+                title: "Uploads to Continue",
+                value:
+                    "\(incompleteUploadCount)",
+                systemImage:
+                    "clock.arrow.circlepath"
+            )
+        }
+        .padding(.vertical, 8)
+    }
+
+    private func value(
+        _ value: Int?
+    ) -> String {
+        guard let value else {
+            return isLoading ? "…" : "—"
+        }
+
+        return "\(value)"
+    }
+}
+
+private struct EventDetailStatistic: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.subheadline)
+                .foregroundStyle(.tint)
+
+            Text(value)
+                .font(.title3.bold())
+                .contentTransition(.numericText())
+
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(
+            .thinMaterial,
+            in: RoundedRectangle(
+                cornerRadius: 12,
+                style: .continuous
+            )
+        )
+        .accessibilityElement(
+            children: .combine
+        )
+    }
+}
+
+private enum EventDashboardFolderError:
+    LocalizedError
+{
+    case toEditIsNotFolder
+
+    var errorDescription: String? {
+        switch self {
+        case .toEditIsNotFolder:
+            return "The To Edit item is not a folder."
+        }
+    }
+}
+
+private enum EventDashboardFolderService {
+    static func countToEditPhotos(
+        reference: EventFolderReference,
+        photos: [ServerPhotoRecord]
+    ) throws -> Int {
+        let resolved =
+        try FolderBookmarkService.resolve(
+            reference.bookmarkData
+        )
+
+        let eventFolderURL = resolved.url
+        let accessed =
+        eventFolderURL
+            .startAccessingSecurityScopedResource()
+
+        guard accessed else {
+            throw ToEditSyncError
+                .sourceFolderUnavailable
+        }
+
+        defer {
+            eventFolderURL
+                .stopAccessingSecurityScopedResource()
+        }
+
+        var eventFolderIsDirectory:
+        ObjCBool = false
+
+        guard
+            FileManager.default.fileExists(
+                atPath: eventFolderURL.path,
+                isDirectory:
+                    &eventFolderIsDirectory
+            ),
+            eventFolderIsDirectory.boolValue
+        else {
+            throw ToEditSyncError
+                .sourceFolderUnavailable
+        }
+
+        let toEditURL =
+        eventFolderURL.appendingPathComponent(
+            UploadPreparationService
+                .toEditFolderName,
+            isDirectory: true
+        )
+
+        var toEditIsDirectory:
+        ObjCBool = false
+
+        guard FileManager.default.fileExists(
+            atPath: toEditURL.path,
+            isDirectory: &toEditIsDirectory
+        ) else {
+            return 0
+        }
+
+        guard toEditIsDirectory.boolValue else {
+            throw EventDashboardFolderError
+                .toEditIsNotFolder
+        }
+
+        let fileURLs =
+        try FileManager.default
+            .contentsOfDirectory(
+                at: toEditURL,
+                includingPropertiesForKeys: [
+                    .isRegularFileKey
+                ],
+                options: [.skipsHiddenFiles]
+            )
+
+        let matchingServerFilenames =
+        Set(
+            photos.map { photo in
+                photo.originalFilename
+                    .lowercased()
+            }
+        )
+
+        return try fileURLs.reduce(0) {
+            count,
+            fileURL in
+
+            let values =
+            try fileURL.resourceValues(
+                forKeys: [
+                    .isRegularFileKey
+                ]
+            )
+
+            guard
+                values.isRegularFile == true,
+                matchingServerFilenames.contains(
+                    fileURL.lastPathComponent
+                        .lowercased()
+                )
+            else {
+                return count
+            }
+
+            return count + 1
         }
     }
 }

@@ -13,8 +13,14 @@ struct ContentView: View {
         NavigationStack {
             EventListView(
                 events: viewModel.events,
+                statisticsByEventID:
+                    viewModel.statisticsByEventID,
+                statisticsFailedEventIDs:
+                    viewModel.statisticsFailedEventIDs,
                 isLoading:
                     viewModel.isLoading,
+                isLoadingStatistics:
+                    viewModel.isLoadingStatistics,
                 errorMessage:
                     viewModel.errorMessage,
                 onRefresh: {
@@ -33,6 +39,14 @@ struct ContentView: View {
                     
                     viewModel.replaceEvent(
                         updatedEvent
+                    )
+                },
+                onEventStatisticsUpdated: {
+                    eventID, statistics in
+
+                    viewModel.replaceStatistics(
+                        statistics,
+                        for: eventID
                     )
                 },
                 onEventDeleted: { eventID in
