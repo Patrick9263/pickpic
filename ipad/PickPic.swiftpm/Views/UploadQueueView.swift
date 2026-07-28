@@ -754,17 +754,22 @@ private struct UploadJobRow: View {
             Button {
                 onContinue()
             } label: {
-                Label(
-                    job.uploadedPhotoCount > 0
-                        || job.uploadProgress.pausedAt != nil
-                        ? "Resume Upload"
-                        : "Upload Photos",
-                    systemImage:
+                HStack(spacing: 8) {
+                    Image(
+                        systemName:
+                            job.uploadedPhotoCount > 0
+                                || job.uploadProgress.pausedAt != nil
+                            ? "play.fill"
+                            : "arrow.up.circle.fill"
+                    )
+
+                    Text(
                         job.uploadedPhotoCount > 0
                             || job.uploadProgress.pausedAt != nil
-                        ? "play.circle.fill"
-                        : "arrow.up.circle.fill"
-                )
+                        ? "Resume Upload"
+                        : "Upload Photos"
+                    )
+                }
             }
             .buttonStyle(.borderedProminent)
             
