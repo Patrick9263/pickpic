@@ -845,20 +845,34 @@ private struct UploadJobRow: View {
                 Button {
                     onPause()
                 } label: {
-                    Label(
-                        job.uploadProgress.isPauseRequested
-                        ? "Pausing After This Photo…"
-                        : "Pause Upload",
-                        systemImage:
-                            job.uploadProgress.isPauseRequested
-                            ? "hourglass"
-                            : "pause.circle"
-                    )
+                    HStack(spacing: 8) {
+                        Image(systemName: "pause.fill")
+                        Text("Pause Upload")
+                    }
                 }
                 .buttonStyle(.bordered)
                 .disabled(
                     job.uploadProgress.isPauseRequested
                 )
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
+
+                if job.uploadProgress.isPauseRequested {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+
+                        Text(
+                            "Finishing the current photo before pausing…"
+                        )
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+                }
             }
             
         case .completed:
