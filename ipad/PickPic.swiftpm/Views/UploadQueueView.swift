@@ -756,10 +756,14 @@ private struct UploadJobRow: View {
             } label: {
                 Label(
                     job.uploadedPhotoCount > 0
-                    ? "Resume Upload"
-                    : "Upload Photos",
+                        || job.uploadProgress.pausedAt != nil
+                        ? "Resume Upload"
+                        : "Upload Photos",
                     systemImage:
-                        "arrow.up.circle.fill"
+                        job.uploadedPhotoCount > 0
+                            || job.uploadProgress.pausedAt != nil
+                        ? "play.circle.fill"
+                        : "arrow.up.circle.fill"
                 )
             }
             .buttonStyle(.borderedProminent)
