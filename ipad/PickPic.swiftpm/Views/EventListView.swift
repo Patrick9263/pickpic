@@ -103,9 +103,13 @@ struct EventListView: View {
         }
     }
 
-    private var hasVisibleStatistics: Bool {
-        visibleEvents.contains { event in
+    private var visibleStatisticsAreComplete: Bool {
+        !visibleEvents.isEmpty
+        && visibleEvents.allSatisfy { event in
             statisticsByEventID[event.id] != nil
+            && !statisticsFailedEventIDs.contains(
+                event.id
+            )
         }
     }
 
@@ -159,8 +163,7 @@ struct EventListView: View {
                         incompleteJobCount:
                             visibleIncompleteJobCount,
                         showsPlaceholder:
-                            !hasVisibleStatistics
-                            && isLoadingStatistics
+                            !visibleStatisticsAreComplete
                     )
                 } header: {
                     HStack {
