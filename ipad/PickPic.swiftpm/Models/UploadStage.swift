@@ -70,4 +70,20 @@ enum UploadStage:
             return "exclamationmark.triangle"
         }
     }
+
+    var isActiveOperation: Bool {
+        switch self {
+        case .preparing,
+                .converting,
+                .uploading:
+            return true
+
+        case .queued,
+                .prepared,
+                .readyToUpload,
+                .completed,
+                .failed:
+            return false
+        }
+    }
 }

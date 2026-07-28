@@ -24,6 +24,18 @@ struct UploadQueueView: View {
     private var eventJobs: [UploadJob] {
         uploadQueue.jobs(for: event.id)
     }
+
+    private var incompleteEventJobs: [UploadJob] {
+        eventJobs.filter { job in
+            job.stage != .completed
+        }
+    }
+
+    private var isRetryingIncompleteJobs: Bool {
+        uploadQueue.isRetryingIncompleteJobs(
+            for: event.id
+        )
+    }
     
     private var eventHasActiveProcessing: Bool {
         eventJobs.contains { job in
@@ -102,6 +114,44 @@ struct UploadQueueView: View {
                     .foregroundStyle(.secondary)
                 }
             }
+
+            if incompleteEventJobs.count > 1 {
+                Section {
+                    Button {
+                        Task {
+                            await uploadQueue
+                                .retryIncompleteJobs(
+                                    for: event.id,
+                                    using: configuration
+                                )
+                        }
+                    } label: {
+                        if isRetryingIncompleteJobs {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                Text("Continuing Uploads…")
+                            }
+                        } else {
+                            Label(
+                                "Retry All Incomplete",
+                                systemImage:
+                                    "arrow.clockwise.circle"
+                            )
+                        }
+                    }
+                    .disabled(
+                        isRetryingIncompleteJobs
+                        || eventHasActiveProcessing
+                    )
+
+                    Text(
+                        "Continues each unfinished batch in order while preserving completed photos."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
             ForEach(eventJobs) { job in
                 UploadJobRow(
                     job: job,
@@ -130,8 +180,24 @@ struct UploadQueueView: View {
                                 )
                         }
                     },
+                    onPause: {
+                        uploadQueue.requestPause(
+                            jobID: job.id
+                        )
+                    },
+                    onRetryFailedPhoto: {
+                        Task {
+                            await uploadQueue
+                                .retryLastFailedPhoto(
+                                    jobID: job.id,
+                                    using: configuration
+                                )
+                        }
+                    },
                     isRelinkingFolder:
                         relinkingJobID == job.id,
+                    canRelinkFolder:
+                        !job.stage.isActiveOperation,
                     onRelinkFolder: {
                         relinkingJobID = job.id
                         showingFolderRelinker = true
@@ -295,7 +361,10 @@ private struct UploadJobRow: View {
     let onContinue: () -> Void
     let onTestFirstPhoto: () -> Void
     let onConvertAll: () -> Void
+    let onPause: () -> Void
+    let onRetryFailedPhoto: () -> Void
     let isRelinkingFolder: Bool
+    let canRelinkFolder: Bool
     let onRelinkFolder: () -> Void
     
     @State private var folderIsAccessible:
@@ -551,6 +620,21 @@ private struct UploadJobRow: View {
             }
             
         case .readyToUpload:
+            if let pausedAt =
+                job.uploadProgress.pausedAt {
+                Label(
+                    "Upload paused",
+                    systemImage: "pause.circle.fill"
+                )
+                .font(.headline)
+
+                Text(
+                    "Paused after the current photo at \(pausedAt.formatted(date: .omitted, time: .shortened)). Completed photos were preserved."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             Label(
                 """
                 \(job.preparedPhotos.count) JPEGs are ready
@@ -615,7 +699,46 @@ private struct UploadJobRow: View {
                 }
             }
             
-            if let errorMessage =
+            if let failure =
+                job.uploadProgress.lastFailure {
+                VStack(
+                    alignment: .leading,
+                    spacing: 8
+                ) {
+                    Label(
+                        "Upload stopped",
+                        systemImage:
+                            failure.isNetworkRelated
+                            ? "wifi.exclamationmark"
+                            : "exclamationmark.triangle.fill"
+                    )
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+
+                    Text(failure.sourceFilename)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+
+                    Text(failure.step.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text(failure.message)
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+
+                    Button {
+                        onRetryFailedPhoto()
+                    } label: {
+                        Label(
+                            "Retry This Photo",
+                            systemImage: "arrow.clockwise"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.vertical, 4)
+            } else if let errorMessage =
                 job.uploadProgress.errorMessage {
                 Text(errorMessage)
                     .font(.subheadline)
@@ -699,12 +822,31 @@ private struct UploadJobRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                
+
                 Text(
-                    "Uploading prepared JPEG…"
+                    job.uploadProgress.currentStep?.title
+                    ?? "Uploading prepared JPEG…"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                Button {
+                    onPause()
+                } label: {
+                    Label(
+                        job.uploadProgress.isPauseRequested
+                        ? "Pausing After This Photo…"
+                        : "Pause Upload",
+                        systemImage:
+                            job.uploadProgress.isPauseRequested
+                            ? "hourglass"
+                            : "pause.circle"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(
+                    job.uploadProgress.isPauseRequested
+                )
             }
             
         case .completed:
@@ -790,7 +932,16 @@ private struct UploadJobRow: View {
                         onRelinkFolder()
                     }
                     .buttonStyle(.borderless)
+                    .disabled(!canRelinkFolder)
                 }
+            }
+
+            if !canRelinkFolder {
+                Text(
+                    "Folder changes are disabled while PickPic is processing this batch."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             
         case .some(false):
@@ -822,7 +973,18 @@ private struct UploadJobRow: View {
                     }
                 }
                 .buttonStyle(.bordered)
-                .disabled(isRelinkingFolder)
+                .disabled(
+                    isRelinkingFolder
+                    || !canRelinkFolder
+                )
+
+                if !canRelinkFolder {
+                    Text(
+                        "Wait for the current operation to pause or finish before relinking."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
         }
     }

@@ -4,21 +4,38 @@ import Foundation
 private enum UploadQueuePipelineError:
     LocalizedError
 {
-    case originalOptimizationFailed(
+    case variantGenerationFailed(
         filename: String,
         reason: String
+    )
+
+    case variantUploadFailed(
+        filename: String,
+        reason: String,
+        isNetworkRelated: Bool
     )
     
     var errorDescription: String? {
         switch self {
-        case let .originalOptimizationFailed(
+        case let .variantGenerationFailed(
             filename,
             reason
         ):
             return """
-            \(filename) uploaded, but its optimized web versions could \
-            not be created. Resume the upload to retry without \
-            duplicating the full photo. \(reason)
+            \(filename) uploaded, but PickPic could not create its \
+            thumbnail and preview. Retry this photo without \
+            duplicating the full upload. \(reason)
+            """
+
+        case let .variantUploadFailed(
+            filename,
+            reason,
+            _
+        ):
+            return """
+            \(filename) uploaded, but its thumbnail and preview could \
+            not be uploaded. Retry this photo without duplicating the \
+            full upload. \(reason)
             """
         }
     }
@@ -35,6 +52,7 @@ private enum UploadFolderRelinkError: LocalizedError, Sendable {
     case folderAccessDenied
     case selectedItemIsNotFolder
     case missingSourceFiles([String])
+    case mismatchedSourceFiles([String])
 
     var errorDescription: String? {
         switch self {
@@ -58,6 +76,15 @@ private enum UploadFolderRelinkError: LocalizedError, Sendable {
                 : ""
 
             return "The selected folder does not contain the original source files needed by this upload: \(preview)\(suffix)."
+
+        case let .mismatchedSourceFiles(filenames):
+            let preview = filenames.prefix(5).joined(separator: ", ")
+            let remainingCount = max(filenames.count - 5, 0)
+            let suffix = remainingCount > 0
+                ? " and \(remainingCount) more"
+                : ""
+
+            return "The selected folder contains files with the expected names but different sizes: \(preview)\(suffix). Select the original event folder."
         }
     }
 }
@@ -81,6 +108,10 @@ final class UploadQueueStore: ObservableObject {
     
     private let storageURL: URL
     private var runningPipelineJobIDs: Set<UUID> = []
+    private var pauseRequestedJobIDs: Set<UUID> = []
+
+    @Published private(set)
+    var retryingEventIDs: Set<String> = []
     
     init() {
         storageURL = Self.makeStorageURL()
@@ -149,6 +180,128 @@ final class UploadQueueStore: ObservableObject {
         }
         .count
     }
+
+    func isRetryingIncompleteJobs(
+        for eventID: String
+    ) -> Bool {
+        retryingEventIDs.contains(eventID)
+    }
+
+    func requestPause(
+        jobID: UUID
+    ) {
+        guard
+            let job = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            job.stage == .uploading
+        else {
+            return
+        }
+
+        pauseRequestedJobIDs.insert(jobID)
+
+        do {
+            try updateJob(jobID) { job in
+                job.uploadProgress.pauseRequested = true
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            PickPic could not save the pause request: \
+            \(error.localizedDescription)
+            """
+        }
+    }
+
+    func retryIncompleteJobs(
+        for eventID: String,
+        using configuration: APIConfigurationStore
+    ) async {
+        guard !retryingEventIDs.contains(eventID) else {
+            return
+        }
+
+        retryingEventIDs.insert(eventID)
+
+        defer {
+            retryingEventIDs.remove(eventID)
+        }
+
+        let jobIDs = jobs
+            .filter { job in
+                job.eventID == eventID
+                && job.stage != .completed
+                && job.stage != .preparing
+                && job.stage != .converting
+                && job.stage != .uploading
+            }
+            .sorted { first, second in
+                first.createdAt < second.createdAt
+            }
+            .map(\.id)
+
+        for jobID in jobIDs {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await runUploadPipeline(
+                jobID: jobID,
+                using: configuration
+            )
+
+            guard
+                let refreshedJob = jobs.first(
+                    where: { job in
+                        job.id == jobID
+                    }
+                )
+            else {
+                continue
+            }
+
+            if refreshedJob.uploadProgress.isPaused {
+                return
+            }
+
+            if refreshedJob.uploadProgress
+                .lastFailure?
+                .isNetworkRelated == true
+            {
+                return
+            }
+        }
+    }
+
+    func retryLastFailedPhoto(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) async {
+        guard
+            let job = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            job.stage == .readyToUpload,
+            let failedFilename =
+                job.uploadProgress
+                    .lastFailure?
+                    .sourceFilename
+        else {
+            return
+        }
+
+        await uploadAllPhotos(
+            jobID: jobID,
+            using: configuration,
+            onlySourceFilename: failedFilename
+        )
+    }
     
     func removeCompletedJobs(
         for eventID: String
@@ -202,6 +355,9 @@ final class UploadQueueStore: ObservableObject {
         
         jobs = updatedJobs
         loadErrorMessage = nil
+
+        runningPipelineJobIDs.subtract(jobIDs)
+        pauseRequestedJobIDs.subtract(jobIDs)
         
         for job in removedJobs {
             try? ImageConversionService
@@ -598,8 +754,25 @@ final class UploadQueueStore: ObservableObject {
                 job.updatedAt = completedAt
             }
         } catch {
-            let conversionError =
-            error.localizedDescription
+            let failedFilename = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )?
+                .conversionCurrentFilename
+
+            let conversionError: String
+
+            if let failedFilename {
+                conversionError =
+                """
+                RAW conversion stopped at \(failedFilename). \
+                \(error.localizedDescription)
+                """
+            } else {
+                conversionError =
+                    error.localizedDescription
+            }
             
             try? await Task.detached {
                 try ImageConversionService
@@ -636,7 +809,8 @@ final class UploadQueueStore: ObservableObject {
     func uploadAllPhotos(
         jobID: UUID,
         using configuration:
-        APIConfigurationStore
+        APIConfigurationStore,
+        onlySourceFilename: String? = nil
     ) async {
         guard
             let currentJob = jobs.first(
@@ -648,7 +822,7 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         guard
             !currentJob.preparedPhotos.isEmpty,
             currentJob.preparedPhotos.count
@@ -661,57 +835,81 @@ final class UploadQueueStore: ObservableObject {
                     The prepared batch is incomplete. \
                     Convert all photos again.
                     """
-                    
+
+                    job.uploadProgress.lastFailure = nil
+
                     job.updatedAt = Date()
                 }
             } catch {
                 loadErrorMessage =
-                error.localizedDescription
+                    error.localizedDescription
             }
-            
+
             return
         }
-        
+
+        let preparedPhotos: [PreparedPhoto]
+
+        if let onlySourceFilename {
+            preparedPhotos = currentJob.preparedPhotos
+                .filter { photo in
+                    photo.sourceFilename
+                        .caseInsensitiveCompare(
+                            onlySourceFilename
+                        ) == .orderedSame
+                }
+
+            guard !preparedPhotos.isEmpty else {
+                return
+            }
+        } else {
+            preparedPhotos = currentJob.preparedPhotos
+        }
+
         let client: APIClient
-        
+
         do {
             client = try configuration.makeClient()
         } catch {
             do {
                 try updateJob(jobID) { job in
                     job.uploadProgress.errorMessage =
-                    error.localizedDescription
-                    
+                        error.localizedDescription
+
+                    job.uploadProgress.lastFailure = nil
+                    job.uploadProgress.pausedAt = nil
+
                     job.updatedAt = Date()
                 }
             } catch {
                 loadErrorMessage =
-                error.localizedDescription
+                    error.localizedDescription
             }
-            
+
             return
         }
-        
+
         let startedAt =
         currentJob.uploadProgress.startedAt
         ?? Date()
-        
+
+        pauseRequestedJobIDs.remove(jobID)
+
         do {
             try updateJob(jobID) { job in
                 job.stage = .uploading
-                
+
                 job.uploadProgress.startedAt =
-                startedAt
-                
-                job.uploadProgress.completedAt =
-                nil
-                
-                job.uploadProgress.currentFilename =
-                nil
-                
-                job.uploadProgress.errorMessage =
-                nil
-                
+                    startedAt
+
+                job.uploadProgress.completedAt = nil
+                job.uploadProgress.currentFilename = nil
+                job.uploadProgress.currentStep = nil
+                job.uploadProgress.errorMessage = nil
+                job.uploadProgress.lastFailure = nil
+                job.uploadProgress.pauseRequested = false
+                job.uploadProgress.pausedAt = nil
+
                 job.updatedAt = Date()
             }
         } catch {
@@ -720,10 +918,10 @@ final class UploadQueueStore: ObservableObject {
             Uploading could not start: \
             \(error.localizedDescription)
             """
-            
+
             return
         }
-        
+
         guard
             let uploadingJob = jobs.first(
                 where: { job in
@@ -733,55 +931,62 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         var completedFilenames =
         uploadingJob
             .uploadProgress
             .completedSourceFilenames
-        
-        for preparedPhoto in uploadingJob.preparedPhotos {
+
+        let allSourceFilenames = Set(
+            uploadingJob.preparedPhotos.map(
+                \.sourceFilename
+            )
+        )
+
+        for preparedPhoto in preparedPhotos {
             if Task.isCancelled {
-                do {
-                    try updateJob(jobID) { job in
-                        job.stage = .readyToUpload
-                        job.uploadProgress.currentFilename = nil
-                        job.uploadProgress.errorMessage =
+                transitionUploadToReady(
+                    jobID: jobID,
+                    message:
                         "Uploading was cancelled. Resume the remaining photos."
-                        job.updatedAt = Date()
-                    }
-                } catch {
-                    loadErrorMessage =
-                """
-                Uploading was cancelled, but the queue \
-                could not be updated: \
-                \(error.localizedDescription)
-                """
-                }
-                
+                )
                 return
             }
-            
+
             if completedFilenames.contains(
                 preparedPhoto.sourceFilename
             ) {
                 continue
             }
-            
+
+            if
+                pauseRequestedJobIDs.contains(jobID),
+                !completedFilenames.isSuperset(
+                    of: allSourceFilenames
+                )
+            {
+                pauseUpload(jobID: jobID)
+                return
+            }
+
             do {
                 try updateJob(jobID) { job in
-                    job.uploadProgress
-                        .currentFilename =
-                    preparedPhoto.sourceFilename
-                    
+                    job.uploadProgress.currentFilename =
+                        preparedPhoto.sourceFilename
+
+                    job.uploadProgress.currentStep =
+                        .proofUpload
+
+                    job.uploadProgress.errorMessage = nil
                     job.updatedAt = Date()
                 }
             } catch {
                 loadErrorMessage =
-                error.localizedDescription
-                
+                    error.localizedDescription
+
                 return
             }
-            
+
             let fileURL =
             ImageConversionService
                 .preparedPhotoURL(
@@ -789,7 +994,7 @@ final class UploadQueueStore: ObservableObject {
                     outputFilename:
                         preparedPhoto.outputFilename
                 )
-            
+
             do {
                 let outcome =
                 try await client
@@ -798,17 +1003,17 @@ final class UploadQueueStore: ObservableObject {
                         from: fileURL,
                         to: uploadingJob.eventID
                     )
-                
+
                 let isDuplicate: Bool
                 let photoID: String
                 let shouldUploadOriginalVariants: Bool
-                
+
                 switch outcome {
                 case let .uploaded(uploadedPhotoID):
                     isDuplicate = false
                     photoID = uploadedPhotoID
                     shouldUploadOriginalVariants = true
-                    
+
                 case let .duplicate(
                     existingPhotoID,
                     variant
@@ -816,33 +1021,24 @@ final class UploadQueueStore: ObservableObject {
                     isDuplicate = true
                     photoID = existingPhotoID
                     shouldUploadOriginalVariants =
-                    variant != "final"
+                        variant != "final"
                 }
-                
+
                 if shouldUploadOriginalVariants {
-                    do {
-                        try await uploadOriginalVariants(
-                            from: fileURL,
-                            photoID: photoID,
-                            jobID: jobID,
-                            using: client
-                        )
-                    } catch {
-                        throw UploadQueuePipelineError
-                            .originalOptimizationFailed(
-                                filename:
-                                    preparedPhoto
-                                        .sourceFilename,
-                                reason:
-                                    error.localizedDescription
-                            )
-                    }
+                    try await uploadOriginalVariants(
+                        from: fileURL,
+                        photoID: photoID,
+                        sourceFilename:
+                            preparedPhoto.sourceFilename,
+                        jobID: jobID,
+                        using: client
+                    )
                 }
-                
+
                 completedFilenames.insert(
                     preparedPhoto.sourceFilename
                 )
-                
+
                 try updateJob(jobID) { job in
                     job.uploadProgress
                         .completedSourceFilenames
@@ -850,7 +1046,7 @@ final class UploadQueueStore: ObservableObject {
                             preparedPhoto
                                 .sourceFilename
                         )
-                    
+
                     if isDuplicate {
                         job.uploadProgress
                             .duplicateSourceFilenames
@@ -859,30 +1055,31 @@ final class UploadQueueStore: ObservableObject {
                                     .sourceFilename
                             )
                     }
-                    
-                    job.uploadProgress
-                        .currentFilename = nil
-                    
-                    job.uploadProgress
-                        .errorMessage = nil
-                    
+
+                    job.uploadProgress.currentFilename = nil
+                    job.uploadProgress.currentStep = nil
+                    job.uploadProgress.errorMessage = nil
+                    job.uploadProgress.lastFailure = nil
                     job.updatedAt = Date()
                 }
             } catch {
-                let uploadError =
-                error.localizedDescription
-                
+                let failure = makeUploadFailure(
+                    error,
+                    sourceFilename:
+                        preparedPhoto.sourceFilename
+                )
+
                 do {
                     try updateJob(jobID) { job in
                         job.stage = .readyToUpload
-                        
-                        job.uploadProgress
-                            .currentFilename = nil
-                        
-                        job.uploadProgress
-                            .errorMessage =
-                        uploadError
-                        
+                        job.uploadProgress.currentFilename = nil
+                        job.uploadProgress.currentStep = nil
+                        job.uploadProgress.errorMessage =
+                            failure.message
+                        job.uploadProgress.lastFailure =
+                            failure
+                        job.uploadProgress.pauseRequested = false
+                        job.uploadProgress.pausedAt = nil
                         job.updatedAt = Date()
                     }
                 } catch {
@@ -893,26 +1090,77 @@ final class UploadQueueStore: ObservableObject {
                     \(error.localizedDescription)
                     """
                 }
-                
+
+                pauseRequestedJobIDs.remove(jobID)
+                return
+            }
+
+            if onlySourceFilename != nil {
+                break
+            }
+
+            if
+                pauseRequestedJobIDs.contains(jobID),
+                !completedFilenames.isSuperset(
+                    of: allSourceFilenames
+                )
+            {
+                pauseUpload(jobID: jobID)
                 return
             }
         }
-        
+
+        guard
+            let refreshedJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+
+        let allPhotosCompleted =
+        refreshedJob.uploadProgress
+            .completedSourceFilenames
+            .isSuperset(of: allSourceFilenames)
+
+        if !allPhotosCompleted {
+            pauseRequestedJobIDs.remove(jobID)
+
+            do {
+                try updateJob(jobID) { job in
+                    job.stage = .readyToUpload
+                    job.uploadProgress.currentFilename = nil
+                    job.uploadProgress.currentStep = nil
+                    job.uploadProgress.errorMessage = nil
+                    job.uploadProgress.pauseRequested = false
+                    job.uploadProgress.pausedAt = nil
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                """
+                The photo retry finished, but the queue could not be \
+                updated: \(error.localizedDescription)
+                """
+            }
+
+            return
+        }
+
         let completedAt = Date()
-        
+
         do {
             try updateJob(jobID) { job in
                 job.stage = .completed
-                
-                job.uploadProgress
-                    .currentFilename = nil
-                
-                job.uploadProgress
-                    .completedAt = completedAt
-                
-                job.uploadProgress
-                    .errorMessage = nil
-                
+                job.uploadProgress.currentFilename = nil
+                job.uploadProgress.currentStep = nil
+                job.uploadProgress.completedAt = completedAt
+                job.uploadProgress.errorMessage = nil
+                job.uploadProgress.lastFailure = nil
+                job.uploadProgress.pauseRequested = false
+                job.uploadProgress.pausedAt = nil
                 job.updatedAt = completedAt
             }
         } catch {
@@ -922,19 +1170,22 @@ final class UploadQueueStore: ObservableObject {
             could not be saved: \
             \(error.localizedDescription)
             """
-            
+
             return
         }
-        
+
+        pauseRequestedJobIDs.remove(jobID)
+
         try? ImageConversionService
             .removePreparedPhotos(
                 for: jobID
             )
     }
-    
+
     private func uploadOriginalVariants(
         from sourceURL: URL,
         photoID: String,
+        sourceFilename: String,
         jobID: UUID,
         using client: APIClient
     ) async throws {
@@ -948,35 +1199,263 @@ final class UploadQueueStore: ObservableObject {
                 UUID().uuidString,
                 isDirectory: true
             )
-        
+
         defer {
             try? FileManager.default.removeItem(
                 at: outputDirectoryURL
             )
         }
-        
-        let variants =
-        try await Task.detached(
-            priority: .utility
-        ) {
-            try autoreleasepool {
-                try ImageVariantService
-                    .createImageVariants(
-                        from: sourceURL,
-                        outputDirectoryURL:
-                            outputDirectoryURL
-                    )
+
+        do {
+            try updateJob(jobID) { job in
+                job.uploadProgress.currentStep =
+                    .variantGeneration
+                job.updatedAt = Date()
             }
+        } catch {
+            throw error
         }
-        .value
-        
-        _ = try await client.uploadImageVariants(
-            variants,
-            sourceKind: .original,
-            to: photoID
+
+        let variants: GeneratedFinalVariants
+
+        do {
+            variants = try await Task.detached(
+                priority: .utility
+            ) {
+                try autoreleasepool {
+                    try ImageVariantService
+                        .createImageVariants(
+                            from: sourceURL,
+                            outputDirectoryURL:
+                                outputDirectoryURL
+                        )
+                }
+            }
+            .value
+        } catch {
+            throw UploadQueuePipelineError
+                .variantGenerationFailed(
+                    filename: sourceFilename,
+                    reason:
+                        error.localizedDescription
+                )
+        }
+
+        try updateJob(jobID) { job in
+            job.uploadProgress.currentStep =
+                .variantUpload
+            job.updatedAt = Date()
+        }
+
+        do {
+            _ = try await client.uploadImageVariants(
+                variants,
+                sourceKind: .original,
+                to: photoID
+            )
+        } catch {
+            let friendlyError = friendlyUploadError(
+                error,
+                sourceFilename: sourceFilename
+            )
+
+            throw UploadQueuePipelineError
+                .variantUploadFailed(
+                    filename: sourceFilename,
+                    reason: friendlyError.message,
+                    isNetworkRelated:
+                        friendlyError.isNetworkRelated
+                )
+        }
+    }
+
+    private func pauseUpload(
+        jobID: UUID
+    ) {
+        pauseRequestedJobIDs.remove(jobID)
+
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .readyToUpload
+                job.uploadProgress.currentFilename = nil
+                job.uploadProgress.currentStep = nil
+                job.uploadProgress.errorMessage = nil
+                job.uploadProgress.pauseRequested = false
+                job.uploadProgress.pausedAt = Date()
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            Uploading paused, but the queue could not be saved: \
+            \(error.localizedDescription)
+            """
+        }
+    }
+
+    private func transitionUploadToReady(
+        jobID: UUID,
+        message: String
+    ) {
+        pauseRequestedJobIDs.remove(jobID)
+
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .readyToUpload
+                job.uploadProgress.currentFilename = nil
+                job.uploadProgress.currentStep = nil
+                job.uploadProgress.errorMessage = message
+                job.uploadProgress.pauseRequested = false
+                job.uploadProgress.pausedAt = nil
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            Uploading stopped, but the queue could not be saved: \
+            \(error.localizedDescription)
+            """
+        }
+    }
+
+    private func makeUploadFailure(
+        _ error: Error,
+        sourceFilename: String
+    ) -> UploadFailure {
+        let step: UploadOperationStep
+        let message: String
+        let isNetworkRelated: Bool
+
+        if let pipelineError =
+            error as? UploadQueuePipelineError
+        {
+            switch pipelineError {
+            case let .variantGenerationFailed(
+                _,
+                reason
+            ):
+                step = .variantGeneration
+                message = reason
+                isNetworkRelated = false
+
+            case let .variantUploadFailed(
+                _,
+                reason,
+                networkRelated
+            ):
+                step = .variantUpload
+                message = reason
+                isNetworkRelated = networkRelated
+            }
+        } else {
+            step = .proofUpload
+
+            let friendlyError = friendlyUploadError(
+                error,
+                sourceFilename: sourceFilename
+            )
+
+            message = friendlyError.message
+            isNetworkRelated =
+                friendlyError.isNetworkRelated
+        }
+
+        return UploadFailure(
+            sourceFilename: sourceFilename,
+            step: step,
+            message: message,
+            occurredAt: Date(),
+            isNetworkRelated: isNetworkRelated
         )
     }
-    
+
+    private func friendlyUploadError(
+        _ error: Error,
+        sourceFilename: String
+    ) -> (
+        message: String,
+        isNetworkRelated: Bool
+    ) {
+        let urlError: URLError?
+
+        if let directError = error as? URLError {
+            urlError = directError
+        } else {
+            let nsError = error as NSError
+
+            if
+                nsError.domain == NSURLErrorDomain,
+                let code = URLError.Code(
+                    rawValue: nsError.code
+                )
+            {
+                urlError = URLError(
+                    code
+                )
+            } else {
+                urlError = nil
+            }
+        }
+
+        guard let urlError else {
+            return (
+                error.localizedDescription,
+                false
+            )
+        }
+
+        switch urlError.code {
+        case .notConnectedToInternet:
+            return (
+                """
+                No internet connection. PickPic saved the progress for \
+                \(sourceFilename). Reconnect to Wi-Fi and retry.
+                """,
+                true
+            )
+
+        case .networkConnectionLost:
+            return (
+                """
+                The connection was lost while uploading \
+                \(sourceFilename). PickPic saved the completed photos; \
+                reconnect and retry this one.
+                """,
+                true
+            )
+
+        case .timedOut:
+            return (
+                """
+                Uploading \(sourceFilename) timed out. Check the \
+                connection and retry this photo.
+                """,
+                true
+            )
+
+        case .cannotConnectToHost,
+                .cannotFindHost,
+                .dnsLookupFailed:
+            return (
+                """
+                PickPic could not reach the server while uploading \
+                \(sourceFilename). Check the connection settings and \
+                network, then retry.
+                """,
+                true
+            )
+
+        default:
+            return (
+                """
+                A network error stopped \(sourceFilename): \
+                \(urlError.localizedDescription)
+                """,
+                true
+            )
+        }
+    }
+
     func runUploadPipeline(
         jobID: UUID,
         using configuration: APIConfigurationStore
@@ -1185,11 +1664,20 @@ final class UploadQueueStore: ObservableObject {
                         .currentFilename = nil
                     decodedJobs[index]
                         .uploadProgress
+                        .currentStep = nil
+                    decodedJobs[index]
+                        .uploadProgress
                         .errorMessage =
                         """
                         Uploading was interrupted. \
                         Resume the remaining photos.
                         """
+                    decodedJobs[index]
+                        .uploadProgress
+                        .pauseRequested = false
+                    decodedJobs[index]
+                        .uploadProgress
+                        .pausedAt = nil
                     decodedJobs[index].updatedAt = Date()
                     changedRecoveredState = true
                     interruptedJobCount += 1
@@ -1226,6 +1714,12 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .currentFilename = nil
+                    decodedJobs[index]
+                        .uploadProgress
+                        .currentStep = nil
+                    decodedJobs[index]
+                        .uploadProgress
+                        .pauseRequested = false
                     decodedJobs[index].updatedAt = Date()
                     changedRecoveredState = true
                     unavailablePreparedBatchCount += 1
@@ -1351,35 +1845,39 @@ final class UploadQueueStore: ObservableObject {
             .contentsOfDirectory(
                 at: folderURL,
                 includingPropertiesForKeys: [
-                    .isRegularFileKey
+                    .isRegularFileKey,
+                    .fileSizeKey
                 ],
                 options: [.skipsHiddenFiles]
             )
 
-        var availableFilenames: Set<String> = []
+        var availableFiles: [String: Int64] = [:]
 
         for fileURL in fileURLs {
             let fileValues = try fileURL
                 .resourceValues(
-                    forKeys: [.isRegularFileKey]
+                    forKeys: [
+                        .isRegularFileKey,
+                        .fileSizeKey
+                    ]
                 )
 
             guard fileValues.isRegularFile == true else {
                 continue
             }
 
-            availableFilenames.insert(
+            availableFiles[
                 fileURL.lastPathComponent
                     .lowercased()
-            )
+            ] = Int64(fileValues.fileSize ?? 0)
         }
 
         let missingFilenames = job.photos
             .map(\.filename)
             .filter { filename in
-                !availableFilenames.contains(
+                availableFiles[
                     filename.lowercased()
-                )
+                ] == nil
             }
             .sorted {
                 $0.localizedStandardCompare($1)
@@ -1390,6 +1888,35 @@ final class UploadQueueStore: ObservableObject {
             throw UploadFolderRelinkError
                 .missingSourceFiles(
                     missingFilenames
+                )
+        }
+
+        let mismatchedFilenames = job.photos
+            .filter { photo in
+                guard
+                    photo.byteSize > 0,
+                    let availableByteSize =
+                        availableFiles[
+                            photo.filename.lowercased()
+                        ],
+                    availableByteSize > 0
+                else {
+                    return false
+                }
+
+                return availableByteSize
+                    != photo.byteSize
+            }
+            .map(\.filename)
+            .sorted {
+                $0.localizedStandardCompare($1)
+                    == .orderedAscending
+            }
+
+        guard mismatchedFilenames.isEmpty else {
+            throw UploadFolderRelinkError
+                .mismatchedSourceFiles(
+                    mismatchedFilenames
                 )
         }
 
