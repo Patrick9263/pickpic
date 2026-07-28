@@ -63,11 +63,106 @@ final class FinalUploadsViewModel:
     
     @Published private(set)
     var errorMessage: String?
+
+    @Published private(set)
+    var operationStartedAt: Date?
+
+    @Published private(set)
+    var operationCompletedAt: Date?
+
+    @Published private(set)
+    var operationTotalCount = 0
+
+    @Published private(set)
+    var operationTotalByteCount: Int64 = 0
+
+    @Published private(set)
+    var processedByteCount: Int64 = 0
+
+    @Published private(set)
+    var processedCandidateCount = 0
+
+    @Published private(set)
+    var lastOperationDuration: TimeInterval?
+
+    @Published private(set)
+    var lastProcessedByteCount: Int64 = 0
+
+    @Published private(set)
+    var lastOperationWasVariantRepair = false
+
+    @Published private(set)
+    var lastOperationSucceeded = false
     
     var isBusy: Bool {
         isLoading
         || isUploading
         || isRepairingVariants
+    }
+
+    var completedOperationCount: Int {
+        processedCandidateCount
+    }
+
+    func operationElapsedDuration(
+        at date: Date
+    ) -> TimeInterval? {
+        guard let operationStartedAt else {
+            return nil
+        }
+
+        let endpoint =
+        operationCompletedAt
+        ?? date
+
+        return max(
+            endpoint.timeIntervalSince(
+                operationStartedAt
+            ),
+            0
+        )
+    }
+
+    func averageOperationBytesPerSecond(
+        at date: Date
+    ) -> Double? {
+        guard
+            processedByteCount > 0,
+            let elapsed =
+                operationElapsedDuration(
+                    at: date
+                ),
+            elapsed > 0.5
+        else {
+            return nil
+        }
+
+        return Double(processedByteCount)
+            / elapsed
+    }
+
+    func estimatedOperationRemainingDuration(
+        at date: Date
+    ) -> TimeInterval? {
+        let remainingBytes = max(
+            operationTotalByteCount
+                - processedByteCount,
+            0
+        )
+
+        guard
+            remainingBytes > 0,
+            let bytesPerSecond =
+                averageOperationBytesPerSecond(
+                    at: date
+                ),
+            bytesPerSecond > 0
+        else {
+            return nil
+        }
+
+        return Double(remainingBytes)
+            / bytesPerSecond
     }
     
     func load(
@@ -118,6 +213,9 @@ final class FinalUploadsViewModel:
         lastOptimizedCount = nil
         variantUploadFailures = []
         errorMessage = nil
+        beginOperation(
+            isVariantRepair: false
+        )
         
         do {
             let client =
@@ -137,6 +235,15 @@ final class FinalUploadsViewModel:
             else {
                 throw FinalUploadsViewModelError
                     .noReadyFinals
+            }
+
+            operationTotalCount =
+            freshScan.candidates.count
+
+            operationTotalByteCount =
+            freshScan.candidates.reduce(0) {
+                result, candidate in
+                result + candidate.byteSize
             }
             
             for candidate in freshScan.candidates {
@@ -186,6 +293,10 @@ final class FinalUploadsViewModel:
                             candidate.editedFilename
                         )
                     }
+
+                    processedByteCount +=
+                    candidate.byteSize
+                    processedCandidateCount += 1
                 } catch {
                     try? FinalUploadFileService
                         .removeStagedFile(
@@ -217,7 +328,10 @@ final class FinalUploadsViewModel:
                 reference: reference,
                 using: configuration
             )
-            
+
+            finishOperation(
+                succeeded: true
+            )
             isUploading = false
         } catch {
             let uploadError =
@@ -231,6 +345,9 @@ final class FinalUploadsViewModel:
             
             currentFilename = nil
             currentStep = nil
+            finishOperation(
+                succeeded: false
+            )
             isUploading = false
             
             if let refreshedScan =
@@ -264,6 +381,9 @@ final class FinalUploadsViewModel:
         lastOptimizedCount = nil
         variantUploadFailures = []
         errorMessage = nil
+        beginOperation(
+            isVariantRepair: true
+        )
         
         do {
             let client =
@@ -285,6 +405,15 @@ final class FinalUploadsViewModel:
             guard !repairCandidates.isEmpty else {
                 throw FinalUploadsViewModelError
                     .noVariantRepairs
+            }
+
+            operationTotalCount =
+            repairCandidates.count
+
+            operationTotalByteCount =
+            repairCandidates.reduce(0) {
+                result, candidate in
+                result + candidate.byteSize
             }
             
             for candidate in repairCandidates {
@@ -317,6 +446,9 @@ final class FinalUploadsViewModel:
                         )
                     
                     optimizedCount += 1
+                    processedByteCount +=
+                    candidate.byteSize
+                    processedCandidateCount += 1
                 } catch {
                     try? FinalUploadFileService
                         .removeStagedFile(
@@ -345,7 +477,10 @@ final class FinalUploadsViewModel:
                 reference: reference,
                 using: configuration
             )
-            
+
+            finishOperation(
+                succeeded: true
+            )
             isRepairingVariants = false
         } catch {
             let repairError =
@@ -356,6 +491,9 @@ final class FinalUploadsViewModel:
             
             currentFilename = nil
             currentStep = nil
+            finishOperation(
+                succeeded: false
+            )
             isRepairingVariants = false
             
             if let refreshedScan =
@@ -377,6 +515,42 @@ final class FinalUploadsViewModel:
     ) {
         errorMessage =
         error.localizedDescription
+    }
+
+    private func beginOperation(
+        isVariantRepair: Bool
+    ) {
+        lastOperationWasVariantRepair =
+        isVariantRepair
+        operationStartedAt = Date()
+        operationCompletedAt = nil
+        operationTotalCount = 0
+        operationTotalByteCount = 0
+        processedByteCount = 0
+        processedCandidateCount = 0
+        lastOperationDuration = nil
+        lastProcessedByteCount = 0
+        lastOperationSucceeded = false
+    }
+
+    private func finishOperation(
+        succeeded: Bool
+    ) {
+        let completedAt = Date()
+        operationCompletedAt = completedAt
+
+        if let operationStartedAt {
+            lastOperationDuration = max(
+                completedAt.timeIntervalSince(
+                    operationStartedAt
+                ),
+                0
+            )
+        }
+
+        lastProcessedByteCount =
+        processedByteCount
+        lastOperationSucceeded = succeeded
     }
     
     private func fetchScan(

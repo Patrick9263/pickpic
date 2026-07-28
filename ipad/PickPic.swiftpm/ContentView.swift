@@ -3,6 +3,9 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var configuration:
     APIConfigurationStore
+
+    @EnvironmentObject private var feedback:
+    AppFeedbackStore
     
     @StateObject private var viewModel =
     EventListViewModel()
@@ -88,6 +91,90 @@ struct ContentView: View {
             await viewModel.load(
                 using: configuration
             )
+        }
+        .overlay(alignment: .top) {
+            if let message = feedback.message {
+                AppFeedbackBanner(
+                    message: message,
+                    onDismiss: {
+                        feedback.dismiss()
+                    }
+                )
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .transition(
+                    .move(edge: .top)
+                        .combined(with: .opacity)
+                )
+                .zIndex(10)
+            }
+        }
+        .animation(
+            .snappy,
+            value: feedback.message?.id
+        )
+    }
+}
+
+private struct AppFeedbackBanner: View {
+    let message: AppFeedbackMessage
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(
+                systemName:
+                    message.systemImage
+            )
+            .font(.title3)
+            .foregroundStyle(.green)
+
+            VStack(
+                alignment: .leading,
+                spacing: 2
+            ) {
+                Text(message.title)
+                    .font(.headline)
+
+                Text(message.detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+
+            Spacer(minLength: 8)
+
+            Button {
+                onDismiss()
+            } label: {
+                Image(
+                    systemName: "xmark"
+                )
+                .font(.caption.weight(.bold))
+                .padding(8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(14)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(
+                cornerRadius: 16,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: 16,
+                style: .continuous
+            )
+            .stroke(.quaternary)
+        }
+        .shadow(radius: 8, y: 4)
+        .onTapGesture {
+            onDismiss()
         }
     }
 }

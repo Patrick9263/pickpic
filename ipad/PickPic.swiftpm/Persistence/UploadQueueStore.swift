@@ -648,6 +648,15 @@ final class UploadQueueStore: ObservableObject {
         currentJob.uploadProgress
             .duplicateSourceFilenames
             .intersection(sourceFilenames)
+
+        let preservedOptimizedFilenames =
+        currentJob.uploadProgress
+            .optimizedSourceFilenames
+            .intersection(sourceFilenames)
+
+        let preservedActiveUploadDuration =
+        currentJob.uploadProgress
+            .activeUploadDuration
         
         do {
             try updateJob(jobID) { job in
@@ -668,7 +677,11 @@ final class UploadQueueStore: ObservableObject {
                         currentJob.uploadProgress
                             .startedAt,
                     completedAt: nil,
-                    errorMessage: nil
+                    errorMessage: nil,
+                    optimizedSourceFilenames:
+                        preservedOptimizedFilenames,
+                    activeUploadDuration:
+                        preservedActiveUploadDuration
                 )
                 job.updatedAt = startedAt
             }
@@ -893,6 +906,8 @@ final class UploadQueueStore: ObservableObject {
         currentJob.uploadProgress.startedAt
         ?? Date()
 
+        let runStartedAt = Date()
+
         pauseRequestedJobIDs.remove(jobID)
 
         do {
@@ -909,8 +924,10 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.lastFailure = nil
                 job.uploadProgress.pauseRequested = false
                 job.uploadProgress.pausedAt = nil
+                job.uploadProgress.currentRunStartedAt =
+                    runStartedAt
 
-                job.updatedAt = Date()
+                job.updatedAt = runStartedAt
             }
         } catch {
             loadErrorMessage =
@@ -1056,6 +1073,15 @@ final class UploadQueueStore: ObservableObject {
                             )
                     }
 
+                    if shouldUploadOriginalVariants {
+                        job.uploadProgress
+                            .optimizedSourceFilenames
+                            .insert(
+                                preparedPhoto
+                                    .sourceFilename
+                            )
+                    }
+
                     job.uploadProgress.currentFilename = nil
                     job.uploadProgress.currentStep = nil
                     job.uploadProgress.errorMessage = nil
@@ -1080,7 +1106,13 @@ final class UploadQueueStore: ObservableObject {
                             failure
                         job.uploadProgress.pauseRequested = false
                         job.uploadProgress.pausedAt = nil
-                        job.updatedAt = Date()
+
+                        let stoppedAt = Date()
+                        stopActiveUploadTimer(
+                            &job.uploadProgress,
+                            at: stoppedAt
+                        )
+                        job.updatedAt = stoppedAt
                     }
                 } catch {
                     loadErrorMessage =
@@ -1136,7 +1168,13 @@ final class UploadQueueStore: ObservableObject {
                     job.uploadProgress.errorMessage = nil
                     job.uploadProgress.pauseRequested = false
                     job.uploadProgress.pausedAt = nil
-                    job.updatedAt = Date()
+
+                    let stoppedAt = Date()
+                    stopActiveUploadTimer(
+                        &job.uploadProgress,
+                        at: stoppedAt
+                    )
+                    job.updatedAt = stoppedAt
                 }
             } catch {
                 loadErrorMessage =
@@ -1161,6 +1199,10 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.lastFailure = nil
                 job.uploadProgress.pauseRequested = false
                 job.uploadProgress.pausedAt = nil
+                stopActiveUploadTimer(
+                    &job.uploadProgress,
+                    at: completedAt
+                )
                 job.updatedAt = completedAt
             }
         } catch {
@@ -1281,8 +1323,14 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.currentStep = nil
                 job.uploadProgress.errorMessage = nil
                 job.uploadProgress.pauseRequested = false
-                job.uploadProgress.pausedAt = Date()
-                job.updatedAt = Date()
+
+                let pausedAt = Date()
+                job.uploadProgress.pausedAt = pausedAt
+                stopActiveUploadTimer(
+                    &job.uploadProgress,
+                    at: pausedAt
+                )
+                job.updatedAt = pausedAt
             }
         } catch {
             loadErrorMessage =
@@ -1307,7 +1355,13 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.errorMessage = message
                 job.uploadProgress.pauseRequested = false
                 job.uploadProgress.pausedAt = nil
-                job.updatedAt = Date()
+
+                let stoppedAt = Date()
+                stopActiveUploadTimer(
+                    &job.uploadProgress,
+                    at: stoppedAt
+                )
+                job.updatedAt = stoppedAt
             }
         } catch {
             loadErrorMessage =
@@ -1316,6 +1370,26 @@ final class UploadQueueStore: ObservableObject {
             \(error.localizedDescription)
             """
         }
+    }
+
+    private func stopActiveUploadTimer(
+        _ progress: inout UploadProgress,
+        at stoppedAt: Date
+    ) {
+        guard let runStartedAt =
+            progress.currentRunStartedAt
+        else {
+            return
+        }
+
+        progress.activeUploadDuration += max(
+            stoppedAt.timeIntervalSince(
+                runStartedAt
+            ),
+            0
+        )
+
+        progress.currentRunStartedAt = nil
     }
 
     private func makeUploadFailure(
@@ -1673,6 +1747,9 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .pausedAt = nil
+                    decodedJobs[index]
+                        .uploadProgress
+                        .currentRunStartedAt = nil
                     decodedJobs[index].updatedAt = Date()
                     changedRecoveredState = true
                     interruptedJobCount += 1
@@ -1715,6 +1792,9 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .pauseRequested = false
+                    decodedJobs[index]
+                        .uploadProgress
+                        .currentRunStartedAt = nil
                     decodedJobs[index].updatedAt = Date()
                     changedRecoveredState = true
                     unavailablePreparedBatchCount += 1

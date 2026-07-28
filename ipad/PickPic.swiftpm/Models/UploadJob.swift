@@ -75,6 +75,99 @@ struct UploadJob:
             return count
         }
     }
+
+    var newlyUploadedPhotoCount: Int {
+        max(
+            uploadedPhotoCount
+                - duplicatePhotoCount,
+            0
+        )
+    }
+
+    var optimizedPhotoCount: Int {
+        preparedPhotos.reduce(0) { count, photo in
+            if uploadProgress
+                .optimizedSourceFilenames
+                .contains(photo.sourceFilename) {
+                return count + 1
+            }
+
+            return count
+        }
+    }
+
+    var failedPhotoCount: Int {
+        uploadProgress.lastFailure == nil
+        ? 0
+        : 1
+    }
+
+    var completedPreparedByteCount: Int64 {
+        preparedPhotos.reduce(0) { result, photo in
+            guard uploadProgress
+                .completedSourceFilenames
+                .contains(photo.sourceFilename)
+            else {
+                return result
+            }
+
+            return result + photo.byteSize
+        }
+    }
+
+    var remainingPreparedByteCount: Int64 {
+        max(
+            preparedByteCount
+                - completedPreparedByteCount,
+            0
+        )
+    }
+
+    func uploadElapsedDuration(
+        at date: Date
+    ) -> TimeInterval {
+        uploadProgress.activeDuration(
+            at: date
+        )
+    }
+
+    func averageUploadBytesPerSecond(
+        at date: Date
+    ) -> Double? {
+        let elapsed = uploadElapsedDuration(
+            at: date
+        )
+
+        guard
+            elapsed > 0.5,
+            completedPreparedByteCount > 0
+        else {
+            return nil
+        }
+
+        return Double(
+            completedPreparedByteCount
+        ) / elapsed
+    }
+
+    func estimatedUploadRemainingDuration(
+        at date: Date
+    ) -> TimeInterval? {
+        guard
+            remainingPreparedByteCount > 0,
+            let bytesPerSecond =
+                averageUploadBytesPerSecond(
+                    at: date
+                ),
+            bytesPerSecond > 0
+        else {
+            return nil
+        }
+
+        return Double(
+            remainingPreparedByteCount
+        ) / bytesPerSecond
+    }
     
     init(
         id: UUID,

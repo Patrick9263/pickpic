@@ -9,6 +9,9 @@ struct LikedPhotosView: View {
     
     @EnvironmentObject private var eventFolders:
     EventFolderStore
+
+    @EnvironmentObject private var feedback:
+    AppFeedbackStore
     
     @StateObject private var viewModel =
     LikedPhotosViewModel()
@@ -93,11 +96,9 @@ struct LikedPhotosView: View {
             {
                 Button {
                     Task {
-                        await viewModel.sync(
-                            eventID: event.id,
+                        await syncRequestedPhotos(
                             reference:
-                                folderReference,
-                            using: configuration
+                                folderReference
                         )
                     }
                 } label: {
@@ -366,12 +367,50 @@ struct LikedPhotosView: View {
         }
     }
 
-    private func refreshAndSync() async {
-        await viewModel.refreshAndSync(
+    private func syncRequestedPhotos(
+        reference: EventFolderReference
+    ) async {
+        let previousSyncDate =
+        viewModel.syncResult?.syncedAt
+
+        await viewModel.sync(
             eventID: event.id,
-            reference: folderReference,
+            reference: reference,
             using: configuration
         )
+
+        guard
+            let result = viewModel.syncResult,
+            result.syncedAt != previousSyncDate,
+            result.copiedPhotoCount > 0
+        else {
+            return
+        }
+
+        let fileDescription =
+        result.copiedPhotoCount == 1
+        ? "RAW file"
+        : "RAW files"
+
+        feedback.show(
+            title: "Liked photos synced",
+            detail:
+                "\(event.title): copied \(result.copiedPhotoCount) \(fileDescription) into To Edit.",
+            systemImage: "heart.circle.fill"
+        )
+    }
+
+    private func refreshAndSync() async {
+        if let folderReference {
+            await syncRequestedPhotos(
+                reference: folderReference
+            )
+        } else {
+            await viewModel.load(
+                eventID: event.id,
+                using: configuration
+            )
+        }
     }
 }
 
