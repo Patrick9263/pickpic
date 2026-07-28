@@ -24,6 +24,44 @@ private enum UploadQueuePipelineError:
     }
 }
 
+private struct RelinkedUploadFolder: Sendable {
+    let name: String
+    let bookmarkData: Data
+}
+
+private enum UploadFolderRelinkError: LocalizedError, Sendable {
+    case jobNotFound
+    case operationInProgress
+    case folderAccessDenied
+    case selectedItemIsNotFolder
+    case missingSourceFiles([String])
+
+    var errorDescription: String? {
+        switch self {
+        case .jobNotFound:
+            return "The saved upload could not be found."
+
+        case .operationInProgress:
+            return "Wait for the current upload operation to finish before changing its folder."
+
+        case .folderAccessDenied:
+            return "PickPic could not access the selected folder."
+
+        case .selectedItemIsNotFolder:
+            return "The selected item is not a folder."
+
+        case let .missingSourceFiles(filenames):
+            let preview = filenames.prefix(5).joined(separator: ", ")
+            let remainingCount = max(filenames.count - 5, 0)
+            let suffix = remainingCount > 0
+                ? " and \(remainingCount) more"
+                : ""
+
+            return "The selected folder does not contain the original source files needed by this upload: \(preview)\(suffix)."
+        }
+    }
+}
+
 @MainActor
 final class UploadQueueStore: ObservableObject {
     @Published private(set)
@@ -177,7 +215,63 @@ final class UploadQueueStore: ObservableObject {
                 )
         }
     }
-    
+
+    func relinkFolder(
+        for jobID: UUID,
+        to folderURL: URL
+    ) async throws -> UploadJob {
+        guard let currentJob = jobs.first(
+            where: { job in
+                job.id == jobID
+            }
+        ) else {
+            throw UploadFolderRelinkError.jobNotFound
+        }
+
+        switch currentJob.stage {
+        case .preparing,
+                .converting,
+                .uploading:
+            throw UploadFolderRelinkError
+                .operationInProgress
+
+        case .queued,
+                .prepared,
+                .readyToUpload,
+                .completed,
+                .failed:
+            break
+        }
+
+        let relinkedFolder = try await Task.detached(
+            priority: .userInitiated
+        ) {
+            try Self.validateRelinkedFolder(
+                folderURL,
+                for: currentJob
+            )
+        }
+        .value
+
+        try updateJob(jobID) { job in
+            job.folderName = relinkedFolder.name
+            job.folderBookmarkData =
+                relinkedFolder.bookmarkData
+            job.errorMessage = nil
+            job.updatedAt = Date()
+        }
+
+        guard let updatedJob = jobs.first(
+            where: { job in
+                job.id == jobID
+            }
+        ) else {
+            throw UploadFolderRelinkError.jobNotFound
+        }
+
+        return updatedJob
+    }
+
     func prepare(
         jobID: UUID
     ) async {
@@ -1223,7 +1317,97 @@ final class UploadQueueStore: ObservableObject {
             options: .atomic
         )
     }
-    
+
+    nonisolated private static func validateRelinkedFolder(
+        _ folderURL: URL,
+        for job: UploadJob
+    ) throws -> RelinkedUploadFolder {
+        let accessed = folderURL
+            .startAccessingSecurityScopedResource()
+
+        guard accessed else {
+            throw UploadFolderRelinkError
+                .folderAccessDenied
+        }
+
+        defer {
+            folderURL
+                .stopAccessingSecurityScopedResource()
+        }
+
+        let values = try folderURL.resourceValues(
+            forKeys: [
+                .isDirectoryKey,
+                .nameKey
+            ]
+        )
+
+        guard values.isDirectory == true else {
+            throw UploadFolderRelinkError
+                .selectedItemIsNotFolder
+        }
+
+        let fileURLs = try FileManager.default
+            .contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: [
+                    .isRegularFileKey
+                ],
+                options: [.skipsHiddenFiles]
+            )
+
+        var availableFilenames: Set<String> = []
+
+        for fileURL in fileURLs {
+            let fileValues = try fileURL
+                .resourceValues(
+                    forKeys: [.isRegularFileKey]
+                )
+
+            guard fileValues.isRegularFile == true else {
+                continue
+            }
+
+            availableFilenames.insert(
+                fileURL.lastPathComponent
+                    .lowercased()
+            )
+        }
+
+        let missingFilenames = job.photos
+            .map(\.filename)
+            .filter { filename in
+                !availableFilenames.contains(
+                    filename.lowercased()
+                )
+            }
+            .sorted {
+                $0.localizedStandardCompare($1)
+                    == .orderedAscending
+            }
+
+        guard missingFilenames.isEmpty else {
+            throw UploadFolderRelinkError
+                .missingSourceFiles(
+                    missingFilenames
+                )
+        }
+
+        let bookmarkData = try folderURL
+            .bookmarkData(
+                options: .minimalBookmark,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil
+            )
+
+        return RelinkedUploadFolder(
+            name:
+                values.name
+                ?? folderURL.lastPathComponent,
+            bookmarkData: bookmarkData
+        )
+    }
+
     private static func makeStorageURL()
     -> URL
     {

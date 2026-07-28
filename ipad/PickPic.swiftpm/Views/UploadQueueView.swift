@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct UploadQueueView: View {
     let event: PickPicEvent
@@ -8,9 +9,17 @@ struct UploadQueueView: View {
     
     @EnvironmentObject private var configuration:
     APIConfigurationStore
+
+    @EnvironmentObject private var eventFolders:
+    EventFolderStore
     
     @State private var showingDeleteError = false
     @State private var deleteErrorMessage = ""
+
+    @State private var relinkingJobID: UUID?
+    @State private var showingFolderRelinker = false
+    @State private var showingRelinkError = false
+    @State private var relinkErrorMessage = ""
     
     private var eventJobs: [UploadJob] {
         uploadQueue.jobs(for: event.id)
@@ -120,6 +129,12 @@ struct UploadQueueView: View {
                                     jobID: job.id
                                 )
                         }
+                    },
+                    isRelinkingFolder:
+                        relinkingJobID == job.id,
+                    onRelinkFolder: {
+                        relinkingJobID = job.id
+                        showingFolderRelinker = true
                     }
                 )
             }
@@ -132,6 +147,12 @@ struct UploadQueueView: View {
                 emptyState
             }
         }
+        .fileImporter(
+            isPresented: $showingFolderRelinker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            handleFolderRelink(result)
+        }
         .alert(
             "Unable to Remove Upload",
             isPresented: $showingDeleteError
@@ -139,6 +160,14 @@ struct UploadQueueView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(deleteErrorMessage)
+        }
+        .alert(
+            "Unable to Relink Folder",
+            isPresented: $showingRelinkError
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(relinkErrorMessage)
         }
     }
     
@@ -168,7 +197,55 @@ struct UploadQueueView: View {
             )
         }
     }
-    
+
+    private func handleFolderRelink(
+        _ result: Result<URL, Error>
+    ) {
+        guard let relinkingJobID else {
+            return
+        }
+
+        switch result {
+        case let .success(folderURL):
+            Task {
+                do {
+                    let updatedJob = try await uploadQueue
+                        .relinkFolder(
+                            for: relinkingJobID,
+                            to: folderURL
+                        )
+
+                    try eventFolders.save(
+                        job: updatedJob
+                    )
+
+                    self.relinkingJobID = nil
+                } catch {
+                    relinkErrorMessage =
+                        error.localizedDescription
+                    showingRelinkError = true
+                    self.relinkingJobID = nil
+                }
+            }
+
+        case let .failure(error):
+            self.relinkingJobID = nil
+
+            if error is CancellationError {
+                return
+            }
+
+            if let cocoaError = error as? CocoaError,
+               cocoaError.code == .userCancelled {
+                return
+            }
+
+            relinkErrorMessage =
+                error.localizedDescription
+            showingRelinkError = true
+        }
+    }
+
     private func deleteJobs(
         at offsets: IndexSet
     ) {
@@ -218,6 +295,8 @@ private struct UploadJobRow: View {
     let onContinue: () -> Void
     let onTestFirstPhoto: () -> Void
     let onConvertAll: () -> Void
+    let isRelinkingFolder: Bool
+    let onRelinkFolder: () -> Void
     
     @State private var folderIsAccessible:
     Bool?
@@ -694,19 +773,57 @@ private struct UploadJobRow: View {
             .foregroundStyle(.secondary)
             
         case .some(true):
-            Label(
-                "Folder available",
-                systemImage: "checkmark.circle"
-            )
-            .foregroundStyle(.secondary)
+            HStack {
+                Label(
+                    "Folder available",
+                    systemImage:
+                        "checkmark.circle"
+                )
+                .foregroundStyle(.secondary)
+
+                Spacer()
+
+                if isRelinkingFolder {
+                    ProgressView()
+                } else {
+                    Button("Change") {
+                        onRelinkFolder()
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
             
         case .some(false):
-            Label(
-                "Folder needs to be selected again",
-                systemImage:
-                    "exclamationmark.triangle"
-            )
-            .foregroundStyle(.orange)
+            VStack(
+                alignment: .leading,
+                spacing: 8
+            ) {
+                Label(
+                    "Folder needs to be selected again",
+                    systemImage:
+                        "exclamationmark.triangle"
+                )
+                .foregroundStyle(.orange)
+
+                Button {
+                    onRelinkFolder()
+                } label: {
+                    if isRelinkingFolder {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Relinking…")
+                        }
+                    } else {
+                        Label(
+                            "Relink Event Folder",
+                            systemImage:
+                                "folder.badge.plus"
+                        )
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isRelinkingFolder)
+            }
         }
     }
 }
