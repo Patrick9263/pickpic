@@ -543,16 +543,16 @@ struct FinalUploadsView: View {
         ) {
             if viewModel.lastOperationWasVariantRepair {
                 Label(
-                    viewModel.errorMessage == nil
+                    viewModel.lastOperationSucceeded
                     ? "Optimization complete"
                     : "Optimization stopped",
                     systemImage:
-                        viewModel.errorMessage == nil
+                        viewModel.lastOperationSucceeded
                         ? "checkmark.circle.fill"
                         : "exclamationmark.triangle.fill"
                 )
                 .foregroundStyle(
-                    viewModel.errorMessage == nil
+                    viewModel.lastOperationSucceeded
                     ? Color.green
                     : Color.orange
                 )
@@ -564,16 +564,16 @@ struct FinalUploadsView: View {
                 )
             } else {
                 Label(
-                    viewModel.errorMessage == nil
+                    viewModel.lastOperationSucceeded
                     ? "Final upload complete"
                     : "Final upload stopped",
                     systemImage:
-                        viewModel.errorMessage == nil
+                        viewModel.lastOperationSucceeded
                         ? "checkmark.circle.fill"
                         : "exclamationmark.triangle.fill"
                 )
                 .foregroundStyle(
-                    viewModel.errorMessage == nil
+                    viewModel.lastOperationSucceeded
                     ? Color.green
                     : Color.orange
                 )
@@ -600,7 +600,7 @@ struct FinalUploadsView: View {
             LabeledContent(
                 "Failed",
                 value:
-                    viewModel.errorMessage == nil
+                    viewModel.lastOperationSucceeded
                     ? "0"
                     : "1"
             )
@@ -686,8 +686,10 @@ struct FinalUploadsView: View {
             using: configuration
         )
 
-        guard let uploadedCount =
-            viewModel.lastUploadedCount,
+        guard
+            viewModel.lastOperationSucceeded,
+            let uploadedCount =
+                viewModel.lastUploadedCount,
             uploadedCount > 0
         else {
             return
@@ -722,8 +724,10 @@ struct FinalUploadsView: View {
             using: configuration
         )
 
-        guard let optimizedCount =
-            viewModel.lastOptimizedCount,
+        guard
+            viewModel.lastOperationSucceeded,
+            let optimizedCount =
+                viewModel.lastOptimizedCount,
             optimizedCount > 0
         else {
             return

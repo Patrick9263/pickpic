@@ -80,6 +80,9 @@ final class FinalUploadsViewModel:
     var processedByteCount: Int64 = 0
 
     @Published private(set)
+    var processedCandidateCount = 0
+
+    @Published private(set)
     var lastOperationDuration: TimeInterval?
 
     @Published private(set)
@@ -87,6 +90,9 @@ final class FinalUploadsViewModel:
 
     @Published private(set)
     var lastOperationWasVariantRepair = false
+
+    @Published private(set)
+    var lastOperationSucceeded = false
     
     var isBusy: Bool {
         isLoading
@@ -95,9 +101,7 @@ final class FinalUploadsViewModel:
     }
 
     var completedOperationCount: Int {
-        isRepairingVariants
-        ? optimizedCount
-        : uploadedCount
+        processedCandidateCount
     }
 
     func operationElapsedDuration(
@@ -292,6 +296,7 @@ final class FinalUploadsViewModel:
 
                     processedByteCount +=
                     candidate.byteSize
+                    processedCandidateCount += 1
                 } catch {
                     try? FinalUploadFileService
                         .removeStagedFile(
@@ -317,14 +322,16 @@ final class FinalUploadsViewModel:
             
             currentFilename = nil
             currentStep = nil
-            finishOperation()
             
             scanResult = try await fetchScan(
                 eventID: eventID,
                 reference: reference,
                 using: configuration
             )
-            
+
+            finishOperation(
+                succeeded: true
+            )
             isUploading = false
         } catch {
             let uploadError =
@@ -338,7 +345,9 @@ final class FinalUploadsViewModel:
             
             currentFilename = nil
             currentStep = nil
-            finishOperation()
+            finishOperation(
+                succeeded: false
+            )
             isUploading = false
             
             if let refreshedScan =
@@ -439,6 +448,7 @@ final class FinalUploadsViewModel:
                     optimizedCount += 1
                     processedByteCount +=
                     candidate.byteSize
+                    processedCandidateCount += 1
                 } catch {
                     try? FinalUploadFileService
                         .removeStagedFile(
@@ -461,14 +471,16 @@ final class FinalUploadsViewModel:
             
             currentFilename = nil
             currentStep = nil
-            finishOperation()
             
             scanResult = try await fetchScan(
                 eventID: eventID,
                 reference: reference,
                 using: configuration
             )
-            
+
+            finishOperation(
+                succeeded: true
+            )
             isRepairingVariants = false
         } catch {
             let repairError =
@@ -479,7 +491,9 @@ final class FinalUploadsViewModel:
             
             currentFilename = nil
             currentStep = nil
-            finishOperation()
+            finishOperation(
+                succeeded: false
+            )
             isRepairingVariants = false
             
             if let refreshedScan =
@@ -513,11 +527,15 @@ final class FinalUploadsViewModel:
         operationTotalCount = 0
         operationTotalByteCount = 0
         processedByteCount = 0
+        processedCandidateCount = 0
         lastOperationDuration = nil
         lastProcessedByteCount = 0
+        lastOperationSucceeded = false
     }
 
-    private func finishOperation() {
+    private func finishOperation(
+        succeeded: Bool
+    ) {
         let completedAt = Date()
         operationCompletedAt = completedAt
 
@@ -532,6 +550,7 @@ final class FinalUploadsViewModel:
 
         lastProcessedByteCount =
         processedByteCount
+        lastOperationSucceeded = succeeded
     }
     
     private func fetchScan(
