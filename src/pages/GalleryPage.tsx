@@ -291,8 +291,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [retainedLikedPhotoId, setRetainedLikedPhotoId] =
-    useState<string | null>(null);
+  const [retainedLikedPhotoId, setRetainedLikedPhotoId] = useState<
+    string | null
+  >(null);
   const lastVisiblePhotoIndexRef = useRef(0);
   const filteredPhotos = useMemo(() => {
     if (!gallery) {
