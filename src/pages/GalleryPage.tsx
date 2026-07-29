@@ -1,3 +1,4 @@
+import { downloadZip } from "client-zip";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type {
   EventStatus,
@@ -41,9 +42,72 @@ type GalleryGrouping = "all" | "day" | "location";
 
 type GalleryFilter = "all" | "liked" | "finals";
 
-const MAX_EXPLICIT_DOWNLOAD_PHOTOS = 100;
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
+
+function sanitizeDownloadFilename(filename: string): string {
+  const sanitized = Array.from(filename)
+    .filter((character) => {
+      const characterCode = character.charCodeAt(0);
+
+      return characterCode > 0x1f && characterCode !== 0x7f;
+    })
+    .join("")
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/[. ]+$/g, "")
+    .trim();
+
+  return sanitized || "photo.jpg";
+}
+
+function createUniqueDownloadNames(filenames: string[]): string[] {
+  const usedNames = new Set<string>();
+
+  return filenames.map((filename) => {
+    const sanitized = sanitizeDownloadFilename(filename);
+    const dotIndex = sanitized.lastIndexOf(".");
+    const hasExtension = dotIndex > 0;
+    const baseName = hasExtension ? sanitized.slice(0, dotIndex) : sanitized;
+    const extension = hasExtension ? sanitized.slice(dotIndex) : "";
+
+    let candidate = sanitized;
+    let suffix = 2;
+
+    while (usedNames.has(candidate.toLowerCase())) {
+      candidate = `${baseName} (${suffix})${extension}`;
+      suffix += 1;
+    }
+
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  });
+}
+
+function formatApproximateByteSize(byteSize: number): string {
+  if (byteSize < 1_000_000) {
+    return `${Math.max(1, Math.round(byteSize / 1_000))} KB`;
+  }
+
+  if (byteSize < 1_000_000_000) {
+    return `${new Intl.NumberFormat(undefined, {
+      maximumFractionDigits: 1,
+    }).format(byteSize / 1_000_000)} MB`;
+  }
+
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 2,
+  }).format(byteSize / 1_000_000_000)} GB`;
+}
+
+function createArchiveFilename(title: string): string {
+  const sanitizedTitle = title
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80)
+    .toLowerCase();
+
+  return `${sanitizedTitle || "pickpic-gallery"}-finals.zip`;
+}
 
 function getOrCreateVisitorToken(): string {
   const storedToken = window.localStorage.getItem(VISITOR_TOKEN_KEY);
@@ -208,6 +272,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
   const [commentText, setCommentText] = useState("");
@@ -259,6 +327,18 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const allVisibleSelected =
     downloadableVisiblePhotos.length > 0 &&
     downloadableVisiblePhotos.every((photo) => selectedPhotoIds.has(photo.id));
+
+  const selectedDownloadByteSize = useMemo(
+    () =>
+      visiblePhotos.reduce((totalByteSize, photo) => {
+        if (!selectedPhotoIds.has(photo.id) || !photo.finalPhoto) {
+          return totalByteSize;
+        }
+
+        return totalByteSize + photo.finalPhoto.byteSize;
+      }, 0),
+    [selectedPhotoIds, visiblePhotos],
+  );
 
   const priorityPhotoIds = useMemo(
     () => new Set(visiblePhotos.slice(0, 3).map((photo) => photo.id)),
@@ -792,37 +872,85 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setSelectedPhotoIds(new Set());
   }
 
-  function downloadSelectedPhotos(): void {
-    if (selectedPhotoIds.size === 0) {
-      setActionError("Select at least one final photo to download.");
+  async function downloadSelectedPhotos(): Promise<void> {
+    if (!gallery || selectedPhotoIds.size === 0 || downloadProgress !== null) {
+      if (selectedPhotoIds.size === 0) {
+        setActionError("Select at least one final photo to download.");
+      }
+
       return;
     }
 
-    const searchParams = new URLSearchParams();
+    const selectedPhotos = visiblePhotos.filter(
+      (photo) => selectedPhotoIds.has(photo.id) && photo.finalPhoto !== null,
+    );
 
-    if (allVisibleSelected) {
-      searchParams.set("scope", filter === "liked" ? "liked" : "all");
-    } else {
-      if (selectedPhotoIds.size > MAX_EXPLICIT_DOWNLOAD_PHOTOS) {
-        setActionError(
-          `Select no more than ${MAX_EXPLICIT_DOWNLOAD_PHOTOS} individual photos, or use Select all.`,
-        );
-        return;
-      }
-
-      searchParams.set("photoIds", Array.from(selectedPhotoIds).join(","));
+    if (selectedPhotos.length === 0) {
+      setActionError("The selected photos do not have final images.");
+      return;
     }
 
-    const link = document.createElement("a");
+    const entryNames = createUniqueDownloadNames(
+      selectedPhotos.map((photo) => photo.finalPhoto!.originalFilename),
+    );
 
-    link.href =
-      `/api/galleries/${encodeURIComponent(shareToken)}/download?` +
-      searchParams.toString();
-    link.download = "";
+    setActionError(null);
+    setDownloadProgress({ completed: 0, total: selectedPhotos.length });
 
-    document.body.append(link);
-    link.click();
-    link.remove();
+    try {
+      async function* createZipInputs() {
+        for (const [index, photo] of selectedPhotos.entries()) {
+          const finalPhoto = photo.finalPhoto!;
+          const response = await fetch(finalPhoto.imageUrl, {
+            cache: "no-store",
+          });
+
+          if (!response.ok || !response.body) {
+            throw new Error(
+              `Unable to download ${finalPhoto.originalFilename}.`,
+            );
+          }
+
+          yield {
+            name: entryNames[index],
+            lastModified: new Date(finalPhoto.uploadedAt),
+            input: response.body,
+          };
+
+          setDownloadProgress({
+            completed: index + 1,
+            total: selectedPhotos.length,
+          });
+        }
+      }
+
+      /*
+       * Build the archive in the viewer's browser instead of inside the
+       * Cloudflare Worker. The Worker Free CPU allowance is too small for
+       * calculating CRC-32 across a larger set of full-resolution JPEGs,
+       * which can terminate a streamed response and leave an invalid ZIP.
+       */
+      const zipBlob = await downloadZip(createZipInputs()).blob();
+      const objectUrl = URL.createObjectURL(zipBlob);
+      const link = document.createElement("a");
+
+      link.href = objectUrl;
+      link.download = createArchiveFilename(gallery.event.title);
+
+      document.body.append(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to create the ZIP download.",
+      );
+    } finally {
+      setDownloadProgress(null);
+    }
   }
 
   useEffect(() => {
@@ -1007,7 +1135,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 {selectedPhotoIds.size === 1 ? "photo" : "photos"} selected
               </strong>
 
-              <span>Only final photos can be downloaded.</span>
+              <span>
+                {selectedDownloadByteSize > 0
+                  ? `Approx. ${formatApproximateByteSize(selectedDownloadByteSize)} download`
+                  : "Only final photos can be downloaded."}
+              </span>
             </div>
 
             <div className="gallery-selection-actions">
@@ -1029,11 +1161,18 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               <button
                 className="gallery-download-button"
                 type="button"
-                disabled={selectedPhotoIds.size === 0}
-                onClick={downloadSelectedPhotos}
+                disabled={
+                  selectedPhotoIds.size === 0 || downloadProgress !== null
+                }
+                onClick={() => void downloadSelectedPhotos()}
               >
-                Download
-                {selectedPhotoIds.size > 0 ? ` (${selectedPhotoIds.size})` : ""}
+                {downloadProgress
+                  ? `Preparing ZIP (${downloadProgress.completed}/${downloadProgress.total})`
+                  : `Download${
+                      selectedPhotoIds.size > 0
+                        ? ` (${selectedPhotoIds.size})`
+                        : ""
+                    }`}
               </button>
             </div>
           </div>
