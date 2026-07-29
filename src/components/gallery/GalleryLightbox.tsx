@@ -141,6 +141,8 @@ function GalleryLightbox({
   }, [canGoNext, canGoPrevious, closeLightbox, onNext, onPrevious]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    pointerStartRef.current = null;
+
     if (event.pointerType === "mouse" || isInteractiveTarget(event.target)) {
       return;
     }
@@ -165,6 +167,10 @@ function GalleryLightbox({
 
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (isInteractiveTarget(event.target)) {
+      return;
     }
 
     const horizontalMovement = event.clientX - start.x;
@@ -208,6 +214,13 @@ function GalleryLightbox({
     pointerStartRef.current = null;
   }
 
+  function handleStageControlPointer(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ): void {
+    pointerStartRef.current = null;
+    event.stopPropagation();
+  }
+
   return (
     <div
       ref={dialogRef}
@@ -225,11 +238,14 @@ function GalleryLightbox({
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
+          onLostPointerCapture={handlePointerCancel}
         >
           <button
             className="lightbox-close"
             type="button"
             onClick={closeLightbox}
+            onPointerDown={handleStageControlPointer}
+            onPointerUp={handleStageControlPointer}
             aria-label="Close photo viewer"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -247,6 +263,8 @@ function GalleryLightbox({
             type="button"
             disabled={!canGoPrevious}
             onClick={onPrevious}
+            onPointerDown={handleStageControlPointer}
+            onPointerUp={handleStageControlPointer}
             aria-label="Previous photo"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24">
@@ -281,6 +299,8 @@ function GalleryLightbox({
             type="button"
             disabled={!canGoNext}
             onClick={onNext}
+            onPointerDown={handleStageControlPointer}
+            onPointerUp={handleStageControlPointer}
             aria-label="Next photo"
           >
             <svg aria-hidden="true" viewBox="0 0 24 24">

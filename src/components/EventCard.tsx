@@ -181,6 +181,11 @@ function EventCard(props: EventCardProps) {
   const [renameTitle, setRenameTitle] = useState(eventRecord.title);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [arePhotosExpanded, setArePhotosExpanded] = useState(
+    () =>
+      typeof window === "undefined" ||
+      !window.matchMedia("(max-width: 720px)").matches,
+  );
   const isAnyVariantRepairRunning = repairingVariantsPhotoId !== null;
   const isUpdatingEventStatus = updatingEventStatusId === eventRecord.id;
   const galleryIsAvailable =
@@ -203,6 +208,22 @@ function EventCard(props: EventCardProps) {
       setRenameTitle(eventRecord.title);
     }
   }, [eventRecord.title, isRenamingEvent]);
+
+  useEffect(() => {
+    const mobileQuery = window.matchMedia("(max-width: 720px)");
+
+    function handleViewportChange(event: MediaQueryListEvent): void {
+      if (!event.matches) {
+        setArePhotosExpanded(true);
+      }
+    }
+
+    mobileQuery.addEventListener("change", handleViewportChange);
+
+    return () => {
+      mobileQuery.removeEventListener("change", handleViewportChange);
+    };
+  }, []);
 
   function formatDate(value: string): string {
     const date = new Date(value);
@@ -515,8 +536,28 @@ function EventCard(props: EventCardProps) {
           )}
         </div>
       </div>
+
       {photos.length > 0 && (
-        <div className="event-card-scroll-region">
+        <button
+          className="event-photo-toggle"
+          type="button"
+          aria-expanded={arePhotosExpanded}
+          aria-controls={`event-photos-${eventRecord.id}`}
+          onClick={() => setArePhotosExpanded((isExpanded) => !isExpanded)}
+        >
+          <span>
+            {photos.length} {photos.length === 1 ? "photo" : "photos"}
+          </span>
+
+          <strong>{arePhotosExpanded ? "Hide photos" : "Show photos"}</strong>
+        </button>
+      )}
+
+      {photos.length > 0 && arePhotosExpanded && (
+        <div
+          className="event-card-scroll-region"
+          id={`event-photos-${eventRecord.id}`}
+        >
           <div className="photo-list">
             {photos.map((photo) => {
               const isUploadingFinal = uploadingFinalPhotoId === photo.id;

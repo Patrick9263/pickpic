@@ -1067,7 +1067,22 @@
   }
 
   .lightbox {
-    padding: 12px;
+    align-items: stretch;
+    padding: 0;
+  }
+
+  .lightbox-content {
+    border: 0;
+    border-radius: 0;
+    max-height: 100dvh;
+    max-width: none;
+    overscroll-behavior: contain;
+    padding: 8px 10px 24px;
+    width: 100%;
+  }
+
+  .lightbox-content img {
+    max-height: 68dvh;
   }
 
   .lightbox-close {
@@ -1083,7 +1098,9 @@
   }
 
   .lightbox-image-stage {
-    min-height: 220px;
+    border-radius: 0;
+    margin: -8px -10px 0;
+    min-height: min(62dvh, 520px);
   }
 
   .lightbox-nav {
