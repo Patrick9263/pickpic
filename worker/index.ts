@@ -2652,7 +2652,6 @@ async function getPhotoVariantImage(
   return getStoredJpeg(env, variant.storageKey);
 }
 
-
 export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
