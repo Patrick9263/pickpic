@@ -252,6 +252,12 @@ interface DownloadPhotoRow {
   createdAt: string;
 }
 
+interface DownloadArchiveEntry {
+  photo: DownloadPhotoRow;
+  size: number;
+  lastModified: Date;
+}
+
 const MAX_EXPLICIT_DOWNLOAD_PHOTOS = 100;
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
@@ -2883,12 +2889,41 @@ async function downloadGalleryFinals(
     );
   }
 
+  const archiveEntries: DownloadArchiveEntry[] = [];
+
+  for (const photoChunk of chunkArray(photoRows, 20)) {
+    const storedObjects = await Promise.all(
+      photoChunk.map(async (photo) => ({
+        photo,
+        object: await env.pickpic_photos.head(photo.finalStorageKey),
+      })),
+    );
+
+    for (const { photo, object } of storedObjects) {
+      if (!object) {
+        return jsonResponse(
+          {
+            error: `The final image for ${photo.finalOriginalFilename} is missing from storage. Ask the photographer to upload it again.`,
+          },
+          409,
+        );
+      }
+
+      archiveEntries.push({
+        photo,
+        size: object.size,
+        lastModified: object.uploaded,
+      });
+    }
+  }
+
   const zipEntryNames = createUniqueZipEntryNames(
-    photoRows.map((photo) => photo.finalOriginalFilename),
+    archiveEntries.map((entry) => entry.photo.finalOriginalFilename),
   );
 
   async function* createZipInputs() {
-    for (const [index, photo] of photoRows.entries()) {
+    for (const [index, entry] of archiveEntries.entries()) {
+      const { photo } = entry;
       const object = await env.pickpic_photos.get(photo.finalStorageKey);
 
       if (!object) {
@@ -2899,21 +2934,21 @@ async function downloadGalleryFinals(
 
       yield {
         name: zipEntryNames[index],
-        lastModified: new Date(photo.finalUploadedAt),
+        lastModified: entry.lastModified,
         input: object.body,
       };
     }
   }
 
   const zipResponse = downloadZip(createZipInputs(), {
-    metadata: photoRows.map((photo, index) => ({
+    metadata: archiveEntries.map((entry, index) => ({
       name: zipEntryNames[index],
-      size: Number(photo.finalByteSize),
-      lastModified: new Date(photo.finalUploadedAt),
+      size: entry.size,
+      lastModified: entry.lastModified,
     })),
   });
 
-  const headers = new Headers(zipResponse.headers);
+  const headers = zipResponse.headers;
 
   headers.set("Content-Type", "application/zip");
   headers.set(
@@ -2923,10 +2958,7 @@ async function downloadGalleryFinals(
   headers.set("Cache-Control", "no-store");
   headers.set("X-Content-Type-Options", "nosniff");
 
-  return new Response(zipResponse.body, {
-    status: 200,
-    headers,
-  });
+  return zipResponse;
 }
 
 export default {

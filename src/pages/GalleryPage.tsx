@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type {
   EventStatus,
   GalleryPhotoRecord,
@@ -223,6 +223,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const lastVisiblePhotoIndexRef = useRef(0);
   const filteredPhotos = useMemo(() => {
     if (!gallery) {
       return [];
@@ -280,6 +281,36 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     ? getDefaultPreviewUrl(previousPhoto)
     : null;
   const nextPhotoImageUrl = nextPhoto ? getDefaultPreviewUrl(nextPhoto) : null;
+
+  useEffect(() => {
+    if (selectedPhotoIndex >= 0) {
+      lastVisiblePhotoIndexRef.current = selectedPhotoIndex;
+    }
+  }, [selectedPhotoIndex]);
+
+  useEffect(() => {
+    if (selectedPhotoId === null || selectedPhotoIndex >= 0) {
+      return;
+    }
+
+    if (visiblePhotos.length === 0) {
+      setSelectedPhotoId(null);
+      setSelectedVersion("original");
+      setCommentText("");
+      return;
+    }
+
+    const replacementIndex = Math.min(
+      lastVisiblePhotoIndexRef.current,
+      visiblePhotos.length - 1,
+    );
+    const replacementPhoto = visiblePhotos[replacementIndex];
+
+    setSelectedPhotoId(replacementPhoto.id);
+    setSelectedVersion(replacementPhoto.finalPhoto ? "final" : "original");
+    setCommentText("");
+    setActionError(null);
+  }, [selectedPhotoId, selectedPhotoIndex, visiblePhotos]);
 
   useEffect(() => {
     const imageUrls = [previousPhotoImageUrl, nextPhotoImageUrl].filter(

@@ -230,9 +230,10 @@ button:disabled {
 }
 
 .event-card-header {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .event-card-summary {
@@ -275,6 +276,10 @@ button:disabled {
   background-clip: padding-box;
 }
 
+.event-photo-toggle {
+  display: none;
+}
+
 .event-card-footer {
   background: var(--color-surface);
   border-top: 1px solid var(--color-border);
@@ -314,6 +319,9 @@ button:disabled {
 .created-date {
   color: #8a867e;
   font-size: 0.75rem;
+  justify-self: end;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .event-card h3 {
@@ -1115,12 +1123,43 @@ button:hover:not(:disabled),
 
 @media (max-width: 720px) {
   .event-card {
+    grid-template-rows: auto;
     max-height: none;
-    overflow: visible;
+    overflow: hidden;
   }
+
+  .event-photo-toggle {
+    align-items: center;
+    background: var(--color-surface);
+    border: 0;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    color: var(--color-text);
+    display: flex;
+    justify-content: space-between;
+    padding: 15px 22px;
+    text-align: left;
+    width: 100%;
+  }
+
+  .event-photo-toggle:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+  }
+
+  .event-photo-toggle span {
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+  }
+
+  .event-photo-toggle strong {
+    color: var(--color-accent-hover);
+    font-size: 0.78rem;
+  }
+
   .event-card-scroll-region {
-    overflow: visible;
-    padding-right: 22px;
+    max-height: min(62dvh, 560px);
+    overflow-y: auto;
+    padding-right: 17px;
   }
 }
 
