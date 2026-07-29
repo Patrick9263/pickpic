@@ -291,6 +291,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [retainedLikedPhotoId, setRetainedLikedPhotoId] = useState<
+    string | null
+  >(null);
   const lastVisiblePhotoIndexRef = useRef(0);
   const filteredPhotos = useMemo(() => {
     if (!gallery) {
@@ -350,13 +353,34 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     selectedPhotoId === null
       ? -1
       : visiblePhotos.findIndex((photo) => photo.id === selectedPhotoId);
-  const canGoPrevious = selectedPhotoIndex > 0;
-  const canGoNext =
-    selectedPhotoIndex >= 0 && selectedPhotoIndex < visiblePhotos.length - 1;
-  const previousPhoto = canGoPrevious
-    ? visiblePhotos[selectedPhotoIndex - 1]
-    : null;
-  const nextPhoto = canGoNext ? visiblePhotos[selectedPhotoIndex + 1] : null;
+  const isRetainingSelectedLikedPhoto =
+    selectedPhoto !== null &&
+    selectedPhotoId === retainedLikedPhotoId &&
+    selectedPhotoIndex < 0;
+  const lightboxPhotoIndex =
+    selectedPhotoIndex >= 0
+      ? selectedPhotoIndex
+      : isRetainingSelectedLikedPhoto
+        ? Math.min(lastVisiblePhotoIndexRef.current, visiblePhotos.length)
+        : -1;
+  const lightboxPhotoCount =
+    visiblePhotos.length + (isRetainingSelectedLikedPhoto ? 1 : 0);
+  const previousPhoto = isRetainingSelectedLikedPhoto
+    ? lightboxPhotoIndex > 0
+      ? visiblePhotos[lightboxPhotoIndex - 1]
+      : null
+    : selectedPhotoIndex > 0
+      ? visiblePhotos[selectedPhotoIndex - 1]
+      : null;
+  const nextPhoto = isRetainingSelectedLikedPhoto
+    ? lightboxPhotoIndex < visiblePhotos.length
+      ? visiblePhotos[lightboxPhotoIndex]
+      : null
+    : selectedPhotoIndex >= 0 && selectedPhotoIndex < visiblePhotos.length - 1
+      ? visiblePhotos[selectedPhotoIndex + 1]
+      : null;
+  const canGoPrevious = previousPhoto !== null;
+  const canGoNext = nextPhoto !== null;
   const previousPhotoImageUrl = previousPhoto
     ? getDefaultPreviewUrl(previousPhoto)
     : null;
@@ -369,7 +393,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   }, [selectedPhotoIndex]);
 
   useEffect(() => {
-    if (selectedPhotoId === null || selectedPhotoIndex >= 0) {
+    if (
+      selectedPhotoId === null ||
+      selectedPhotoIndex >= 0 ||
+      isRetainingSelectedLikedPhoto
+    ) {
       return;
     }
 
@@ -390,7 +418,12 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setSelectedVersion(replacementPhoto.finalPhoto ? "final" : "original");
     setCommentText("");
     setActionError(null);
-  }, [selectedPhotoId, selectedPhotoIndex, visiblePhotos]);
+  }, [
+    isRetainingSelectedLikedPhoto,
+    selectedPhotoId,
+    selectedPhotoIndex,
+    visiblePhotos,
+  ]);
 
   useEffect(() => {
     const imageUrls = [previousPhotoImageUrl, nextPhotoImageUrl].filter(
@@ -522,6 +555,16 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               : undefined,
         },
       );
+
+      if (filter === "liked" && selectedPhotoId === photo.id) {
+        if (body.heartCount === 0) {
+          setRetainedLikedPhotoId(photo.id);
+        } else {
+          setRetainedLikedPhotoId((currentPhotoId) =>
+            currentPhotoId === photo.id ? null : currentPhotoId,
+          );
+        }
+      }
 
       setGallery((currentGallery) => {
         if (!currentGallery) {
@@ -778,6 +821,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   function closeLightbox(): void {
     const photoIdToRestore = selectedPhotoId;
 
+    setRetainedLikedPhotoId(null);
     setSelectedPhotoId(null);
     setCommentText("");
     setActionError(null);
@@ -795,40 +839,34 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   }
 
   function openPhoto(photo: GalleryPhotoRecord): void {
+    setRetainedLikedPhotoId(null);
     setSelectedPhotoId(photo.id);
 
     setSelectedVersion(photo.finalPhoto ? "final" : "original");
   }
 
-  function showPhotoAtIndex(index: number): void {
-    const photo = visiblePhotos[index];
-
-    if (!photo) {
-      return;
-    }
-
+  function showLightboxPhoto(photo: GalleryPhotoRecord): void {
+    setRetainedLikedPhotoId(null);
     setSelectedPhotoId(photo.id);
-
     setSelectedVersion(photo.finalPhoto ? "final" : "original");
-
     setCommentText("");
     setActionError(null);
   }
 
   function showPreviousPhoto(): void {
-    if (!canGoPrevious) {
+    if (!previousPhoto) {
       return;
     }
 
-    showPhotoAtIndex(selectedPhotoIndex - 1);
+    showLightboxPhoto(previousPhoto);
   }
 
   function showNextPhoto(): void {
-    if (!canGoNext) {
+    if (!nextPhoto) {
       return;
     }
 
-    showPhotoAtIndex(selectedPhotoIndex + 1);
+    showLightboxPhoto(nextPhoto);
   }
 
   function enterSelectionMode(): void {
@@ -954,14 +992,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   }
 
   useEffect(() => {
-    if (selectedPhotoIndex < 0) {
-      return;
-    }
-
-    const adjacentPhotos = [
-      visiblePhotos[selectedPhotoIndex - 1],
-      visiblePhotos[selectedPhotoIndex + 1],
-    ];
+    const adjacentPhotos = [previousPhoto, nextPhoto];
 
     for (const photo of adjacentPhotos) {
       if (!photo) {
@@ -972,7 +1003,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
       image.src = photo.finalPhoto?.imageUrl ?? photo.imageUrl;
     }
-  }, [selectedPhotoIndex, visiblePhotos]);
+  }, [nextPhoto, previousPhoto]);
 
   const selectedImageUrl = selectedPhoto
     ? selectedVersion === "final" && selectedPhoto.finalPhoto
@@ -1250,8 +1281,8 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           editComment={editComment}
           deleteComment={deleteComment}
           submitComment={submitComment}
-          photoIndex={selectedPhotoIndex}
-          photoCount={visiblePhotos.length}
+          photoIndex={lightboxPhotoIndex}
+          photoCount={lightboxPhotoCount}
           canGoPrevious={canGoPrevious}
           canGoNext={canGoNext}
           onPrevious={showPreviousPhoto}
