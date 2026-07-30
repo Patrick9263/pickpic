@@ -1222,8 +1222,7 @@
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
-    padding:
-      10px max(18px, env(safe-area-inset-right))
+    padding: 10px max(18px, env(safe-area-inset-right))
       max(24px, calc(env(safe-area-inset-bottom) + 16px))
       max(18px, env(safe-area-inset-left));
   }
@@ -1292,10 +1291,8 @@
 
 @media (max-width: 560px) {
   .gallery-header {
-    padding:
-      max(18px, env(safe-area-inset-top))
-      max(18px, env(safe-area-inset-right))
-      18px
+    padding: max(18px, env(safe-area-inset-top))
+      max(18px, env(safe-area-inset-right)) 18px
       max(18px, env(safe-area-inset-left));
   }
 
@@ -1371,11 +1368,9 @@
 
   .lightbox-details {
     flex: 0 0 min(390px, 40vw);
-    padding:
-      max(12px, env(safe-area-inset-top))
+    padding: max(12px, env(safe-area-inset-top))
       max(16px, env(safe-area-inset-right))
-      max(18px, env(safe-area-inset-bottom))
-      16px;
+      max(18px, env(safe-area-inset-bottom)) 16px;
   }
 
   .lightbox-footer {

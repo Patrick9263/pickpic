@@ -142,8 +142,7 @@ function GalleryLightbox({
       top: body.style.top,
       width: body.style.width,
     };
-    const previousOverscrollBehavior =
-      documentElement.style.overscrollBehavior;
+    const previousOverscrollBehavior = documentElement.style.overscrollBehavior;
 
     /*
      * position: fixed is more reliable than overflow: hidden alone on iOS
@@ -206,13 +205,7 @@ function GalleryLightbox({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [
-    canGoNext,
-    canGoPrevious,
-    closeLightbox,
-    navigateNext,
-    navigatePrevious,
-  ]);
+  }, [canGoNext, canGoPrevious, closeLightbox, navigateNext, navigatePrevious]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
     pointerStartRef.current = null;
