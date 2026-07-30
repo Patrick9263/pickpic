@@ -991,20 +991,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     }
   }
 
-  useEffect(() => {
-    const adjacentPhotos = [previousPhoto, nextPhoto];
-
-    for (const photo of adjacentPhotos) {
-      if (!photo) {
-        continue;
-      }
-
-      const image = new Image();
-
-      image.src = photo.finalPhoto?.imageUrl ?? photo.imageUrl;
-    }
-  }, [nextPhoto, previousPhoto]);
-
   const selectedImageUrl = selectedPhoto
     ? selectedVersion === "final" && selectedPhoto.finalPhoto
       ? (selectedPhoto.finalPhoto.variants.preview?.imageUrl ??
