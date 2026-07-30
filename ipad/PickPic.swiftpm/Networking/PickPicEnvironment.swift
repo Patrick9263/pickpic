@@ -3,7 +3,7 @@ import Foundation
 enum PickPicEnvironment {
     static let publicAppBaseURL = URL(
         string:
-            "https://pickpic.maverickthedeer.workers.dev"
+            "https://pickpic.photos"
     )!
     
     static func galleryURL(
