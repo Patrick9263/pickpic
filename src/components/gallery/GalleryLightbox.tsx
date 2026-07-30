@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -90,10 +91,39 @@ function GalleryLightbox({
 }: GalleryLightboxProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const pointerStartRef = useRef<PointerStart | null>(null);
+  const navigationFrameRef = useRef<number | null>(null);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
 
+  const runNavigation = useCallback((navigate: () => void): void => {
+    /*
+     * Collapse duplicate navigation callbacks that occur in the same frame.
+     * This still allows deliberate rapid taps while preventing one touch from
+     * being interpreted as both a stage gesture and a control activation.
+     */
+    if (navigationFrameRef.current !== null) {
+      return;
+    }
+
+    navigate();
+    navigationFrameRef.current = window.requestAnimationFrame(() => {
+      navigationFrameRef.current = null;
+    });
+  }, []);
+
+  const navigatePrevious = useCallback((): void => {
+    if (canGoPrevious) {
+      runNavigation(onPrevious);
+    }
+  }, [canGoPrevious, onPrevious, runNavigation]);
+
+  const navigateNext = useCallback((): void => {
+    if (canGoNext) {
+      runNavigation(onNext);
+    }
+  }, [canGoNext, onNext, runNavigation]);
+
   useEffect(() => {
-    dialogRef.current?.focus();
+    dialogRef.current?.focus({ preventScroll: true });
   }, []);
 
   useEffect(() => {
@@ -101,14 +131,51 @@ function GalleryLightbox({
   }, [selectedImageUrl]);
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
+    const body = document.body;
+    const documentElement = document.documentElement;
+    const scrollPosition = window.scrollY;
+    const previousBodyStyles = {
+      left: body.style.left,
+      overflow: body.style.overflow,
+      position: body.style.position,
+      right: body.style.right,
+      top: body.style.top,
+      width: body.style.width,
+    };
+    const previousOverscrollBehavior = documentElement.style.overscrollBehavior;
 
-    document.body.style.overflow = "hidden";
+    /*
+     * position: fixed is more reliable than overflow: hidden alone on iOS
+     * Safari and keeps the gallery from moving behind the lightbox.
+     */
+    body.style.left = "0";
+    body.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.right = "0";
+    body.style.top = `-${scrollPosition}px`;
+    body.style.width = "100%";
+    documentElement.style.overscrollBehavior = "none";
 
     return () => {
-      document.body.style.overflow = previousOverflow;
+      body.style.left = previousBodyStyles.left;
+      body.style.overflow = previousBodyStyles.overflow;
+      body.style.position = previousBodyStyles.position;
+      body.style.right = previousBodyStyles.right;
+      body.style.top = previousBodyStyles.top;
+      body.style.width = previousBodyStyles.width;
+      documentElement.style.overscrollBehavior = previousOverscrollBehavior;
+      window.scrollTo(0, scrollPosition);
     };
   }, []);
+
+  useEffect(
+    () => () => {
+      if (navigationFrameRef.current !== null) {
+        window.cancelAnimationFrame(navigationFrameRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -124,12 +191,12 @@ function GalleryLightbox({
 
       if (event.key === "ArrowLeft" && canGoPrevious) {
         event.preventDefault();
-        onPrevious();
+        navigatePrevious();
       }
 
       if (event.key === "ArrowRight" && canGoNext) {
         event.preventDefault();
-        onNext();
+        navigateNext();
       }
     }
 
@@ -138,12 +205,16 @@ function GalleryLightbox({
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [canGoNext, canGoPrevious, closeLightbox, onNext, onPrevious]);
+  }, [canGoNext, canGoPrevious, closeLightbox, navigateNext, navigatePrevious]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
     pointerStartRef.current = null;
 
-    if (event.pointerType === "mouse" || isInteractiveTarget(event.target)) {
+    if (
+      !event.isPrimary ||
+      event.pointerType === "mouse" ||
+      isInteractiveTarget(event.target)
+    ) {
       return;
     }
 
@@ -182,10 +253,10 @@ function GalleryLightbox({
       absoluteHorizontal > absoluteVertical * 1.2;
 
     if (isHorizontalSwipe) {
-      if (horizontalMovement < 0 && canGoNext) {
-        onNext();
-      } else if (horizontalMovement > 0 && canGoPrevious) {
-        onPrevious();
+      if (horizontalMovement < 0) {
+        navigateNext();
+      } else {
+        navigatePrevious();
       }
 
       return;
@@ -200,13 +271,12 @@ function GalleryLightbox({
     }
 
     const bounds = event.currentTarget.getBoundingClientRect();
-
     const tapRatio = (event.clientX - bounds.left) / bounds.width;
 
-    if (tapRatio <= SIDE_TAP_RATIO && canGoPrevious) {
-      onPrevious();
-    } else if (tapRatio >= 1 - SIDE_TAP_RATIO && canGoNext) {
-      onNext();
+    if (tapRatio <= SIDE_TAP_RATIO) {
+      navigatePrevious();
+    } else if (tapRatio >= 1 - SIDE_TAP_RATIO) {
+      navigateNext();
     }
   }
 
@@ -235,6 +305,7 @@ function GalleryLightbox({
       <div className="lightbox-content">
         <div
           className="lightbox-image-stage"
+          aria-busy={!isImageLoaded}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
@@ -258,11 +329,12 @@ function GalleryLightbox({
               />
             </svg>
           </button>
+
           <button
             className="lightbox-nav lightbox-nav-previous"
             type="button"
             disabled={!canGoPrevious}
-            onClick={onPrevious}
+            onClick={navigatePrevious}
             onPointerDown={handleStageControlPointer}
             onPointerUp={handleStageControlPointer}
             aria-label="Previous photo"
@@ -298,7 +370,7 @@ function GalleryLightbox({
             className="lightbox-nav lightbox-nav-next"
             type="button"
             disabled={!canGoNext}
-            onClick={onNext}
+            onClick={navigateNext}
             onPointerDown={handleStageControlPointer}
             onPointerUp={handleStageControlPointer}
             aria-label="Next photo"
@@ -316,83 +388,89 @@ function GalleryLightbox({
           </button>
         </div>
 
-        <p className="lightbox-position" aria-live="polite">
-          {photoIndex + 1} of {photoCount}
-        </p>
+        <div className="lightbox-details">
+          <p className="lightbox-position" aria-live="polite">
+            {photoIndex + 1} of {photoCount}
+          </p>
 
-        {selectedPhoto.finalPhoto && (
-          <div className="photo-version-controls">
-            <div className="photo-version-toggle">
-              <button
-                type="button"
-                className={
-                  selectedVersion === "original" ? "photo-version-active" : ""
-                }
-                onClick={() => setSelectedVersion("original")}
-              >
-                Original
-              </button>
+          {selectedPhoto.finalPhoto && (
+            <div className="photo-version-controls">
+              <div className="photo-version-toggle">
+                <button
+                  type="button"
+                  className={
+                    selectedVersion === "original" ? "photo-version-active" : ""
+                  }
+                  onClick={() => setSelectedVersion("original")}
+                >
+                  Original
+                </button>
 
-              <button
-                type="button"
-                className={
-                  selectedVersion === "final" ? "photo-version-active" : ""
-                }
-                onClick={() => setSelectedVersion("final")}
+                <button
+                  type="button"
+                  className={
+                    selectedVersion === "final" ? "photo-version-active" : ""
+                  }
+                  onClick={() => setSelectedVersion("final")}
+                >
+                  Final
+                </button>
+              </div>
+
+              <a
+                className="download-final-link"
+                href={selectedPhoto.finalPhoto.imageUrl}
+                download={selectedPhoto.finalPhoto.originalFilename}
               >
-                Final
-              </button>
+                Download final
+              </a>
             </div>
+          )}
 
-            <a
-              className="download-final-link"
-              href={selectedPhoto.finalPhoto.imageUrl}
-              download={selectedPhoto.finalPhoto.originalFilename}
+          <div className="lightbox-footer">
+            <p title={selectedPhoto.originalFilename}>
+              {selectedPhoto.originalFilename}
+            </p>
+
+            <button
+              className={`lightbox-heart-button ${
+                selectedPhoto.viewerHearted
+                  ? "lightbox-heart-button-active"
+                  : ""
+              }`}
+              type="button"
+              disabled={
+                !interactionsEnabled || togglingPhotoId === selectedPhoto.id
+              }
+              onClick={() => void toggleHeart(selectedPhoto)}
+              aria-pressed={selectedPhoto.viewerHearted}
             >
-              Download final
-            </a>
+              <span aria-hidden="true">♥</span>
+
+              <span>
+                {!interactionsEnabled
+                  ? "Gallery closed"
+                  : selectedPhoto.viewerHearted
+                    ? "Edit requested"
+                    : "Request edit"}
+              </span>
+
+              <span>{selectedPhoto.heartCount}</span>
+            </button>
           </div>
-        )}
 
-        <div className="lightbox-footer">
-          <p>{selectedPhoto.originalFilename}</p>
-
-          <button
-            className={`lightbox-heart-button ${
-              selectedPhoto.viewerHearted ? "lightbox-heart-button-active" : ""
-            }`}
-            type="button"
-            disabled={
-              !interactionsEnabled || togglingPhotoId === selectedPhoto.id
-            }
-            onClick={() => void toggleHeart(selectedPhoto)}
-            aria-pressed={selectedPhoto.viewerHearted}
-          >
-            <span aria-hidden="true">♥</span>
-
-            <span>
-              {!interactionsEnabled
-                ? "Gallery closed"
-                : selectedPhoto.viewerHearted
-                  ? "Edit requested"
-                  : "Request edit"}
-            </span>
-
-            <span>{selectedPhoto.heartCount}</span>
-          </button>
+          <GalleryComments
+            selectedPhoto={selectedPhoto}
+            commentActionId={commentActionId}
+            commentText={commentText}
+            isSubmittingComment={isSubmittingComment}
+            setCommentText={setCommentText}
+            editComment={editComment}
+            deleteComment={deleteComment}
+            submitComment={submitComment}
+            interactionsEnabled={interactionsEnabled}
+          />
         </div>
-
-        <GalleryComments
-          selectedPhoto={selectedPhoto}
-          commentActionId={commentActionId}
-          commentText={commentText}
-          isSubmittingComment={isSubmittingComment}
-          setCommentText={setCommentText}
-          editComment={editComment}
-          deleteComment={deleteComment}
-          submitComment={submitComment}
-          interactionsEnabled={interactionsEnabled}
-        />
       </div>
     </div>
   );
