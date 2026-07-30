@@ -20,7 +20,7 @@ final class APIConfigurationStore: ObservableObject {
     }
     
     static let productionBaseURL = URL(
-        string: "https://pickpic.photos"
+        string: "https://admin.pickpic.photos"
     )!
     
     @Published private(set) var clientID: String
