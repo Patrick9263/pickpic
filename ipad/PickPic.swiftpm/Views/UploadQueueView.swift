@@ -496,12 +496,25 @@ private struct UploadJobRow: View {
             .foregroundStyle(.secondary)
             
         case .prepared:
-            Label(
-                "Workflow folders are ready",
-                systemImage: "checkmark.circle"
-            )
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            if job.preparedPhotos.isEmpty {
+                Label(
+                    "Workflow folders are ready",
+                    systemImage: "checkmark.circle"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            } else {
+                Label(
+                    """
+                    \(job.preparedPhotos.count) of \
+                    \(job.photoCount) proof JPEGs recovered
+                    """,
+                    systemImage:
+                        "clock.arrow.circlepath"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
             
             if let preview = job.conversionPreview {
                 Label(
@@ -553,7 +566,9 @@ private struct UploadJobRow: View {
                 onContinue()
             } label: {
                 Label(
-                    "Continue Upload",
+                    job.preparedPhotos.isEmpty
+                        ? "Continue Upload"
+                        : "Resume Conversion and Upload",
                     systemImage:
                         "arrow.up.circle.fill"
                 )
@@ -562,10 +577,9 @@ private struct UploadJobRow: View {
             .buttonStyle(.borderedProminent)
             
             Text(
-                """
-                Converts the full batch and begins uploading \
-                automatically.
-                """
+                job.preparedPhotos.isEmpty
+                    ? "Converts the full batch and begins uploading automatically."
+                    : "Reuses the recovered JPEGs, converts only the remaining photos, and then resumes uploading."
             )
             .font(.caption)
             .foregroundStyle(.secondary)

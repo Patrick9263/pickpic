@@ -14,7 +14,7 @@ private enum UploadQueuePipelineError:
         reason: String,
         isNetworkRelated: Bool
     )
-    
+
     var errorDescription: String? {
         switch self {
         case let .variantGenerationFailed(
@@ -93,34 +93,34 @@ private enum UploadFolderRelinkError: LocalizedError, Sendable {
 final class UploadQueueStore: ObservableObject {
     @Published private(set)
     var jobs: [UploadJob] = []
-    
+
     @Published private(set)
     var loadErrorMessage: String?
-    
+
     @Published private(set)
     var storageCleanupMessage: String?
-    
+
     @Published private(set)
     var storageErrorMessage: String?
-    
+
     @Published private(set)
     var recoveryMessage: String?
-    
+
     private let storageURL: URL
     private var runningPipelineJobIDs: Set<UUID> = []
     private var pauseRequestedJobIDs: Set<UUID> = []
 
     @Published private(set)
     var retryingEventIDs: Set<String> = []
-    
+
     init() {
         storageURL = Self.makeStorageURL()
         load()
     }
-    
+
     func performStorageMaintenance() async {
         let jobsSnapshot = jobs
-        
+
         do {
             let result = try await Task.detached(
                 priority: .utility
@@ -130,23 +130,23 @@ final class UploadQueueStore: ObservableObject {
                 )
             }
                 .value
-            
+
             storageErrorMessage = nil
-            
+
             guard
                 result.removedItemCount > 0
             else {
                 storageCleanupMessage = nil
                 return
             }
-            
+
             let reclaimedSize =
             ByteCountFormatter.string(
                 fromByteCount:
                     result.reclaimedBytes,
                 countStyle: .file
             )
-            
+
             storageCleanupMessage =
             """
             PickPic recovered \(reclaimedSize) of \
@@ -154,7 +154,7 @@ final class UploadQueueStore: ObservableObject {
             """
         } catch {
             storageCleanupMessage = nil
-            
+
             storageErrorMessage =
             """
             Temporary storage could not be cleaned: \
@@ -162,7 +162,7 @@ final class UploadQueueStore: ObservableObject {
             """
         }
     }
-    
+
     func jobs(
         for eventID: String
     ) -> [UploadJob] {
@@ -170,7 +170,7 @@ final class UploadQueueStore: ObservableObject {
             job.eventID == eventID
         }
     }
-    
+
     func completedJobCount(
         for eventID: String
     ) -> Int {
@@ -302,7 +302,7 @@ final class UploadQueueStore: ObservableObject {
             onlySourceFilename: failedFilename
         )
     }
-    
+
     func removeCompletedJobs(
         for eventID: String
     ) throws {
@@ -314,57 +314,57 @@ final class UploadQueueStore: ObservableObject {
                 }
                 .map(\.id)
         )
-        
+
         guard !completedJobIDs.isEmpty else {
             return
         }
-        
+
         try remove(
             jobIDs: completedJobIDs
         )
     }
-    
+
     func add(
         _ job: UploadJob
     ) throws {
         var updatedJobs = jobs
         updatedJobs.append(job)
-        
+
         updatedJobs.sort { first, second in
             first.createdAt > second.createdAt
         }
-        
+
         try save(updatedJobs)
-        
+
         jobs = updatedJobs
         loadErrorMessage = nil
     }
-    
+
     func remove(
         jobIDs: Set<UUID>
     ) throws {
         let removedJobs = jobs.filter { job in
             jobIDs.contains(job.id)
         }
-        
+
         let updatedJobs = jobs.filter { job in
             !jobIDs.contains(job.id)
         }
-        
+
         try save(updatedJobs)
-        
+
         jobs = updatedJobs
         loadErrorMessage = nil
 
         runningPipelineJobIDs.subtract(jobIDs)
         pauseRequestedJobIDs.subtract(jobIDs)
-        
+
         for job in removedJobs {
             try? ImageConversionService
                 .removePreview(
                     for: job.id
                 )
-            
+
             try? ImageConversionService
                 .removePreparedPhotos(
                     for: job.id
@@ -442,7 +442,7 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         do {
             try updateJob(jobID) { job in
                 job.stage = .preparing
@@ -455,10 +455,10 @@ final class UploadQueueStore: ObservableObject {
                 The upload job could not be updated: \
                 \(error.localizedDescription)
                 """
-            
+
             return
         }
-        
+
         guard
             let preparingJob = jobs.first(
                 where: { job in
@@ -468,7 +468,7 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         do {
             let result = try await Task.detached(
                 priority: .userInitiated
@@ -477,7 +477,7 @@ final class UploadQueueStore: ObservableObject {
                     job: preparingJob
                 )
             }.value
-            
+
             try updateJob(jobID) { job in
                 job.stage = .prepared
                 job.preparedAt = result.preparedAt
@@ -487,7 +487,7 @@ final class UploadQueueStore: ObservableObject {
         } catch {
             let preparationError =
             error.localizedDescription
-            
+
             do {
                 try updateJob(jobID) { job in
                     job.stage = .failed
@@ -505,7 +505,7 @@ final class UploadQueueStore: ObservableObject {
             }
         }
     }
-    
+
     func convertTestPreview(
         jobID: UUID
     ) async {
@@ -519,7 +519,7 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         do {
             try updateJob(jobID) { job in
                 job.stage = .converting
@@ -532,10 +532,10 @@ final class UploadQueueStore: ObservableObject {
             The conversion could not start: \
             \(error.localizedDescription)
             """
-            
+
             return
         }
-        
+
         guard
             let convertingJob = jobs.first(
                 where: { job in
@@ -545,7 +545,7 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         do {
             let preview = try await Task.detached(
                 priority: .userInitiated
@@ -557,7 +557,7 @@ final class UploadQueueStore: ObservableObject {
                         )
                 }
             }.value
-            
+
             try updateJob(jobID) { job in
                 job.stage = .prepared
                 job.conversionPreview = preview
@@ -567,7 +567,7 @@ final class UploadQueueStore: ObservableObject {
         } catch {
             let conversionError =
             error.localizedDescription
-            
+
             do {
                 try updateJob(jobID) { job in
                     job.stage = .prepared
@@ -585,7 +585,7 @@ final class UploadQueueStore: ObservableObject {
             }
         }
     }
-    
+
     func convertAllPhotos(
         jobID: UUID
     ) async {
@@ -601,7 +601,18 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
+        let shouldRestartFromBeginning =
+        currentJob.stage == .readyToUpload
+
+        let recoveredPreparedPhotos =
+        shouldRestartFromBeginning
+        ? []
+        : ImageConversionService
+            .availablePreparedPhotos(
+                for: currentJob
+            )
+
         do {
             try await Task.detached(
                 priority: .utility
@@ -618,7 +629,7 @@ final class UploadQueueStore: ObservableObject {
                 try updateJob(jobID) { job in
                     job.conversionErrorMessage =
                     error.localizedDescription
-                    
+
                     job.updatedAt = Date()
                 }
             } catch {
@@ -629,21 +640,21 @@ final class UploadQueueStore: ObservableObject {
             \(error.localizedDescription)
             """
             }
-            
+
             return
         }
-        
+
         let startedAt = Date()
-        
+
         let sourceFilenames = Set(
             currentJob.photos.map(\.filename)
         )
-        
+
         let preservedCompletedFilenames =
         currentJob.uploadProgress
             .completedSourceFilenames
             .intersection(sourceFilenames)
-        
+
         let preservedDuplicateFilenames =
         currentJob.uploadProgress
             .duplicateSourceFilenames
@@ -657,12 +668,14 @@ final class UploadQueueStore: ObservableObject {
         let preservedActiveUploadDuration =
         currentJob.uploadProgress
             .activeUploadDuration
-        
+
         do {
             try updateJob(jobID) { job in
                 job.stage = .converting
-                job.preparedPhotos = []
-                job.conversionProcessedCount = 0
+                job.preparedPhotos =
+                    recoveredPreparedPhotos
+                job.conversionProcessedCount =
+                    recoveredPreparedPhotos.count
                 job.conversionCurrentFilename = nil
                 job.conversionStartedAt = startedAt
                 job.conversionCompletedAt = nil
@@ -691,10 +704,10 @@ final class UploadQueueStore: ObservableObject {
             Batch conversion could not start: \
             \(error.localizedDescription)
             """
-            
+
             return
         }
-        
+
         guard
             let convertingJob = jobs.first(
                 where: { job in
@@ -704,29 +717,46 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         do {
-            try await Task.detached(
-                priority: .userInitiated
-            ) {
-                try ImageConversionService
-                    .resetPreparedPhotos(
-                        for: jobID
-                    )
-            }.value
-            
+            if
+                shouldRestartFromBeginning
+                || recoveredPreparedPhotos.isEmpty
+            {
+                try await Task.detached(
+                    priority: .utility
+                ) {
+                    try ImageConversionService
+                        .resetPreparedPhotos(
+                            for: jobID
+                        )
+                }.value
+            }
+
+            var completedSourcePhotoIDs = Set(
+                recoveredPreparedPhotos
+                    .compactMap(\.sourcePhotoID)
+            )
+
             for (
                 index,
                 sourcePhoto
             ) in convertingJob.photos.enumerated() {
                 try Task.checkCancellation()
-                
+
+                guard
+                    !completedSourcePhotoIDs
+                        .contains(sourcePhoto.id)
+                else {
+                    continue
+                }
+
                 try updateJob(jobID) { job in
                     job.conversionCurrentFilename =
                     sourcePhoto.filename
                     job.updatedAt = Date()
                 }
-                
+
                 let preparedPhoto =
                 try await Task.detached(
                     priority: .userInitiated
@@ -740,22 +770,26 @@ final class UploadQueueStore: ObservableObject {
                             )
                     }
                 }.value
-                
+
                 try updateJob(jobID) { job in
                     job.preparedPhotos.append(
                         preparedPhoto
                     )
-                    
+
                     job.conversionProcessedCount =
                     job.preparedPhotos.count
-                    
+
                     job.updatedAt =
                     preparedPhoto.preparedAt
                 }
+
+                completedSourcePhotoIDs.insert(
+                    sourcePhoto.id
+                )
             }
-            
+
             let completedAt = Date()
-            
+
             try updateJob(jobID) { job in
                 job.stage = .readyToUpload
                 job.conversionCurrentFilename =
@@ -767,45 +801,69 @@ final class UploadQueueStore: ObservableObject {
                 job.updatedAt = completedAt
             }
         } catch {
-            let failedFilename = jobs.first(
+            let latestJob = jobs.first(
                 where: { job in
                     job.id == jobID
                 }
-            )?
+            )
+
+            let savedPreparedPhotos = latestJob.map { job in
+                ImageConversionService
+                    .availablePreparedPhotos(
+                        for: job
+                    )
+            }
+            ?? []
+
+            let failedFilename = latestJob?
                 .conversionCurrentFilename
 
-            let conversionError: String
+            let interruptionDescription: String
 
-            if let failedFilename {
-                conversionError =
+            if error is CancellationError {
+                interruptionDescription =
+                    "Batch conversion was interrupted."
+            } else if let failedFilename {
+                interruptionDescription =
                 """
                 RAW conversion stopped at \(failedFilename). \
                 \(error.localizedDescription)
                 """
             } else {
-                conversionError =
+                interruptionDescription =
                     error.localizedDescription
             }
-            
-            try? await Task.detached {
-                try ImageConversionService
-                    .removePreparedPhotos(
-                        for: jobID
-                    )
-            }.value
-            
+
+            let recoveryDescription: String
+
+            if savedPreparedPhotos.isEmpty {
+                recoveryDescription =
+                    "Start the conversion again."
+            } else {
+                recoveryDescription =
+                """
+                PickPic saved \(savedPreparedPhotos.count) of \
+                \(currentJob.photoCount) converted photos. Continue \
+                the upload to resume with the remaining photos.
+                """
+            }
+
+            let conversionError =
+                "\(interruptionDescription) \(recoveryDescription)"
+
             do {
                 try updateJob(jobID) { job in
                     job.stage = .prepared
-                    job.preparedPhotos = []
+                    job.preparedPhotos =
+                        savedPreparedPhotos
                     job.conversionProcessedCount =
-                    0
+                        savedPreparedPhotos.count
                     job.conversionCurrentFilename =
-                    nil
+                        nil
                     job.conversionCompletedAt =
-                    nil
+                        nil
                     job.conversionErrorMessage =
-                    conversionError
+                        conversionError
                     job.updatedAt = Date()
                 }
             } catch {
@@ -818,7 +876,7 @@ final class UploadQueueStore: ObservableObject {
             }
         }
     }
-    
+
     func uploadAllPhotos(
         jobID: UUID,
         using configuration:
@@ -1532,39 +1590,39 @@ final class UploadQueueStore: ObservableObject {
         guard !runningPipelineJobIDs.contains(jobID) else {
             return
         }
-        
+
         runningPipelineJobIDs.insert(jobID)
-        
+
         defer {
             runningPipelineJobIDs.remove(jobID)
         }
-        
+
         guard let startingStage = stage(for: jobID) else {
             return
         }
-        
+
         switch startingStage {
         case .queued,
                 .failed:
             await prepare(jobID: jobID)
             guard !Task.isCancelled else {
-                return   
+                return
             }
             guard stage(for: jobID) == .prepared else {
                 return
             }
-            
+
         case .prepared,
                 .readyToUpload:
             break
-            
+
         case .preparing,
                 .converting,
                 .uploading,
                 .completed:
             return
         }
-        
+
         if stage(for: jobID) == .prepared {
             await convertAllPhotos(jobID: jobID)
             guard !Task.isCancelled else {
@@ -1574,7 +1632,7 @@ final class UploadQueueStore: ObservableObject {
                 return
             }
         }
-        
+
         if stage(for: jobID) == .readyToUpload {
             await uploadAllPhotos(
                 jobID: jobID,
@@ -1582,7 +1640,7 @@ final class UploadQueueStore: ObservableObject {
             )
         }
     }
-    
+
     func runTestPreviewPipeline(
         jobID: UUID
     ) async {
@@ -1591,35 +1649,35 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         runningPipelineJobIDs.insert(jobID)
-        
+
         defer {
             runningPipelineJobIDs.remove(jobID)
         }
-        
+
         guard
             let startingStage = stage(for: jobID)
         else {
             return
         }
-        
+
         switch startingStage {
         case .queued,
                 .failed:
             await prepare(jobID: jobID)
-            
+
             guard !Task.isCancelled else {
                 return
             }
-            
+
             guard stage(for: jobID) == .prepared else {
                 return
             }
-            
+
         case .prepared:
             break
-            
+
         case .preparing,
                 .converting,
                 .readyToUpload,
@@ -1627,12 +1685,12 @@ final class UploadQueueStore: ObservableObject {
                 .completed:
             return
         }
-        
+
         await convertTestPreview(
             jobID: jobID
         )
     }
-    
+
     private func stage(
         for jobID: UUID
     ) -> UploadStage? {
@@ -1641,7 +1699,7 @@ final class UploadQueueStore: ObservableObject {
         }?
             .stage
     }
-    
+
     private func updateJob(
         _ jobID: UUID,
         change: (inout UploadJob) -> Void
@@ -1655,16 +1713,16 @@ final class UploadQueueStore: ObservableObject {
         else {
             return
         }
-        
+
         var updatedJobs = jobs
         change(&updatedJobs[index])
-        
+
         try save(updatedJobs)
-        
+
         jobs = updatedJobs
         loadErrorMessage = nil
     }
-    
+
     private func load() {
         guard FileManager.default.fileExists(
             atPath: storageURL.path
@@ -1673,25 +1731,60 @@ final class UploadQueueStore: ObservableObject {
             recoveryMessage = nil
             return
         }
-        
+
         do {
             let data = try Data(
                 contentsOf: storageURL
             )
-            
+
             var decodedJobs = try JSONDecoder().decode(
                 [UploadJob].self,
                 from: data
             )
-            
+
             var changedRecoveredState = false
             var interruptedJobCount = 0
+            var resumedConversionJobCount = 0
             var unavailablePreparedBatchCount = 0
-            var interruptedConversionJobIDs:
-            [UUID] = []
-            
+            var fullyRecoveredBatchCount = 0
+            let recoveryDate = Date()
+
             for index in decodedJobs.indices {
-                switch decodedJobs[index].stage {
+                let originalStage =
+                    decodedJobs[index].stage
+
+                switch originalStage {
+                case .prepared,
+                        .converting,
+                        .readyToUpload,
+                        .uploading:
+                    let availablePreparedPhotos =
+                    ImageConversionService
+                        .availablePreparedPhotos(
+                            for: decodedJobs[index]
+                        )
+
+                    if availablePreparedPhotos
+                        != decodedJobs[index]
+                            .preparedPhotos
+                    {
+                        decodedJobs[index]
+                            .preparedPhotos =
+                                availablePreparedPhotos
+                        decodedJobs[index]
+                            .conversionProcessedCount =
+                                availablePreparedPhotos.count
+                        changedRecoveredState = true
+                    }
+
+                case .queued,
+                        .preparing,
+                        .completed,
+                        .failed:
+                    break
+                }
+
+                switch originalStage {
                 case .preparing:
                     decodedJobs[index].stage = .failed
                     decodedJobs[index].errorMessage =
@@ -1699,33 +1792,72 @@ final class UploadQueueStore: ObservableObject {
                         Folder preparation was interrupted. \
                         Try the job again.
                         """
-                    decodedJobs[index].updatedAt = Date()
+                    decodedJobs[index].updatedAt =
+                        recoveryDate
                     changedRecoveredState = true
                     interruptedJobCount += 1
-                    
+
                 case .converting:
-                    interruptedConversionJobIDs.append(
-                        decodedJobs[index].id
-                    )
+                    let recoveredCount =
+                        decodedJobs[index]
+                            .preparedPhotos.count
+
                     decodedJobs[index].stage = .prepared
-                    decodedJobs[index].preparedPhotos = []
                     decodedJobs[index]
-                        .conversionProcessedCount = 0
+                        .conversionProcessedCount =
+                            recoveredCount
                     decodedJobs[index]
                         .conversionCurrentFilename = nil
                     decodedJobs[index]
                         .conversionCompletedAt = nil
-                    decodedJobs[index]
-                        .conversionErrorMessage =
+
+                    if recoveredCount > 0 {
+                        decodedJobs[index]
+                            .conversionErrorMessage =
+                            """
+                            Batch conversion was interrupted after \
+                            \(recoveredCount) of \
+                            \(decodedJobs[index].photoCount) photos. \
+                            Continue the upload to resume with the \
+                            remaining photos.
+                            """
+                        if recoveredCount
+                            < decodedJobs[index].photoCount
+                        {
+                            resumedConversionJobCount += 1
+                        }
+                    } else {
+                        decodedJobs[index]
+                            .conversionErrorMessage =
                             """
                             Batch conversion was interrupted. \
                             Start the conversion again.
                             """
-                    decodedJobs[index].updatedAt = Date()
+                    }
+
+                    decodedJobs[index].updatedAt =
+                        recoveryDate
                     changedRecoveredState = true
                     interruptedJobCount += 1
-                    
+
                 case .uploading:
+                    if let currentRunStartedAt =
+                        decodedJobs[index]
+                            .uploadProgress
+                            .currentRunStartedAt
+                    {
+                        let lastSavedActivityDate = max(
+                            decodedJobs[index].updatedAt,
+                            currentRunStartedAt
+                        )
+
+                        stopActiveUploadTimer(
+                            &decodedJobs[index]
+                                .uploadProgress,
+                            at: lastSavedActivityDate
+                        )
+                    }
+
                     decodedJobs[index].stage =
                         .readyToUpload
                     decodedJobs[index]
@@ -1750,10 +1882,11 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .currentRunStartedAt = nil
-                    decodedJobs[index].updatedAt = Date()
+                    decodedJobs[index].updatedAt =
+                        recoveryDate
                     changedRecoveredState = true
                     interruptedJobCount += 1
-                    
+
                 case .queued,
                         .prepared,
                         .readyToUpload,
@@ -1761,17 +1894,22 @@ final class UploadQueueStore: ObservableObject {
                         .failed:
                     break
                 }
-                
-                if decodedJobs[index].stage == .readyToUpload,
-                    !ImageConversionService
-                        .preparedBatchIsAvailable(
-                            for: decodedJobs[index]
-                        )
+
+                if
+                    decodedJobs[index].stage
+                        == .readyToUpload,
+                    decodedJobs[index].preparedPhotos
+                        .count
+                        != decodedJobs[index].photoCount
                 {
+                    let recoveredCount =
+                        decodedJobs[index]
+                            .preparedPhotos.count
+
                     decodedJobs[index].stage = .prepared
-                    decodedJobs[index].preparedPhotos = []
                     decodedJobs[index]
-                        .conversionProcessedCount = 0
+                        .conversionProcessedCount =
+                            recoveredCount
                     decodedJobs[index]
                         .conversionCurrentFilename = nil
                     decodedJobs[index]
@@ -1779,9 +1917,11 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .conversionErrorMessage =
                         """
-                        The prepared JPEGs were not available after \
-                        relaunching PickPic. Convert the batch again. \
-                        Already-uploaded progress was preserved.
+                        PickPic recovered \(recoveredCount) of \
+                        \(decodedJobs[index].photoCount) prepared JPEGs. \
+                        Continue the upload to recreate only the \
+                        missing photos. Already-uploaded progress was \
+                        preserved.
                         """
                     decodedJobs[index]
                         .uploadProgress
@@ -1795,65 +1935,115 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .currentRunStartedAt = nil
-                    decodedJobs[index].updatedAt = Date()
+                    decodedJobs[index].updatedAt =
+                        recoveryDate
                     changedRecoveredState = true
                     unavailablePreparedBatchCount += 1
+                } else if
+                    decodedJobs[index].stage == .prepared,
+                    decodedJobs[index].photoCount > 0,
+                    decodedJobs[index].preparedPhotos
+                        .count
+                        == decodedJobs[index].photoCount
+                {
+                    decodedJobs[index].stage =
+                        .readyToUpload
+                    decodedJobs[index]
+                        .conversionProcessedCount =
+                            decodedJobs[index].photoCount
+                    decodedJobs[index]
+                        .conversionCurrentFilename = nil
+                    decodedJobs[index]
+                        .conversionCompletedAt =
+                            decodedJobs[index]
+                                .conversionCompletedAt
+                            ?? decodedJobs[index]
+                                .updatedAt
+                    decodedJobs[index]
+                        .conversionErrorMessage = nil
+                    decodedJobs[index].updatedAt =
+                        recoveryDate
+                    changedRecoveredState = true
+                    fullyRecoveredBatchCount += 1
                 }
             }
-            
+
             decodedJobs.sort { first, second in
                 first.createdAt > second.createdAt
             }
-            
+
             jobs = decodedJobs
             loadErrorMessage = nil
-            
+
             let unfinishedJobCount = decodedJobs.filter { job in
                 job.stage != .completed
             }
             .count
-            
+
+            var recoveryDetails: [String] = []
+
+            if resumedConversionJobCount > 0 {
+                recoveryDetails.append(
+                    """
+                    \(resumedConversionJobCount) interrupted \
+                    conversion\(resumedConversionJobCount == 1 ? "" : "s") \
+                    will resume from saved JPEGs.
+                    """
+                )
+            }
+
             if unavailablePreparedBatchCount > 0 {
-                recoveryMessage =
-                """
-                PickPic restored \(unfinishedJobCount) unfinished \
-                upload\(unfinishedJobCount == 1 ? "" : "s"). \
-                \(unavailablePreparedBatchCount) batch\(unavailablePreparedBatchCount == 1 ? "" : "es") \
-                must be converted again; completed upload progress \
-                was preserved.
-                """
-            } else if interruptedJobCount > 0 {
-                recoveryMessage =
-                """
-                PickPic restored \(unfinishedJobCount) unfinished \
-                upload\(unfinishedJobCount == 1 ? "" : "s"). \
-                Interrupted work is ready to continue.
-                """
-            } else if unfinishedJobCount > 0 {
-                recoveryMessage =
-                """
-                PickPic restored \(unfinishedJobCount) saved \
-                upload\(unfinishedJobCount == 1 ? "" : "s") \
-                from the previous session.
-                """
+                recoveryDetails.append(
+                    """
+                    \(unavailablePreparedBatchCount) \
+                    batch\(unavailablePreparedBatchCount == 1 ? "" : "es") \
+                    will recreate only missing JPEGs.
+                    """
+                )
+            }
+
+            if fullyRecoveredBatchCount > 0 {
+                recoveryDetails.append(
+                    """
+                    \(fullyRecoveredBatchCount) completed \
+                    conversion\(fullyRecoveredBatchCount == 1 ? "" : "s") \
+                    \(fullyRecoveredBatchCount == 1 ? "is" : "are") ready to upload.
+                    """
+                )
+            }
+
+            if unfinishedJobCount > 0 {
+                let baseMessage: String
+
+                if interruptedJobCount > 0
+                    || !recoveryDetails.isEmpty
+                {
+                    baseMessage =
+                        "Interrupted work was restored."
+                } else {
+                    baseMessage =
+                        "Saved work was restored."
+                }
+
+                recoveryMessage = ([
+                    """
+                    PickPic restored \(unfinishedJobCount) unfinished \
+                    upload\(unfinishedJobCount == 1 ? "" : "s").
+                    """,
+                    baseMessage
+                ] + recoveryDetails)
+                .joined(separator: " ")
             } else {
                 recoveryMessage = nil
             }
-            
+
             if changedRecoveredState {
                 try save(decodedJobs)
-            }
-            
-            for jobID in interruptedConversionJobIDs {
-                try? ImageConversionService
-                    .removePreparedPhotos(
-                        for: jobID
-                    )
             }
         } catch {
             jobs = []
             recoveryMessage = nil
-            
+
             loadErrorMessage =
                 """
                 The saved upload queue could not be read: \
@@ -1861,26 +2051,26 @@ final class UploadQueueStore: ObservableObject {
                 """
         }
     }
-    
+
     private func save(
         _ jobs: [UploadJob]
     ) throws {
         let directoryURL =
         storageURL.deletingLastPathComponent()
-        
+
         try FileManager.default.createDirectory(
             at: directoryURL,
             withIntermediateDirectories: true
         )
-        
+
         let encoder = JSONEncoder()
         encoder.outputFormatting = [
             .prettyPrinted,
             .sortedKeys
         ]
-        
+
         let data = try encoder.encode(jobs)
-        
+
         try data.write(
             to: storageURL,
             options: .atomic

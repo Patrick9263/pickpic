@@ -184,6 +184,8 @@ enum ImageConversionService {
             )
             
             return PreparedPhoto(
+                sourcePhotoID:
+                    sourcePhoto.id,
                 sourceFilename:
                     sourcePhoto.filename,
                 outputFilename:
@@ -230,34 +232,96 @@ enum ImageConversionService {
         )
     }
     
+    static func availablePreparedPhotos(
+        for job: UploadJob
+    ) -> [PreparedPhoto] {
+        var usedPreparedPhotoIDs: Set<String> = []
+        var recoveredPhotos: [PreparedPhoto] = []
+
+        for sourcePhoto in job.photos {
+            guard
+                let preparedPhoto = job.preparedPhotos
+                    .first(where: { preparedPhoto in
+                        guard
+                            !usedPreparedPhotoIDs
+                                .contains(
+                                    preparedPhoto.id
+                                )
+                        else {
+                            return false
+                        }
+
+                        if let sourcePhotoID =
+                            preparedPhoto.sourcePhotoID
+                        {
+                            return sourcePhotoID
+                                == sourcePhoto.id
+                        }
+
+                        return preparedPhoto
+                            .sourceFilename
+                            .caseInsensitiveCompare(
+                                sourcePhoto.filename
+                            ) == .orderedSame
+                    }),
+                preparedPhotoIsAvailable(
+                    preparedPhoto,
+                    for: job.id
+                )
+            else {
+                continue
+            }
+
+            let assignedPhoto = preparedPhoto
+                .assigned(to: sourcePhoto)
+
+            usedPreparedPhotoIDs.insert(
+                preparedPhoto.id
+            )
+            recoveredPhotos.append(assignedPhoto)
+        }
+
+        return recoveredPhotos
+    }
+
     static func preparedBatchIsAvailable(
         for job: UploadJob
     ) -> Bool {
+        guard job.photoCount > 0 else {
+            return false
+        }
+
+        return availablePreparedPhotos(
+            for: job
+        ).count == job.photoCount
+    }
+
+    private static func preparedPhotoIsAvailable(
+        _ photo: PreparedPhoto,
+        for jobID: UUID
+    ) -> Bool {
+        let fileURL = preparedPhotoURL(
+            jobID: jobID,
+            outputFilename: photo.outputFilename
+        )
+
+        let values = try? fileURL.resourceValues(
+            forKeys: [
+                .isRegularFileKey,
+                .fileSizeKey
+            ]
+        )
+
         guard
-            !job.preparedPhotos.isEmpty,
-            job.preparedPhotos.count
-                == job.photoCount
+            values?.isRegularFile == true,
+            let fileSize = values?.fileSize,
+            fileSize > 0
         else {
             return false
         }
-        
-        return job.preparedPhotos.allSatisfy { photo in
-            let fileURL = preparedPhotoURL(
-                jobID: job.id,
-                outputFilename:
-                    photo.outputFilename
-            )
-            
-            let values = try? fileURL.resourceValues(
-                forKeys: [
-                    .isRegularFileKey,
-                    .fileSizeKey
-                ]
-            )
-            
-            return values?.isRegularFile == true
-            && (values?.fileSize ?? 0) > 0
-        }
+
+        return photo.byteSize <= 0
+            || Int64(fileSize) == photo.byteSize
     }
     
     static func resetPreparedPhotos(
