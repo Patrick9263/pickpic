@@ -16,6 +16,8 @@ let package = Package(
         .iOSApplication(
             name: "PickPic",
             targets: ["AppModule"],
+            bundleIdentifier: "photos.pickpic.app",
+            teamIdentifier: "BQGJZNJFVU",
             displayVersion: "1.0",
             bundleVersion: "1",
             appIcon: .placeholder(icon: .images),
