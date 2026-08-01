@@ -41,6 +41,16 @@ struct SourcePhoto:
     let kind: Kind
     
     var id: String {
-        filename
+        let normalizedFilename = filename
+            .precomposedStringWithCanonicalMapping
+            .lowercased()
+
+        return [
+            "source-v1",
+            kind.rawValue,
+            String(byteSize),
+            normalizedFilename
+        ]
+        .joined(separator: "|")
     }
 }

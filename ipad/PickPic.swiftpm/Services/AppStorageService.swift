@@ -154,15 +154,19 @@ enum AppStorageService {
         
         let preparedJobIDs = Set(
             jobs.compactMap { job -> String? in
+                guard !job.preparedPhotos.isEmpty else {
+                    return nil
+                }
+
                 switch job.stage {
-                case .readyToUpload,
+                case .prepared,
+                        .converting,
+                        .readyToUpload,
                         .uploading:
                     return job.id.uuidString
                     
                 case .queued,
                         .preparing,
-                        .prepared,
-                        .converting,
                         .completed,
                         .failed:
                     return nil
