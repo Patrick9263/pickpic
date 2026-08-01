@@ -12,7 +12,8 @@ private enum UploadQueuePipelineError:
     case variantUploadFailed(
         filename: String,
         reason: String,
-        isNetworkRelated: Bool
+        isNetworkRelated: Bool,
+        retryWhenConnectivityReturns: Bool
     )
 
     var errorDescription: String? {
@@ -30,6 +31,7 @@ private enum UploadQueuePipelineError:
         case let .variantUploadFailed(
             filename,
             reason,
+            _,
             _
         ):
             return """
@@ -109,6 +111,8 @@ final class UploadQueueStore: ObservableObject {
     private let storageURL: URL
     private var runningPipelineJobIDs: Set<UUID> = []
     private var pauseRequestedJobIDs: Set<UUID> = []
+    private var activeConnectivityOperationIDs: [UUID: UUID] = [:]
+    private var isResumingWaitingForConnectivityJobs = false
 
     @Published private(set)
     var retryingEventIDs: Set<String> = []
@@ -277,6 +281,59 @@ final class UploadQueueStore: ObservableObject {
         }
     }
 
+    func resumeWaitingForConnectivityJobs(
+        using configuration: APIConfigurationStore
+    ) async {
+        guard !isResumingWaitingForConnectivityJobs else {
+            return
+        }
+
+        isResumingWaitingForConnectivityJobs = true
+
+        defer {
+            isResumingWaitingForConnectivityJobs = false
+        }
+
+        let jobIDs = jobs
+            .filter { job in
+                job.stage == .readyToUpload
+                && job.uploadProgress
+                    .isWaitingForConnectivity
+            }
+            .sorted { first, second in
+                first.createdAt < second.createdAt
+            }
+            .map(\.id)
+
+        for jobID in jobIDs {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await runUploadPipeline(
+                jobID: jobID,
+                using: configuration
+            )
+
+            guard
+                let refreshedJob = jobs.first(
+                    where: { job in
+                        job.id == jobID
+                    }
+                )
+            else {
+                continue
+            }
+
+            if refreshedJob.uploadProgress
+                .isWaitingForConnectivity
+                || refreshedJob.uploadProgress.isPaused
+            {
+                return
+            }
+        }
+    }
+
     func retryLastFailedPhoto(
         jobID: UUID,
         using configuration: APIConfigurationStore
@@ -358,6 +415,12 @@ final class UploadQueueStore: ObservableObject {
 
         runningPipelineJobIDs.subtract(jobIDs)
         pauseRequestedJobIDs.subtract(jobIDs)
+
+        for jobID in jobIDs {
+            activeConnectivityOperationIDs.removeValue(
+                forKey: jobID
+            )
+        }
 
         for job in removedJobs {
             try? ImageConversionService
@@ -982,6 +1045,8 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.lastFailure = nil
                 job.uploadProgress.pauseRequested = false
                 job.uploadProgress.pausedAt = nil
+                job.uploadProgress
+                    .waitingForConnectivitySince = nil
                 job.uploadProgress.currentRunStartedAt =
                     runStartedAt
 
@@ -1071,12 +1136,31 @@ final class UploadQueueStore: ObservableObject {
                 )
 
             do {
+                let connectivityOperationID =
+                    beginConnectivityOperation(
+                        for: jobID
+                    )
+
+                defer {
+                    finishConnectivityOperation(
+                        for: jobID,
+                        operationID:
+                            connectivityOperationID
+                    )
+                }
+
                 let outcome =
                 try await client
                     .uploadPreparedPhoto(
                         preparedPhoto,
                         from: fileURL,
-                        to: uploadingJob.eventID
+                        to: uploadingJob.eventID,
+                        connectivityCallbacks:
+                            connectivityCallbacks(
+                                for: jobID,
+                                operationID:
+                                    connectivityOperationID
+                            )
                     )
 
                 let isDuplicate: Bool
@@ -1144,6 +1228,8 @@ final class UploadQueueStore: ObservableObject {
                     job.uploadProgress.currentStep = nil
                     job.uploadProgress.errorMessage = nil
                     job.uploadProgress.lastFailure = nil
+                    job.uploadProgress
+                        .waitingForConnectivitySince = nil
                     job.updatedAt = Date()
                 }
             } catch {
@@ -1166,6 +1252,12 @@ final class UploadQueueStore: ObservableObject {
                         job.uploadProgress.pausedAt = nil
 
                         let stoppedAt = Date()
+                        job.uploadProgress
+                            .waitingForConnectivitySince =
+                                failure
+                                    .shouldRetryWhenConnectivityReturns
+                                ? stoppedAt
+                                : nil
                         stopActiveUploadTimer(
                             &job.uploadProgress,
                             at: stoppedAt
@@ -1226,6 +1318,8 @@ final class UploadQueueStore: ObservableObject {
                     job.uploadProgress.errorMessage = nil
                     job.uploadProgress.pauseRequested = false
                     job.uploadProgress.pausedAt = nil
+                    job.uploadProgress
+                        .waitingForConnectivitySince = nil
 
                     let stoppedAt = Date()
                     stopActiveUploadTimer(
@@ -1257,6 +1351,8 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.lastFailure = nil
                 job.uploadProgress.pauseRequested = false
                 job.uploadProgress.pausedAt = nil
+                job.uploadProgress
+                    .waitingForConnectivitySince = nil
                 stopActiveUploadTimer(
                     &job.uploadProgress,
                     at: completedAt
@@ -1348,10 +1444,29 @@ final class UploadQueueStore: ObservableObject {
         }
 
         do {
+            let connectivityOperationID =
+                beginConnectivityOperation(
+                    for: jobID
+                )
+
+            defer {
+                finishConnectivityOperation(
+                    for: jobID,
+                    operationID:
+                        connectivityOperationID
+                )
+            }
+
             _ = try await client.uploadImageVariants(
                 variants,
                 sourceKind: .original,
-                to: photoID
+                to: photoID,
+                connectivityCallbacks:
+                    connectivityCallbacks(
+                        for: jobID,
+                        operationID:
+                            connectivityOperationID
+                    )
             )
         } catch {
             let friendlyError = friendlyUploadError(
@@ -1364,7 +1479,10 @@ final class UploadQueueStore: ObservableObject {
                     filename: sourceFilename,
                     reason: friendlyError.message,
                     isNetworkRelated:
-                        friendlyError.isNetworkRelated
+                        friendlyError.isNetworkRelated,
+                    retryWhenConnectivityReturns:
+                        friendlyError
+                            .retryWhenConnectivityReturns
                 )
         }
     }
@@ -1381,6 +1499,8 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.currentStep = nil
                 job.uploadProgress.errorMessage = nil
                 job.uploadProgress.pauseRequested = false
+                job.uploadProgress
+                    .waitingForConnectivitySince = nil
 
                 let pausedAt = Date()
                 job.uploadProgress.pausedAt = pausedAt
@@ -1413,6 +1533,8 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.errorMessage = message
                 job.uploadProgress.pauseRequested = false
                 job.uploadProgress.pausedAt = nil
+                job.uploadProgress
+                    .waitingForConnectivitySince = nil
 
                 let stoppedAt = Date()
                 stopActiveUploadTimer(
@@ -1427,6 +1549,132 @@ final class UploadQueueStore: ObservableObject {
             Uploading stopped, but the queue could not be saved: \
             \(error.localizedDescription)
             """
+        }
+    }
+
+    private func beginConnectivityOperation(
+        for jobID: UUID
+    ) -> UUID {
+        let operationID = UUID()
+        activeConnectivityOperationIDs[jobID] =
+            operationID
+        return operationID
+    }
+
+    private func finishConnectivityOperation(
+        for jobID: UUID,
+        operationID: UUID
+    ) {
+        guard
+            activeConnectivityOperationIDs[jobID]
+                == operationID
+        else {
+            return
+        }
+
+        activeConnectivityOperationIDs.removeValue(
+            forKey: jobID
+        )
+    }
+
+    private func connectivityCallbacks(
+        for jobID: UUID,
+        operationID: UUID
+    ) -> UploadConnectivityCallbacks {
+        UploadConnectivityCallbacks(
+            onWaiting: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.markWaitingForConnectivity(
+                        jobID: jobID,
+                        operationID: operationID
+                    )
+                }
+            },
+            onResumed: { [weak self] in
+                DispatchQueue.main.async {
+                    self?.markConnectivityResumed(
+                        jobID: jobID,
+                        operationID: operationID
+                    )
+                }
+            }
+        )
+    }
+
+    private func markWaitingForConnectivity(
+        jobID: UUID,
+        operationID: UUID
+    ) {
+        guard
+            activeConnectivityOperationIDs[jobID]
+                == operationID,
+            jobs.first(where: { job in
+                job.id == jobID
+            })?.stage == .uploading
+        else {
+            return
+        }
+
+        let waitingSince = Date()
+
+        do {
+            try updateJob(jobID) { job in
+                guard
+                    !job.uploadProgress
+                        .isWaitingForConnectivity
+                else {
+                    return
+                }
+
+                stopActiveUploadTimer(
+                    &job.uploadProgress,
+                    at: waitingSince
+                )
+
+                job.uploadProgress
+                    .waitingForConnectivitySince =
+                        waitingSince
+                job.uploadProgress.errorMessage =
+                    "Waiting for an internet connection. PickPic will continue automatically."
+                job.updatedAt = waitingSince
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save the waiting-for-network state: \(error.localizedDescription)"
+        }
+    }
+
+    private func markConnectivityResumed(
+        jobID: UUID,
+        operationID: UUID
+    ) {
+        guard
+            activeConnectivityOperationIDs[jobID]
+                == operationID,
+            let job = jobs.first(where: { job in
+                job.id == jobID
+            }),
+            job.stage == .uploading,
+            job.uploadProgress
+                .isWaitingForConnectivity
+        else {
+            return
+        }
+
+        let resumedAt = Date()
+
+        do {
+            try updateJob(jobID) { job in
+                job.uploadProgress
+                    .waitingForConnectivitySince = nil
+                job.uploadProgress.errorMessage = nil
+                job.uploadProgress.currentRunStartedAt =
+                    resumedAt
+                job.updatedAt = resumedAt
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save the resumed upload state: \(error.localizedDescription)"
         }
     }
 
@@ -1457,6 +1705,7 @@ final class UploadQueueStore: ObservableObject {
         let step: UploadOperationStep
         let message: String
         let isNetworkRelated: Bool
+        let retryWhenConnectivityReturns: Bool
 
         if let pipelineError =
             error as? UploadQueuePipelineError
@@ -1469,15 +1718,19 @@ final class UploadQueueStore: ObservableObject {
                 step = .variantGeneration
                 message = reason
                 isNetworkRelated = false
+                retryWhenConnectivityReturns = false
 
             case let .variantUploadFailed(
                 _,
                 reason,
-                networkRelated
+                networkRelated,
+                retriesWhenConnected
             ):
                 step = .variantUpload
                 message = reason
                 isNetworkRelated = networkRelated
+                retryWhenConnectivityReturns =
+                    retriesWhenConnected
             }
         } else {
             step = .proofUpload
@@ -1490,6 +1743,9 @@ final class UploadQueueStore: ObservableObject {
             message = friendlyError.message
             isNetworkRelated =
                 friendlyError.isNetworkRelated
+            retryWhenConnectivityReturns =
+                friendlyError
+                    .retryWhenConnectivityReturns
         }
 
         return UploadFailure(
@@ -1497,7 +1753,9 @@ final class UploadQueueStore: ObservableObject {
             step: step,
             message: message,
             occurredAt: Date(),
-            isNetworkRelated: isNetworkRelated
+            isNetworkRelated: isNetworkRelated,
+            retryWhenConnectivityReturns:
+                retryWhenConnectivityReturns
         )
     }
 
@@ -1506,7 +1764,8 @@ final class UploadQueueStore: ObservableObject {
         sourceFilename: String
     ) -> (
         message: String,
-        isNetworkRelated: Bool
+        isNetworkRelated: Bool,
+        retryWhenConnectivityReturns: Bool
     ) {
         let urlError: URLError?
 
@@ -1527,6 +1786,7 @@ final class UploadQueueStore: ObservableObject {
         guard let urlError else {
             return (
                 error.localizedDescription,
+                false,
                 false
             )
         }
@@ -1536,8 +1796,10 @@ final class UploadQueueStore: ObservableObject {
             return (
                 """
                 No internet connection. PickPic saved the progress for \
-                \(sourceFilename). Reconnect to Wi-Fi and retry.
+                \(sourceFilename) and will retry automatically when a \
+                connection is available.
                 """,
+                true,
                 true
             )
 
@@ -1545,19 +1807,21 @@ final class UploadQueueStore: ObservableObject {
             return (
                 """
                 The connection was lost while uploading \
-                \(sourceFilename). PickPic saved the completed photos; \
-                reconnect and retry this one.
+                \(sourceFilename). PickPic saved the completed photos and \
+                will retry automatically when the network returns.
                 """,
+                true,
                 true
             )
 
         case .timedOut:
             return (
                 """
-                Uploading \(sourceFilename) timed out. Check the \
-                connection and retry this photo.
+                Uploading \(sourceFilename) timed out. PickPic saved the \
+                completed photos. Check the connection and retry this photo.
                 """,
-                true
+                true,
+                false
             )
 
         case .cannotConnectToHost,
@@ -1566,10 +1830,18 @@ final class UploadQueueStore: ObservableObject {
             return (
                 """
                 PickPic could not reach the server while uploading \
-                \(sourceFilename). Check the connection settings and \
-                network, then retry.
+                \(sourceFilename). Check the server address and connection, \
+                then retry this photo.
                 """,
-                true
+                true,
+                false
+            )
+
+        case .cancelled:
+            return (
+                "Uploading \(sourceFilename) was cancelled.",
+                false,
+                false
             )
 
         default:
@@ -1578,7 +1850,8 @@ final class UploadQueueStore: ObservableObject {
                 A network error stopped \(sourceFilename): \
                 \(urlError.localizedDescription)
                 """,
-                true
+                true,
+                false
             )
         }
     }
@@ -1841,6 +2114,11 @@ final class UploadQueueStore: ObservableObject {
                     interruptedJobCount += 1
 
                 case .uploading:
+                    let wasWaitingForConnectivity =
+                        decodedJobs[index]
+                            .uploadProgress
+                            .isWaitingForConnectivity
+
                     if let currentRunStartedAt =
                         decodedJobs[index]
                             .uploadProgress
@@ -1869,7 +2147,13 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .errorMessage =
+                        wasWaitingForConnectivity
+                        ? """
+                        PickPic was waiting for an internet connection \
+                        when it closed. It will retry automatically when \
+                        a connection is available.
                         """
+                        : """
                         Uploading was interrupted. \
                         Resume the remaining photos.
                         """
@@ -1882,6 +2166,13 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .currentRunStartedAt = nil
+
+                    if !wasWaitingForConnectivity {
+                        decodedJobs[index]
+                            .uploadProgress
+                            .waitingForConnectivitySince = nil
+                    }
+
                     decodedJobs[index].updatedAt =
                         recoveryDate
                     changedRecoveredState = true
@@ -1935,6 +2226,9 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index]
                         .uploadProgress
                         .currentRunStartedAt = nil
+                    decodedJobs[index]
+                        .uploadProgress
+                        .waitingForConnectivitySince = nil
                     decodedJobs[index].updatedAt =
                         recoveryDate
                     changedRecoveredState = true
