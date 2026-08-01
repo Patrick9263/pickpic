@@ -384,6 +384,18 @@ private struct UploadJobRow: View {
         }
         .count
     }
+
+    private var statusTitle: String {
+        job.uploadProgress.isWaitingForConnectivity
+        ? "Waiting for Network"
+        : job.stage.title
+    }
+
+    private var statusSystemImage: String {
+        job.uploadProgress.isWaitingForConnectivity
+        ? "wifi.exclamationmark"
+        : job.stage.systemImage
+    }
     
     var body: some View {
         VStack(
@@ -392,9 +404,9 @@ private struct UploadJobRow: View {
         ) {
             HStack {
                 Label(
-                    job.stage.title,
+                    statusTitle,
                     systemImage:
-                        job.stage.systemImage
+                        statusSystemImage
                 )
                 .font(.headline)
                 
@@ -705,7 +717,10 @@ private struct UploadJobRow: View {
                     spacing: 8
                 ) {
                     Label(
-                        "Upload stopped",
+                        job.uploadProgress
+                            .isWaitingForConnectivity
+                        ? "Waiting for Network"
+                        : "Upload stopped",
                         systemImage:
                             failure.isNetworkRelated
                             ? "wifi.exclamationmark"
@@ -730,13 +745,33 @@ private struct UploadJobRow: View {
                         onRetryFailedPhoto()
                     } label: {
                         Label(
-                            "Retry This Photo",
+                            job.uploadProgress
+                                .isWaitingForConnectivity
+                            ? "Retry Now"
+                            : "Retry This Photo",
                             systemImage: "arrow.clockwise"
                         )
                     }
                     .buttonStyle(.bordered)
                 }
                 .padding(.vertical, 4)
+            } else if
+                job.uploadProgress
+                    .isWaitingForConnectivity
+            {
+                Label(
+                    "Waiting for an internet connection",
+                    systemImage: "wifi.exclamationmark"
+                )
+                .font(.headline)
+                .foregroundStyle(.orange)
+
+                Text(
+                    job.uploadProgress.errorMessage
+                    ?? "PickPic will retry automatically when the connection is usable."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             } else if let errorMessage =
                 job.uploadProgress.errorMessage {
                 Text(errorMessage)
@@ -797,6 +832,10 @@ private struct UploadJobRow: View {
                 )
             }
             .buttonStyle(.bordered)
+            .disabled(
+                job.uploadProgress
+                    .isWaitingForConnectivity
+            )
             
         case .uploading:
             VStack(
@@ -831,37 +870,67 @@ private struct UploadJobRow: View {
                         .lineLimit(1)
                 }
 
-                Text(
-                    job.uploadProgress.currentStep?.title
-                    ?? "Uploading prepared JPEG…"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-                TimelineView(
-                    .periodic(
-                        from: .now,
-                        by: 1
+                if job.uploadProgress
+                    .isWaitingForConnectivity {
+                    Label(
+                        "Waiting for an internet connection",
+                        systemImage: "wifi.exclamationmark"
                     )
-                ) { context in
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+
+                    if let waitingSince =
+                        job.uploadProgress
+                            .waitingForConnectivitySince {
+                        Text(
+                            "Waiting since \(waitingSince.formatted(date: .omitted, time: .shortened)). PickPic will continue automatically when the connection is usable."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
                     uploadProgressDetails(
-                        at: context.date,
-                        showsEstimate: true
+                        at: Date(),
+                        showsEstimate: false
                     )
-                }
+                } else {
+                    Text(
+                        job.uploadProgress.currentStep?.title
+                        ?? "Uploading prepared JPEG…"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                Text(
-                    "Average speed includes the proof JPEG plus thumbnail and preview processing."
-                )
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                    TimelineView(
+                        .periodic(
+                            from: .now,
+                            by: 1
+                        )
+                    ) { context in
+                        uploadProgressDetails(
+                            at: context.date,
+                            showsEstimate: true
+                        )
+                    }
+
+                    Text(
+                        "Average speed includes the proof JPEG plus thumbnail and preview processing."
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
 
                 Button {
                     onPause()
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "pause.fill")
-                        Text("Pause Upload")
+                        Text(
+                            job.uploadProgress
+                                .isWaitingForConnectivity
+                            ? "Pause When Connected"
+                            : "Pause Upload"
+                        )
                     }
                 }
                 .buttonStyle(.bordered)
@@ -878,7 +947,10 @@ private struct UploadJobRow: View {
                             .controlSize(.small)
 
                         Text(
-                            "Finishing the current photo before pausing…"
+                            job.uploadProgress
+                                .isWaitingForConnectivity
+                            ? "PickPic will pause after the waiting photo finishes."
+                            : "Finishing the current photo before pausing…"
                         )
                     }
                     .font(.caption)

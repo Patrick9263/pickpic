@@ -34,6 +34,11 @@ struct UploadFailure:
     let message: String
     let occurredAt: Date
     let isNetworkRelated: Bool
+    var retryWhenConnectivityReturns: Bool? = nil
+
+    var shouldRetryWhenConnectivityReturns: Bool {
+        retryWhenConnectivityReturns == true
+    }
 }
 
 struct UploadProgress:
@@ -57,11 +62,12 @@ struct UploadProgress:
     var pauseRequested: Bool?
     var pausedAt: Date?
 
-    // Tracks active upload time without counting time spent paused or
-    // waiting between app launches. Optional values from older queues
-    // are migrated to zero during decoding.
+    // Tracks active upload time without counting time spent paused,
+    // waiting for connectivity, or between app launches. Optional
+    // values from older queues are migrated during decoding.
     var activeUploadDuration: TimeInterval
     var currentRunStartedAt: Date?
+    var waitingForConnectivitySince: Date?
 
     var isPauseRequested: Bool {
         pauseRequested == true
@@ -69,6 +75,10 @@ struct UploadProgress:
 
     var isPaused: Bool {
         pausedAt != nil
+    }
+
+    var isWaitingForConnectivity: Bool {
+        waitingForConnectivitySince != nil
     }
 
     init(
@@ -84,7 +94,8 @@ struct UploadProgress:
         pausedAt: Date? = nil,
         optimizedSourceFilenames: Set<String> = [],
         activeUploadDuration: TimeInterval = 0,
-        currentRunStartedAt: Date? = nil
+        currentRunStartedAt: Date? = nil,
+        waitingForConnectivitySince: Date? = nil
     ) {
         self.completedSourceFilenames =
         completedSourceFilenames
@@ -104,6 +115,8 @@ struct UploadProgress:
         activeUploadDuration
         self.currentRunStartedAt =
         currentRunStartedAt
+        self.waitingForConnectivitySince =
+        waitingForConnectivitySince
     }
 
     func activeDuration(
@@ -155,6 +168,7 @@ struct UploadProgress:
         case pausedAt
         case activeUploadDuration
         case currentRunStartedAt
+        case waitingForConnectivitySince
     }
 
     init(
@@ -249,6 +263,13 @@ struct UploadProgress:
             Date.self,
             forKey:
                 .currentRunStartedAt
+        )
+
+        waitingForConnectivitySince =
+        try container.decodeIfPresent(
+            Date.self,
+            forKey:
+                .waitingForConnectivitySince
         )
     }
 }

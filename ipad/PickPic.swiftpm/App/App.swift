@@ -1,4 +1,5 @@
 import Combine
+import Network
 import SwiftUI
 import UIKit
 
@@ -73,6 +74,41 @@ final class AppFeedbackStore:
     }
 }
 
+@MainActor
+final class NetworkMonitor: ObservableObject {
+    @Published private(set)
+    var isConnected = false
+
+    @Published private(set)
+    var revision = 0
+
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(
+        label: "photos.pickpic.app.network-monitor"
+    )
+
+    init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            let isConnected = path.status == .satisfied
+
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.isConnected = isConnected
+                self.revision += 1
+            }
+        }
+
+        monitor.start(queue: queue)
+    }
+
+    deinit {
+        monitor.cancel()
+    }
+}
+
 @main
 struct PickPicApp: App {
     @StateObject private var configuration =
@@ -86,6 +122,9 @@ struct PickPicApp: App {
 
     @StateObject private var feedback =
     AppFeedbackStore()
+
+    @StateObject private var networkMonitor =
+    NetworkMonitor()
 
     @State private var previousJobStages:
     [UUID: UploadStage] = [:]
@@ -102,6 +141,18 @@ struct PickPicApp: App {
                 .task {
                     await uploadQueue
                         .performStorageMaintenance()
+
+                    retryWaitingUploadsIfPossible()
+                }
+                .onChange(
+                    of: networkMonitor.revision
+                ) { _, _ in
+                    retryWaitingUploadsIfPossible()
+                }
+                .onChange(
+                    of: configuration.revision
+                ) { _, _ in
+                    retryWaitingUploadsIfPossible()
                 }
                 .task(id: automaticSyncTaskID) {
                     guard
@@ -155,6 +206,7 @@ struct PickPicApp: App {
                         updateIdleTimer(
                             for: uploadQueue.jobs
                         )
+                        retryWaitingUploadsIfPossible()
 
                     case .inactive,
                             .background:
@@ -166,6 +218,24 @@ struct PickPicApp: App {
                             .isIdleTimerDisabled = false
                     }
                 }
+        }
+    }
+
+    @MainActor
+    private func retryWaitingUploadsIfPossible() {
+        guard
+            scenePhase == .active,
+            configuration.isConfigured,
+            networkMonitor.isConnected
+        else {
+            return
+        }
+
+        Task {
+            await uploadQueue
+                .resumeWaitingForConnectivityJobs(
+                    using: configuration
+                )
         }
     }
 

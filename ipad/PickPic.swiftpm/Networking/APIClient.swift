@@ -1,11 +1,68 @@
 import Foundation
 
+struct UploadConnectivityCallbacks {
+    let onWaiting: () -> Void
+    let onResumed: () -> Void
+}
+
+private final class UploadConnectivityTaskDelegate:
+    NSObject,
+    URLSessionTaskDelegate,
+    @unchecked Sendable
+{
+    private let callbacks: UploadConnectivityCallbacks
+    private let lock = NSLock()
+    private var reportedWaiting = false
+
+    init(callbacks: UploadConnectivityCallbacks) {
+        self.callbacks = callbacks
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        taskIsWaitingForConnectivity task: URLSessionTask
+    ) {
+        lock.lock()
+        let shouldReport = !reportedWaiting
+        reportedWaiting = true
+        lock.unlock()
+
+        if shouldReport {
+            callbacks.onWaiting()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        lock.lock()
+        let shouldReport = reportedWaiting
+        reportedWaiting = false
+        lock.unlock()
+
+        if shouldReport {
+            callbacks.onResumed()
+        }
+    }
+}
+
 struct APIClient {
     let baseURL: URL
     let clientID: String
     let clientSecret: String
     
     private let session: URLSession
+    private let uploadSession: URLSession
+
+    private static let defaultUploadSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        return URLSession(configuration: configuration)
+    }()
     private static let filenameHeaderAllowed =
     CharacterSet(
         charactersIn:
@@ -16,12 +73,15 @@ struct APIClient {
         baseURL: URL,
         clientID: String,
         clientSecret: String,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        uploadSession: URLSession? = nil
     ) {
         self.baseURL = baseURL
         self.clientID = clientID
         self.clientSecret = clientSecret
         self.session = session
+        self.uploadSession =
+            uploadSession ?? Self.defaultUploadSession
     }
     
     func fetchEvents() async throws -> [PickPicEvent] {
@@ -220,7 +280,9 @@ struct APIClient {
     func uploadPreparedPhoto(
         _ preparedPhoto: PreparedPhoto,
         from fileURL: URL,
-        to eventID: String
+        to eventID: String,
+        connectivityCallbacks:
+        UploadConnectivityCallbacks? = nil
     ) async throws -> PhotoUploadOutcome {
         let fileValues = try? fileURL.resourceValues(
             forKeys: [
@@ -324,10 +386,18 @@ struct APIClient {
             )
         }
         
+        let connectivityDelegate =
+        connectivityCallbacks.map { callbacks in
+            UploadConnectivityTaskDelegate(
+                callbacks: callbacks
+            )
+        }
+
         let (data, response) =
-        try await session.upload(
+        try await uploadSession.upload(
             for: request,
-            fromFile: fileURL
+            fromFile: fileURL,
+            delegate: connectivityDelegate
         )
         
         guard
@@ -593,7 +663,9 @@ struct APIClient {
         _ variants: GeneratedFinalVariants,
         sourceKind:
         ServerPhotoVariantSourceKind,
-        to photoID: String
+        to photoID: String,
+        connectivityCallbacks:
+        UploadConnectivityCallbacks? = nil
     ) async throws -> FinalVariantUploadResponse {
         let multipartBody =
         try MultipartFormFileService
@@ -647,11 +719,19 @@ struct APIClient {
                 "CF-Access-Client-Secret"
         )
         
+        let connectivityDelegate =
+        connectivityCallbacks.map { callbacks in
+            UploadConnectivityTaskDelegate(
+                callbacks: callbacks
+            )
+        }
+
         let (data, response) =
-        try await session.upload(
+        try await uploadSession.upload(
             for: request,
             fromFile:
-                multipartBody.fileURL
+                multipartBody.fileURL,
+            delegate: connectivityDelegate
         )
         
         guard
