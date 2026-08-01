@@ -334,6 +334,293 @@ final class UploadQueueStore: ObservableObject {
         }
     }
 
+    func reconcileBackgroundTransfers(
+        using configuration: APIConfigurationStore,
+        resumeIfActive: Bool
+    ) async {
+        let activeContexts = await BackgroundUploadSession
+            .shared
+            .activeContexts()
+
+        let activeContextsByID = Dictionary(
+            uniqueKeysWithValues:
+                activeContexts.map { context in
+                    (context.id, context)
+                }
+        )
+
+        let savedTransfers = jobs.compactMap { job in
+            job.uploadProgress.activeBackgroundTransfer
+                .map { context in
+                    (job.id, context)
+                }
+        }
+
+        var jobIDsToResume: [UUID] = []
+
+        for (jobID, context) in savedTransfers {
+            guard
+                jobs.first(where: { job in
+                    job.id == jobID
+                })?
+                .uploadProgress
+                .activeBackgroundTransfer?
+                .id == context.id
+            else {
+                continue
+            }
+
+            if let activeContext =
+                activeContextsByID[context.id]
+            {
+                do {
+                    try updateJob(jobID) { job in
+                        job.stage = .uploading
+                        job.uploadProgress
+                            .activeBackgroundTransfer =
+                                activeContext
+                        job.uploadProgress.currentFilename =
+                            activeContext.sourceFilename
+                        job.uploadProgress.currentStep =
+                            activeContext.step
+                        job.uploadProgress
+                            .backgroundTransferNeedsReconciliation =
+                                false
+
+                        if !job.uploadProgress
+                            .isWaitingForConnectivity
+                        {
+                            job.uploadProgress.errorMessage =
+                                "Uploading with iPadOS in the background. You can lock the iPad or switch apps."
+                        }
+
+                        job.uploadProgress.currentRunStartedAt = nil
+                        job.updatedAt = Date()
+                    }
+                } catch {
+                    loadErrorMessage =
+                        "PickPic could not restore the background upload state: \(error.localizedDescription)"
+                }
+
+                if jobs.first(where: { job in
+                    job.id == jobID
+                })?.uploadProgress.isPauseRequested == true
+                {
+                    pauseRequestedJobIDs.insert(jobID)
+                }
+
+                continue
+            }
+
+            let shouldRemainPaused =
+                jobs.first(where: { job in
+                    job.id == jobID
+                })?.uploadProgress.isPauseRequested == true
+
+            do {
+                try updateJob(jobID) { job in
+                    guard
+                        job.uploadProgress
+                            .activeBackgroundTransfer?
+                            .id == context.id
+                    else {
+                        return
+                    }
+
+                    job.stage = .readyToUpload
+                    job.uploadProgress.activeBackgroundTransfer = nil
+                    job.uploadProgress.currentFilename = nil
+                    job.uploadProgress.currentStep = nil
+                    job.uploadProgress.pauseRequested = false
+                    job.uploadProgress.pausedAt =
+                        shouldRemainPaused ? Date() : nil
+                    job.uploadProgress.currentRunStartedAt = nil
+                    job.uploadProgress
+                        .backgroundTransferNeedsReconciliation =
+                            true
+                    job.uploadProgress.errorMessage =
+                        shouldRemainPaused
+                        ? "The background transfer ended while PickPic was closed. Uploading remains paused and will be safely verified when you resume."
+                        : "The saved background transfer is no longer active. PickPic will safely verify it and continue."
+                    job.updatedAt = Date()
+                }
+
+                if !shouldRemainPaused {
+                    jobIDsToResume.append(jobID)
+                }
+            } catch {
+                loadErrorMessage =
+                    "PickPic could not reconcile a background upload: \(error.localizedDescription)"
+            }
+        }
+
+        guard
+            resumeIfActive,
+            configuration.isConfigured
+        else {
+            return
+        }
+
+        for jobID in jobIDsToResume {
+            await runUploadPipeline(
+                jobID: jobID,
+                using: configuration
+            )
+        }
+    }
+
+    func handleRestoredBackgroundUploadCompletion(
+        _ completion: BackgroundUploadCompletion,
+        using configuration: APIConfigurationStore,
+        resumeIfActive: Bool
+    ) async {
+        let context = completion.context
+
+        guard
+            jobs.first(where: { job in
+                job.id == context.jobID
+            })?
+            .uploadProgress
+            .activeBackgroundTransfer?
+            .id == context.id
+        else {
+            return
+        }
+
+        let shouldRemainPaused =
+            jobs.first(where: { job in
+                job.id == context.jobID
+            })?.uploadProgress.isPauseRequested == true
+
+        let failureMessage: String?
+
+        if completion.succeeded {
+            failureMessage = nil
+        } else if completion
+            .shouldRetryWhenConnectivityReturns
+        {
+            failureMessage =
+                "The background upload lost its internet connection. PickPic will retry when connectivity returns."
+        } else if let statusCode = completion.statusCode {
+            failureMessage =
+                "The background upload returned HTTP \(statusCode). Open PickPic to retry this photo."
+        } else {
+            failureMessage = completion.errorMessage
+                ?? "The background upload ended before PickPic received a server response."
+        }
+
+        do {
+            try updateJob(context.jobID) { job in
+                guard
+                    job.uploadProgress
+                        .activeBackgroundTransfer?
+                        .id == context.id
+                else {
+                    return
+                }
+
+                job.stage = .readyToUpload
+                job.uploadProgress.activeBackgroundTransfer = nil
+                job.uploadProgress.currentFilename = nil
+                job.uploadProgress.currentStep = nil
+                job.uploadProgress.pauseRequested = false
+                job.uploadProgress.pausedAt =
+                    completion.succeeded
+                    && shouldRemainPaused
+                    ? completion.completedAt
+                    : nil
+                job.uploadProgress.currentRunStartedAt = nil
+                job.uploadProgress
+                    .waitingForConnectivitySince = nil
+
+                if completion.succeeded {
+                    job.uploadProgress.lastFailure = nil
+                    job.uploadProgress.errorMessage =
+                        shouldRemainPaused
+                        ? "A background transfer finished while PickPic was not running. Uploading is paused and will be safely verified when you resume."
+                        : "A background transfer finished while PickPic was not running. PickPic will verify it and continue without creating a duplicate."
+                    job.uploadProgress
+                        .backgroundTransferNeedsReconciliation =
+                            true
+                } else {
+                    let message = failureMessage
+                        ?? "The background upload failed."
+
+                    job.uploadProgress.errorMessage = message
+                    let retryForConnectivity =
+                        completion
+                            .shouldRetryWhenConnectivityReturns
+
+                    job.uploadProgress.lastFailure = UploadFailure(
+                        sourceFilename: context.sourceFilename,
+                        step: context.step,
+                        message: message,
+                        occurredAt: completion.completedAt,
+                        isNetworkRelated:
+                            retryForConnectivity,
+                        retryWhenConnectivityReturns:
+                            retryForConnectivity
+                    )
+                    job.uploadProgress
+                        .waitingForConnectivitySince =
+                            retryForConnectivity
+                            ? completion.completedAt
+                            : nil
+                    job.uploadProgress
+                        .backgroundTransferNeedsReconciliation =
+                            false
+                }
+
+                job.updatedAt = completion.completedAt
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save the completed background upload: \(error.localizedDescription)"
+            return
+        }
+
+        guard
+            completion.succeeded,
+            !shouldRemainPaused,
+            resumeIfActive,
+            configuration.isConfigured
+        else {
+            return
+        }
+
+        await runUploadPipeline(
+            jobID: context.jobID,
+            using: configuration
+        )
+    }
+
+    func resumeBackgroundReconciliationJobs(
+        using configuration: APIConfigurationStore
+    ) async {
+        let jobIDs = jobs
+            .filter { job in
+                job.stage == .readyToUpload
+                && !job.uploadProgress.isPaused
+                && job.uploadProgress
+                    .backgroundTransferNeedsReconciliation
+            }
+            .sorted { first, second in
+                first.createdAt < second.createdAt
+            }
+            .map(\.id)
+
+        for jobID in jobIDs {
+            guard !Task.isCancelled else {
+                return
+            }
+
+            await runUploadPipeline(
+                jobID: jobID,
+                using: configuration
+            )
+        }
+    }
+
     func retryLastFailedPhoto(
         jobID: UUID,
         using configuration: APIConfigurationStore
@@ -423,6 +710,14 @@ final class UploadQueueStore: ObservableObject {
         }
 
         for job in removedJobs {
+            if let context = job.uploadProgress
+                .activeBackgroundTransfer
+            {
+                BackgroundUploadSession.shared.cancel(
+                    contextID: context.id
+                )
+            }
+
             try? ImageConversionService
                 .removePreview(
                     for: job.id
@@ -1047,6 +1342,9 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.pausedAt = nil
                 job.uploadProgress
                     .waitingForConnectivitySince = nil
+                job.uploadProgress.activeBackgroundTransfer = nil
+                job.uploadProgress
+                    .backgroundTransferNeedsReconciliation = false
                 job.uploadProgress.currentRunStartedAt =
                     runStartedAt
 
@@ -1149,19 +1447,40 @@ final class UploadQueueStore: ObservableObject {
                     )
                 }
 
-                let outcome =
-                try await client
-                    .uploadPreparedPhoto(
-                        preparedPhoto,
-                        from: fileURL,
-                        to: uploadingJob.eventID,
-                        connectivityCallbacks:
-                            connectivityCallbacks(
-                                for: jobID,
-                                operationID:
-                                    connectivityOperationID
-                            )
-                    )
+                let outcome: PhotoUploadOutcome
+
+                do {
+                    let backgroundContext =
+                        try beginBackgroundTransfer(
+                            jobID: jobID,
+                            sourceFilename:
+                                preparedPhoto.sourceFilename,
+                            step: .proofUpload
+                        )
+
+                    defer {
+                        clearBackgroundTransfer(
+                            jobID: jobID,
+                            contextID:
+                                backgroundContext.id
+                        )
+                    }
+
+                    outcome = try await client
+                        .uploadPreparedPhoto(
+                            preparedPhoto,
+                            from: fileURL,
+                            to: uploadingJob.eventID,
+                            backgroundContext:
+                                backgroundContext,
+                            connectivityCallbacks:
+                                connectivityCallbacks(
+                                    for: jobID,
+                                    operationID:
+                                        connectivityOperationID
+                                )
+                        )
+                }
 
                 let isDuplicate: Bool
                 let photoID: String
@@ -1457,10 +1776,25 @@ final class UploadQueueStore: ObservableObject {
                 )
             }
 
+            let backgroundContext =
+                try beginBackgroundTransfer(
+                    jobID: jobID,
+                    sourceFilename: sourceFilename,
+                    step: .variantUpload
+                )
+
+            defer {
+                clearBackgroundTransfer(
+                    jobID: jobID,
+                    contextID: backgroundContext.id
+                )
+            }
+
             _ = try await client.uploadImageVariants(
                 variants,
                 sourceKind: .original,
                 to: photoID,
+                backgroundContext: backgroundContext,
                 connectivityCallbacks:
                     connectivityCallbacks(
                         for: jobID,
@@ -1549,6 +1883,60 @@ final class UploadQueueStore: ObservableObject {
             Uploading stopped, but the queue could not be saved: \
             \(error.localizedDescription)
             """
+        }
+    }
+
+    private func beginBackgroundTransfer(
+        jobID: UUID,
+        sourceFilename: String,
+        step: UploadOperationStep
+    ) throws -> BackgroundUploadContext {
+        let context = BackgroundUploadContext(
+            jobID: jobID,
+            sourceFilename: sourceFilename,
+            step: step
+        )
+
+        try updateJob(jobID) { job in
+            job.uploadProgress.activeBackgroundTransfer =
+                context
+            job.updatedAt = Date()
+        }
+
+        return context
+    }
+
+    private func clearBackgroundTransfer(
+        jobID: UUID,
+        contextID: UUID
+    ) {
+        guard
+            jobs.first(where: { job in
+                job.id == jobID
+            })?
+            .uploadProgress
+            .activeBackgroundTransfer?
+            .id == contextID
+        else {
+            return
+        }
+
+        do {
+            try updateJob(jobID) { job in
+                guard
+                    job.uploadProgress
+                        .activeBackgroundTransfer?
+                        .id == contextID
+                else {
+                    return
+                }
+
+                job.uploadProgress.activeBackgroundTransfer = nil
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not clear the saved background transfer: \(error.localizedDescription)"
         }
     }
 
@@ -2020,6 +2408,7 @@ final class UploadQueueStore: ObservableObject {
             var resumedConversionJobCount = 0
             var unavailablePreparedBatchCount = 0
             var fullyRecoveredBatchCount = 0
+            var restoredBackgroundTransferCount = 0
             let recoveryDate = Date()
 
             for index in decodedJobs.indices {
@@ -2136,30 +2525,6 @@ final class UploadQueueStore: ObservableObject {
                         )
                     }
 
-                    decodedJobs[index].stage =
-                        .readyToUpload
-                    decodedJobs[index]
-                        .uploadProgress
-                        .currentFilename = nil
-                    decodedJobs[index]
-                        .uploadProgress
-                        .currentStep = nil
-                    decodedJobs[index]
-                        .uploadProgress
-                        .errorMessage =
-                        wasWaitingForConnectivity
-                        ? """
-                        PickPic was waiting for an internet connection \
-                        when it closed. It will retry automatically when \
-                        a connection is available.
-                        """
-                        : """
-                        Uploading was interrupted. \
-                        Resume the remaining photos.
-                        """
-                    decodedJobs[index]
-                        .uploadProgress
-                        .pauseRequested = false
                     decodedJobs[index]
                         .uploadProgress
                         .pausedAt = nil
@@ -2167,16 +2532,72 @@ final class UploadQueueStore: ObservableObject {
                         .uploadProgress
                         .currentRunStartedAt = nil
 
-                    if !wasWaitingForConnectivity {
+                    if decodedJobs[index]
+                        .uploadProgress
+                        .activeBackgroundTransfer != nil
+                    {
+                        decodedJobs[index].stage =
+                            .uploading
                         decodedJobs[index]
                             .uploadProgress
-                            .waitingForConnectivitySince = nil
+                            .errorMessage =
+                            wasWaitingForConnectivity
+                            ? """
+                            PickPic restored a background upload that was \
+                            waiting for connectivity. iPadOS will continue \
+                            it when a connection is available.
+                            """
+                            : """
+                            PickPic is reconnecting to an iPadOS background \
+                            upload. You can continue using other apps.
+                            """
+                        decodedJobs[index]
+                            .uploadProgress
+                            .backgroundTransferNeedsReconciliation =
+                                false
+                        restoredBackgroundTransferCount += 1
+                    } else {
+                        decodedJobs[index]
+                            .uploadProgress
+                            .pauseRequested = false
+                        decodedJobs[index].stage =
+                            .readyToUpload
+                        decodedJobs[index]
+                            .uploadProgress
+                            .currentFilename = nil
+                        decodedJobs[index]
+                            .uploadProgress
+                            .currentStep = nil
+                        decodedJobs[index]
+                            .uploadProgress
+                            .errorMessage =
+                            wasWaitingForConnectivity
+                            ? """
+                            PickPic was waiting for an internet connection \
+                            when it closed. It will retry automatically when \
+                            a connection is available.
+                            """
+                            : """
+                            Uploading was interrupted. \
+                            Resume the remaining photos.
+                            """
+                        decodedJobs[index]
+                            .uploadProgress
+                            .backgroundTransferNeedsReconciliation =
+                                false
+
+                        if !wasWaitingForConnectivity {
+                            decodedJobs[index]
+                                .uploadProgress
+                                .waitingForConnectivitySince = nil
+                        }
+
+                        interruptedJobCount += 1
                     }
 
                     decodedJobs[index].updatedAt =
                         recoveryDate
                     changedRecoveredState = true
-                    interruptedJobCount += 1
 
                 case .queued,
                         .prepared,
@@ -2282,6 +2703,16 @@ final class UploadQueueStore: ObservableObject {
                     \(resumedConversionJobCount) interrupted \
                     conversion\(resumedConversionJobCount == 1 ? "" : "s") \
                     will resume from saved JPEGs.
+                    """
+                )
+            }
+
+            if restoredBackgroundTransferCount > 0 {
+                recoveryDetails.append(
+                    """
+                    \(restoredBackgroundTransferCount) iPadOS background \
+                    transfer\(restoredBackgroundTransferCount == 1 ? "" : "s") \
+                    will be reconnected.
                     """
                 )
             }

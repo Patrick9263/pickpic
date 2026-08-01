@@ -51,6 +51,7 @@
 		CD5F4D3F301C80320048327C /* LikedPhotosViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D07301C80320048327C /* LikedPhotosViewModel.swift */; };
 		CD5F4D40301C80320048327C /* EventListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D0E301C80320048327C /* EventListView.swift */; };
 		CD5F4D41301C80320048327C /* LikedPhotosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D11301C80320048327C /* LikedPhotosView.swift */; };
+		CD5F4D47301DE2720048327C /* BackgroundUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D46301DE2720048327C /* BackgroundUploadSession.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -99,6 +100,7 @@
 		CD5F4D12301C80320048327C /* PhotoImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoImportView.swift; sourceTree = "<group>"; };
 		CD5F4D13301C80320048327C /* PublishGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishGalleryView.swift; sourceTree = "<group>"; };
 		CD5F4D14301C80320048327C /* UploadQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueView.swift; sourceTree = "<group>"; };
+		CD5F4D46301DE2720048327C /* BackgroundUploadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadSession.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -184,6 +186,7 @@
 				CD5F4CF0301C80320048327C /* APIClient.swift */,
 				CD5F4CF1301C80320048327C /* APIModels.swift */,
 				CD5F4CF2301C80320048327C /* PickPicEnvironment.swift */,
+				CD5F4D46301DE2720048327C /* BackgroundUploadSession.swift */,
 			);
 			name = Networking;
 			path = PickPic.swiftpm/Networking;
@@ -357,6 +360,7 @@
 				CD5F4D32301C80320048327C /* FinalUploadsViewModel.swift in Sources */,
 				CD5F4D33301C80320048327C /* FolderBookmarkService.swift in Sources */,
 				CD5F4D34301C80320048327C /* FinalUploadsView.swift in Sources */,
+				CD5F4D47301DE2720048327C /* BackgroundUploadSession.swift in Sources */,
 				CD5F4D35301C80320048327C /* ContentView.swift in Sources */,
 				CD5F4D36301C80320048327C /* EventTitleEditorView.swift in Sources */,
 				CD5F4D37301C80320048327C /* MultipartFormFileService.swift in Sources */,

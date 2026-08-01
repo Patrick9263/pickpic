@@ -109,8 +109,30 @@ final class NetworkMonitor: ObservableObject {
     }
 }
 
+@MainActor
+final class PickPicAppDelegate:
+    NSObject,
+    UIApplicationDelegate
+{
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession
+            identifier: String,
+        completionHandler:
+            @escaping () -> Void
+    ) {
+        BackgroundUploadSession.shared.handleEvents(
+            for: identifier,
+            completionHandler: completionHandler
+        )
+    }
+}
+
 @main
 struct PickPicApp: App {
+    @UIApplicationDelegateAdaptor(PickPicAppDelegate.self)
+    private var appDelegate
+
     @StateObject private var configuration =
     APIConfigurationStore()
 
@@ -139,6 +161,28 @@ struct PickPicApp: App {
                 .environmentObject(eventFolders)
                 .environmentObject(feedback)
                 .task {
+                    BackgroundUploadSession.shared
+                        .setRestoredCompletionHandler { completion in
+                            Task { @MainActor in
+                                await uploadQueue
+                                    .handleRestoredBackgroundUploadCompletion(
+                                        completion,
+                                        using: configuration,
+                                        resumeIfActive:
+                                            UIApplication.shared
+                                                .applicationState
+                                                == .active
+                                    )
+                            }
+                        }
+
+                    await uploadQueue
+                        .reconcileBackgroundTransfers(
+                            using: configuration,
+                            resumeIfActive:
+                                scenePhase == .active
+                        )
+
                     await uploadQueue
                         .performStorageMaintenance()
 
@@ -232,6 +276,11 @@ struct PickPicApp: App {
         }
 
         Task {
+            await uploadQueue
+                .resumeBackgroundReconciliationJobs(
+                    using: configuration
+                )
+
             await uploadQueue
                 .resumeWaitingForConnectivityJobs(
                     using: configuration

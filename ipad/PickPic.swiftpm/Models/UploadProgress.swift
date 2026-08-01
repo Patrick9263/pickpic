@@ -68,6 +68,9 @@ struct UploadProgress:
     var activeUploadDuration: TimeInterval
     var currentRunStartedAt: Date?
     var waitingForConnectivitySince: Date?
+    var activeBackgroundTransfer:
+        BackgroundUploadContext?
+    var backgroundTransferNeedsReconciliation: Bool
 
     var isPauseRequested: Bool {
         pauseRequested == true
@@ -95,7 +98,11 @@ struct UploadProgress:
         optimizedSourceFilenames: Set<String> = [],
         activeUploadDuration: TimeInterval = 0,
         currentRunStartedAt: Date? = nil,
-        waitingForConnectivitySince: Date? = nil
+        waitingForConnectivitySince: Date? = nil,
+        activeBackgroundTransfer:
+            BackgroundUploadContext? = nil,
+        backgroundTransferNeedsReconciliation:
+            Bool = false
     ) {
         self.completedSourceFilenames =
         completedSourceFilenames
@@ -117,6 +124,10 @@ struct UploadProgress:
         currentRunStartedAt
         self.waitingForConnectivitySince =
         waitingForConnectivitySince
+        self.activeBackgroundTransfer =
+        activeBackgroundTransfer
+        self.backgroundTransferNeedsReconciliation =
+        backgroundTransferNeedsReconciliation
     }
 
     func activeDuration(
@@ -169,6 +180,8 @@ struct UploadProgress:
         case activeUploadDuration
         case currentRunStartedAt
         case waitingForConnectivitySince
+        case activeBackgroundTransfer
+        case backgroundTransferNeedsReconciliation
     }
 
     init(
@@ -271,5 +284,20 @@ struct UploadProgress:
             forKey:
                 .waitingForConnectivitySince
         )
+
+        activeBackgroundTransfer =
+        try container.decodeIfPresent(
+            BackgroundUploadContext.self,
+            forKey:
+                .activeBackgroundTransfer
+        )
+
+        backgroundTransferNeedsReconciliation =
+        try container.decodeIfPresent(
+            Bool.self,
+            forKey:
+                .backgroundTransferNeedsReconciliation
+        )
+        ?? false
     }
 }
