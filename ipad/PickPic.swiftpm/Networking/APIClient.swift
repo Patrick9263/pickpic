@@ -281,8 +281,10 @@ struct APIClient {
         _ preparedPhoto: PreparedPhoto,
         from fileURL: URL,
         to eventID: String,
+        backgroundContext:
+            BackgroundUploadContext? = nil,
         connectivityCallbacks:
-        UploadConnectivityCallbacks? = nil
+            UploadConnectivityCallbacks? = nil
     ) async throws -> PhotoUploadOutcome {
         let fileValues = try? fileURL.resourceValues(
             forKeys: [
@@ -386,18 +388,13 @@ struct APIClient {
             )
         }
         
-        let connectivityDelegate =
-        connectivityCallbacks.map { callbacks in
-            UploadConnectivityTaskDelegate(
-                callbacks: callbacks
-            )
-        }
-
         let (data, response) =
-        try await uploadSession.upload(
-            for: request,
+        try await uploadFile(
+            request: request,
             fromFile: fileURL,
-            delegate: connectivityDelegate
+            backgroundContext: backgroundContext,
+            connectivityCallbacks:
+                connectivityCallbacks
         )
         
         guard
@@ -662,10 +659,12 @@ struct APIClient {
     func uploadImageVariants(
         _ variants: GeneratedFinalVariants,
         sourceKind:
-        ServerPhotoVariantSourceKind,
+            ServerPhotoVariantSourceKind,
         to photoID: String,
+        backgroundContext:
+            BackgroundUploadContext? = nil,
         connectivityCallbacks:
-        UploadConnectivityCallbacks? = nil
+            UploadConnectivityCallbacks? = nil
     ) async throws -> FinalVariantUploadResponse {
         let multipartBody =
         try MultipartFormFileService
@@ -719,19 +718,13 @@ struct APIClient {
                 "CF-Access-Client-Secret"
         )
         
-        let connectivityDelegate =
-        connectivityCallbacks.map { callbacks in
-            UploadConnectivityTaskDelegate(
-                callbacks: callbacks
-            )
-        }
-
         let (data, response) =
-        try await uploadSession.upload(
-            for: request,
-            fromFile:
-                multipartBody.fileURL,
-            delegate: connectivityDelegate
+        try await uploadFile(
+            request: request,
+            fromFile: multipartBody.fileURL,
+            backgroundContext: backgroundContext,
+            connectivityCallbacks:
+                connectivityCallbacks
         )
         
         guard
@@ -797,6 +790,40 @@ struct APIClient {
         }
     }
     
+    private func uploadFile(
+        request: URLRequest,
+        fromFile fileURL: URL,
+        backgroundContext:
+            BackgroundUploadContext?,
+        connectivityCallbacks:
+            UploadConnectivityCallbacks?
+    ) async throws -> (Data, URLResponse) {
+        if let backgroundContext {
+            return try await BackgroundUploadSession
+                .shared
+                .upload(
+                    request: request,
+                    fromFile: fileURL,
+                    context: backgroundContext,
+                    connectivityCallbacks:
+                        connectivityCallbacks
+                )
+        }
+
+        let connectivityDelegate =
+            connectivityCallbacks.map { callbacks in
+                UploadConnectivityTaskDelegate(
+                    callbacks: callbacks
+                )
+            }
+
+        return try await uploadSession.upload(
+            for: request,
+            fromFile: fileURL,
+            delegate: connectivityDelegate
+        )
+    }
+
     func fetchEventPhotos(
         eventID: String
     ) async throws -> [ServerPhotoRecord] {

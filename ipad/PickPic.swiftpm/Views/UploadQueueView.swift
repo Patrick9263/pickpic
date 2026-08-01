@@ -871,6 +871,22 @@ private struct UploadJobRow: View {
                 }
 
                 if job.uploadProgress
+                    .activeBackgroundTransfer != nil
+                {
+                    Label(
+                        "iPadOS background upload active",
+                        systemImage: "arrow.up.circle.fill"
+                    )
+                    .font(.subheadline.weight(.semibold))
+
+                    Text(
+                        "The current file can continue uploading when PickPic is backgrounded or the iPad locks, subject to iPadOS scheduling."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                if job.uploadProgress
                     .isWaitingForConnectivity {
                     Label(
                         "Waiting for an internet connection",
