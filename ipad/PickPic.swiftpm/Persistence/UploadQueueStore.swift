@@ -2908,6 +2908,28 @@ final class UploadQueueStore: ObservableObject {
             totalUnitCount
         backgroundTask.progress.completedUnitCount =
             completedUnitCount
+        
+        let completed = Int(completedUnitCount)
+        let total = Int(totalUnitCount)
+
+        switch job.continuedProcessing?.operation {
+        case .prepareConvertAndUpload:
+            backgroundTask.updateTitle(
+                "Preparing \(job.eventTitle)",
+                subtitle:
+                    "\(completed) of \(total) photos converted"
+            )
+
+        case .reconvertOnly:
+            backgroundTask.updateTitle(
+                "Rebuilding \(job.eventTitle)",
+                subtitle:
+                    "\(completed) of \(total) photos reconverted"
+            )
+
+        case nil:
+            break
+        }
     }
 
     private func load() {

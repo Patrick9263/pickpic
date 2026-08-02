@@ -108,11 +108,11 @@ final class ContinuedProcessingTaskCoordinator:
         switch operation {
         case .prepareConvertAndUpload:
             title = "Preparing \(eventTitle)"
-            subtitle = "Converting photos for upload"
+            subtitle = "Waiting to start"
 
         case .reconvertOnly:
             title = "Rebuilding \(eventTitle)"
-            subtitle = "Recreating proof JPEGs"
+            subtitle = "Waiting to start"
         }
 
         let request = BGContinuedProcessingTaskRequest(
