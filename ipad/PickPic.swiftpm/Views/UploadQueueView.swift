@@ -54,6 +54,27 @@ struct UploadQueueView: View {
             }
         }
     }
+
+    private var eventHasContinuedProcessing: Bool {
+        eventJobs.contains { job in
+            job.continuedProcessing?
+                .isScheduledOrActive == true
+        }
+    }
+
+    private var eventHasForegroundOnlyProcessing: Bool {
+        eventJobs.contains { job in
+            guard
+                job.stage == .preparing
+                    || job.stage == .converting
+            else {
+                return false
+            }
+
+            return job.continuedProcessing?
+                .isScheduledOrActive != true
+        }
+    }
     
     var body: some View {
         List {
@@ -95,20 +116,30 @@ struct UploadQueueView: View {
                     .foregroundStyle(.orange)
                 }
             }
-            if eventHasActiveProcessing {
+            if eventHasContinuedProcessing {
+                Section {
+                    Label(
+                        "iPadOS background processing enabled",
+                        systemImage: "gearshape.arrow.triangle.2.circlepath"
+                    )
+                    .font(.headline)
+
+                    Text(
+                        "PickPic has requested continued processing for this user-started batch. It can keep preparing and converting when you switch apps or lock the iPad, subject to iPadOS scheduling."
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+            } else if eventHasForegroundOnlyProcessing {
                 Section {
                     Label(
                         "Keep PickPic open",
                         systemImage: "hourglass"
                     )
                     .font(.headline)
+
                     Text(
-                        """
-                        Folder preparation, conversion, and uploads \
-                        currently run in the foreground. Keep PickPic \
-                        open, and temporarily increase Auto-Lock for \
-                        longer batches.
-                        """
+                        "This operation is running without an iPadOS continued-processing grant. Keep PickPic open until it reaches the background-upload phase."
                     )
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -142,6 +173,7 @@ struct UploadQueueView: View {
                     .disabled(
                         isRetryingIncompleteJobs
                         || eventHasActiveProcessing
+                        || eventHasContinuedProcessing
                     )
 
                     Text(
@@ -156,13 +188,11 @@ struct UploadQueueView: View {
                 UploadJobRow(
                     job: job,
                     onContinue: {
-                        Task {
-                            await uploadQueue
-                                .runUploadPipeline(
-                                    jobID: job.id,
-                                    using: configuration
-                                )
-                        }
+                        uploadQueue
+                            .startUserInitiatedUploadPipeline(
+                                jobID: job.id,
+                                using: configuration
+                            )
                     },
                     onTestFirstPhoto: {
                         Task {
@@ -173,12 +203,10 @@ struct UploadQueueView: View {
                         }
                     },
                     onConvertAll: {
-                        Task {
-                            await uploadQueue
-                                .convertAllPhotos(
-                                    jobID: job.id
-                                )
-                        }
+                        uploadQueue
+                            .startUserInitiatedReconversion(
+                                jobID: job.id
+                            )
                     },
                     onPause: {
                         uploadQueue.requestPause(
@@ -197,7 +225,9 @@ struct UploadQueueView: View {
                     isRelinkingFolder:
                         relinkingJobID == job.id,
                     canRelinkFolder:
-                        !job.stage.isActiveOperation,
+                        !job.stage.isActiveOperation
+                        && job.continuedProcessing?
+                            .isScheduledOrActive != true,
                     onRelinkFolder: {
                         relinkingJobID = job.id
                         showingFolderRelinker = true
@@ -325,6 +355,8 @@ struct UploadQueueView: View {
                     job.stage == .preparing
                     || job.stage == .converting
                     || job.stage == .uploading
+                    || job.continuedProcessing?
+                        .isScheduledOrActive == true
                 }
             )
         else {
@@ -385,16 +417,47 @@ private struct UploadJobRow: View {
         .count
     }
 
+    private var isContinuedProcessingScheduledOrActive: Bool {
+        job.continuedProcessing?
+            .isScheduledOrActive == true
+    }
+
     private var statusTitle: String {
-        job.uploadProgress.isWaitingForConnectivity
-        ? "Waiting for Network"
-        : job.stage.title
+        if job.uploadProgress.isWaitingForConnectivity {
+            return "Waiting for Network"
+        }
+
+        switch job.continuedProcessing?.status {
+        case .scheduled:
+            return "Waiting for iPadOS"
+
+        case .active:
+            return "Background Processing"
+
+        case .deferred,
+                .foregroundFallback,
+                .none:
+            return job.stage.title
+        }
     }
 
     private var statusSystemImage: String {
-        job.uploadProgress.isWaitingForConnectivity
-        ? "wifi.exclamationmark"
-        : job.stage.systemImage
+        if job.uploadProgress.isWaitingForConnectivity {
+            return "wifi.exclamationmark"
+        }
+
+        switch job.continuedProcessing?.status {
+        case .scheduled:
+            return "clock.badge.checkmark"
+
+        case .active:
+            return "gearshape.arrow.triangle.2.circlepath"
+
+        case .deferred,
+                .foregroundFallback,
+                .none:
+            return job.stage.systemImage
+        }
     }
     
     var body: some View {
@@ -447,6 +510,7 @@ private struct UploadJobRow: View {
             .foregroundStyle(.secondary)
             
             folderAccessLabel
+            continuedProcessingNotice
             preparationStatus
         }
         .padding(.vertical, 5)
@@ -460,6 +524,71 @@ private struct UploadJobRow: View {
         }
     }
     
+    @ViewBuilder
+    private var continuedProcessingNotice: some View {
+        if let processing = job.continuedProcessing {
+            switch processing.status {
+            case .scheduled:
+                Label(
+                    "Waiting for iPadOS to begin",
+                    systemImage: "clock.badge.checkmark"
+                )
+                .font(.subheadline.weight(.semibold))
+
+                Text(
+                    processing.message
+                    ?? "The request is queued and will begin as soon as iPadOS permits it."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            case .active:
+                Label(
+                    "Continues in the background",
+                    systemImage: "gearshape.arrow.triangle.2.circlepath"
+                )
+                .font(.subheadline.weight(.semibold))
+
+                Text(
+                    processing.message
+                    ?? "You can switch apps or lock the iPad while PickPic reports conversion progress to iPadOS."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            case .deferred:
+                Label(
+                    "Background processing deferred",
+                    systemImage: "pause.circle"
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.orange)
+
+                Text(
+                    processing.message
+                    ?? "Saved conversions are ready to resume."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            case .foregroundFallback:
+                Label(
+                    "Background processing unavailable",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.orange)
+
+                Text(
+                    processing.message
+                    ?? "Keep PickPic open until conversion finishes."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     @ViewBuilder
     private var preparationStatus: some View {
         switch job.stage {
@@ -475,6 +604,9 @@ private struct UploadJobRow: View {
                 .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
+            .disabled(
+                isContinuedProcessingScheduledOrActive
+            )
             
             Button {
                 onTestFirstPhoto()
@@ -486,6 +618,9 @@ private struct UploadJobRow: View {
                 .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.bordered)
+            .disabled(
+                isContinuedProcessingScheduledOrActive
+            )
             
             Text(
                 """
@@ -561,6 +696,9 @@ private struct UploadJobRow: View {
                     .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(.bordered)
+                .disabled(
+                    isContinuedProcessingScheduledOrActive
+                )
             } else {
                 Button {
                     onTestFirstPhoto()
@@ -572,6 +710,9 @@ private struct UploadJobRow: View {
                     .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(.bordered)
+                .disabled(
+                    isContinuedProcessingScheduledOrActive
+                )
             }
             
             Button {
@@ -587,6 +728,9 @@ private struct UploadJobRow: View {
                 .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
+            .disabled(
+                isContinuedProcessingScheduledOrActive
+            )
             
             Text(
                 job.preparedPhotos.isEmpty
@@ -821,6 +965,9 @@ private struct UploadJobRow: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            .disabled(
+                isContinuedProcessingScheduledOrActive
+            )
             
             Button {
                 onConvertAll()
@@ -835,6 +982,7 @@ private struct UploadJobRow: View {
             .disabled(
                 job.uploadProgress
                     .isWaitingForConnectivity
+                || isContinuedProcessingScheduledOrActive
             )
             
         case .uploading:

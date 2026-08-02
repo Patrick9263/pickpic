@@ -35,6 +35,9 @@ struct UploadJob:
     var conversionCompletedAt: Date?
     
     var uploadProgress: UploadProgress
+
+    var continuedProcessing:
+        ContinuedProcessingState?
     
     var photoCount: Int {
         photos.count
@@ -196,7 +199,9 @@ struct UploadJob:
         conversionCompletedAt:
         Date? = nil,
         uploadProgress:
-        UploadProgress = .empty
+        UploadProgress = .empty,
+        continuedProcessing:
+        ContinuedProcessingState? = nil
     ) {
         self.id = id
         self.eventID = eventID
@@ -224,6 +229,8 @@ struct UploadJob:
         self.conversionCompletedAt =
         conversionCompletedAt
         self.uploadProgress = uploadProgress
+        self.continuedProcessing =
+        continuedProcessing
     }
     
     private enum CodingKeys:
@@ -249,6 +256,7 @@ struct UploadJob:
         case conversionStartedAt
         case conversionCompletedAt
         case uploadProgress
+        case continuedProcessing
     }
     
     init(
@@ -372,5 +380,11 @@ struct UploadJob:
             forKey: .uploadProgress
         )
         ?? .empty
+
+        continuedProcessing =
+        try container.decodeIfPresent(
+            ContinuedProcessingState.self,
+            forKey: .continuedProcessing
+        )
     }
 }

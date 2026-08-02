@@ -51,7 +51,9 @@
 		CD5F4D3F301C80320048327C /* LikedPhotosViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D07301C80320048327C /* LikedPhotosViewModel.swift */; };
 		CD5F4D40301C80320048327C /* EventListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D0E301C80320048327C /* EventListView.swift */; };
 		CD5F4D41301C80320048327C /* LikedPhotosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D11301C80320048327C /* LikedPhotosView.swift */; };
-		CD5F4D47301DE2720048327C /* BackgroundUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D46301DE2720048327C /* BackgroundUploadSession.swift */; };
+		CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */; };
+		CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */; };
+		CD5F4D47301C80320048327C /* ContinuedProcessingTaskCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -100,12 +102,27 @@
 		CD5F4D12301C80320048327C /* PhotoImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoImportView.swift; sourceTree = "<group>"; };
 		CD5F4D13301C80320048327C /* PublishGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishGalleryView.swift; sourceTree = "<group>"; };
 		CD5F4D14301C80320048327C /* UploadQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueView.swift; sourceTree = "<group>"; };
-		CD5F4D46301DE2720048327C /* BackgroundUploadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadSession.swift; sourceTree = "<group>"; };
+		CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadSession.swift; sourceTree = "<group>"; };
+		CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedProcessingState.swift; sourceTree = "<group>"; };
+		CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedProcessingTaskCoordinator.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		CDC9476A301EF80A0082FEC4 /* Exceptions for "PickPic" folder in "PickPic" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CD5F4C6C301C6DE20048327C /* PickPic */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		CD5F4C6F301C6DE20048327C /* PickPic */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CDC9476A301EF80A0082FEC4 /* Exceptions for "PickPic" folder in "PickPic" target */,
+			);
 			path = PickPic;
 			sourceTree = "<group>";
 		};
@@ -167,6 +184,7 @@
 			isa = PBXGroup;
 			children = (
 				CD5F4CE6301C80320048327C /* ConversionPreview.swift */,
+				CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */,
 				CD5F4CE7301C80320048327C /* EventFolderReference.swift */,
 				CD5F4CE8301C80320048327C /* FinalUploadCandidate.swift */,
 				CD5F4CE9301C80320048327C /* PickPicEvent.swift */,
@@ -184,9 +202,9 @@
 			isa = PBXGroup;
 			children = (
 				CD5F4CF0301C80320048327C /* APIClient.swift */,
+				CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */,
 				CD5F4CF1301C80320048327C /* APIModels.swift */,
 				CD5F4CF2301C80320048327C /* PickPicEnvironment.swift */,
-				CD5F4D46301DE2720048327C /* BackgroundUploadSession.swift */,
 			);
 			name = Networking;
 			path = PickPic.swiftpm/Networking;
@@ -208,6 +226,7 @@
 			isa = PBXGroup;
 			children = (
 				CD5F4CF9301C80320048327C /* AppStorageService.swift */,
+				CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */,
 				CD5F4CFA301C80320048327C /* EditedFolderService.swift */,
 				CD5F4CFB301C80320048327C /* FinalUploadFileService.swift */,
 				CD5F4CFC301C80320048327C /* FolderBookmarkService.swift */,
@@ -292,6 +311,11 @@
 					CD5F4C6C301C6DE20048327C = {
 						CreatedOnToolsVersion = 26.6;
 						LastSwiftMigration = 2660;
+						SystemCapabilities = {
+							com.apple.BackgroundModes = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -360,7 +384,6 @@
 				CD5F4D32301C80320048327C /* FinalUploadsViewModel.swift in Sources */,
 				CD5F4D33301C80320048327C /* FolderBookmarkService.swift in Sources */,
 				CD5F4D34301C80320048327C /* FinalUploadsView.swift in Sources */,
-				CD5F4D47301DE2720048327C /* BackgroundUploadSession.swift in Sources */,
 				CD5F4D35301C80320048327C /* ContentView.swift in Sources */,
 				CD5F4D36301C80320048327C /* EventTitleEditorView.swift in Sources */,
 				CD5F4D37301C80320048327C /* MultipartFormFileService.swift in Sources */,
@@ -374,6 +397,9 @@
 				CD5F4D3F301C80320048327C /* LikedPhotosViewModel.swift in Sources */,
 				CD5F4D40301C80320048327C /* EventListView.swift in Sources */,
 				CD5F4D41301C80320048327C /* LikedPhotosView.swift in Sources */,
+				CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */,
+				CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */,
+				CD5F4D47301C80320048327C /* ContinuedProcessingTaskCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -512,10 +538,13 @@
 				DEVELOPMENT_TEAM = BQGJZNJFVU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PickPic/Info.plist;
+				INFOPLIST_KEY_BGTaskSchedulerPermittedIdentifiers = "photos.pickpic.app.processing.*";
 				INFOPLIST_KEY_CFBundleDisplayName = PickPic;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = processing;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -549,10 +578,13 @@
 				DEVELOPMENT_TEAM = BQGJZNJFVU;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PickPic/Info.plist;
+				INFOPLIST_KEY_BGTaskSchedulerPermittedIdentifiers = "photos.pickpic.app.processing.*";
 				INFOPLIST_KEY_CFBundleDisplayName = PickPic;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIBackgroundModes = processing;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
