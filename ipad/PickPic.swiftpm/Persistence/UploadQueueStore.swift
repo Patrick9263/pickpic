@@ -1,3 +1,4 @@
+import BackgroundTasks
 import Combine
 import Foundation
 
@@ -46,6 +47,11 @@ private enum UploadQueuePipelineError:
 private struct RelinkedUploadFolder: Sendable {
     let name: String
     let bookmarkData: Data
+}
+
+private struct ActiveContinuedProcessingTask {
+    let backgroundTask: BGContinuedProcessingTask
+    let operationTask: Task<Void, Never>
 }
 
 private enum UploadFolderRelinkError: LocalizedError, Sendable {
@@ -113,6 +119,8 @@ final class UploadQueueStore: ObservableObject {
     private var pauseRequestedJobIDs: Set<UUID> = []
     private var activeConnectivityOperationIDs: [UUID: UUID] = [:]
     private var isResumingWaitingForConnectivityJobs = false
+    private var activeContinuedProcessingTasks:
+        [UUID: ActiveContinuedProcessingTask] = [:]
 
     @Published private(set)
     var retryingEventIDs: Set<String> = []
@@ -218,6 +226,406 @@ final class UploadQueueStore: ObservableObject {
             PickPic could not save the pause request: \
             \(error.localizedDescription)
             """
+        }
+    }
+
+    func startUserInitiatedUploadPipeline(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) {
+        guard
+            let job = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+
+        if job.stage == .readyToUpload {
+            Task {
+                await runUploadPipeline(
+                    jobID: jobID,
+                    using: configuration
+                )
+            }
+            return
+        }
+
+        guard
+            job.stage == .queued
+                || job.stage == .failed
+                || job.stage == .prepared
+        else {
+            return
+        }
+
+        submitContinuedProcessing(
+            job: job,
+            operation: .prepareConvertAndUpload,
+            configuration: configuration
+        )
+    }
+
+    func startUserInitiatedReconversion(
+        jobID: UUID
+    ) {
+        guard
+            let job = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            job.stage == .prepared
+                || job.stage == .readyToUpload
+        else {
+            return
+        }
+
+        submitContinuedProcessing(
+            job: job,
+            operation: .reconvertOnly,
+            configuration: nil
+        )
+    }
+
+    private func submitContinuedProcessing(
+        job: UploadJob,
+        operation: ContinuedProcessingOperation,
+        configuration: APIConfigurationStore?
+    ) {
+        guard
+            job.continuedProcessing?
+                .isScheduledOrActive != true
+        else {
+            return
+        }
+
+        let coordinator =
+            ContinuedProcessingTaskCoordinator.shared
+        let identifier = coordinator.identifier(
+            for: job.id
+        )
+        let requestedAt = Date()
+
+        do {
+            try updateJob(job.id) { job in
+                job.continuedProcessing =
+                    ContinuedProcessingState(
+                        identifier: identifier,
+                        operation: operation,
+                        requestedAt: requestedAt,
+                        status: .scheduled,
+                        startedAt: nil,
+                        endedAt: nil,
+                        message:
+                            "Waiting for iPadOS to start background processing."
+                    )
+                job.updatedAt = requestedAt
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save the background-processing request: \(error.localizedDescription)"
+            return
+        }
+
+        do {
+            try coordinator.submit(
+                jobID: job.id,
+                eventTitle: job.eventTitle,
+                operation: operation
+            ) { [weak self, weak configuration] task in
+                Task { @MainActor [weak self, weak configuration] in
+                    self?.handleContinuedProcessingTask(
+                        task,
+                        jobID: job.id,
+                        operation: operation,
+                        configuration: configuration
+                    )
+                }
+            }
+        } catch {
+            let fallbackMessage =
+                "iPadOS background processing was unavailable, so PickPic will continue while the app remains open. \(error.localizedDescription)"
+
+            do {
+                try updateJob(job.id) { job in
+                    guard
+                        job.continuedProcessing?
+                            .identifier == identifier
+                    else {
+                        return
+                    }
+
+                    job.continuedProcessing?.status =
+                        .foregroundFallback
+                    job.continuedProcessing?.message =
+                        fallbackMessage
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                    "PickPic could not save the foreground fallback state: \(error.localizedDescription)"
+            }
+
+            Task { @MainActor [weak self, weak configuration] in
+                guard let self else {
+                    return
+                }
+
+                let preparationSucceeded: Bool
+
+                switch operation {
+                case .prepareConvertAndUpload:
+                    preparationSucceeded = await self
+                        .runPreparationAndConversionPipeline(
+                            jobID: job.id
+                        )
+
+                case .reconvertOnly:
+                    preparationSucceeded = await self
+                        .runReconversionPipeline(
+                            jobID: job.id
+                        )
+                }
+
+                self.clearContinuedProcessingState(
+                    jobID: job.id,
+                    identifier: identifier
+                )
+
+                if
+                    preparationSucceeded,
+                    operation == .prepareConvertAndUpload,
+                    let configuration
+                {
+                    await self.runUploadPipeline(
+                        jobID: job.id,
+                        using: configuration
+                    )
+                }
+            }
+        }
+    }
+
+    private func handleContinuedProcessingTask(
+        _ backgroundTask: BGContinuedProcessingTask,
+        jobID: UUID,
+        operation: ContinuedProcessingOperation,
+        configuration: APIConfigurationStore?
+    ) {
+        let expectedIdentifier =
+            ContinuedProcessingTaskCoordinator
+                .shared
+                .identifier(for: jobID)
+
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.continuedProcessing?
+                .identifier == expectedIdentifier,
+            currentJob.continuedProcessing?
+                .operation == operation
+        else {
+            backgroundTask.setTaskCompleted(
+                success: false
+            )
+            return
+        }
+
+        let startedAt = Date()
+
+        do {
+            try updateJob(jobID) { job in
+                guard
+                    job.continuedProcessing?
+                        .operation == operation
+                else {
+                    return
+                }
+
+                job.continuedProcessing?.status = .active
+                job.continuedProcessing?.startedAt =
+                    startedAt
+                job.continuedProcessing?.message =
+                    "iPadOS background processing is active. You can switch apps or lock the iPad."
+                job.updatedAt = startedAt
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save the active background-processing state: \(error.localizedDescription)"
+        }
+
+        if let job = jobs.first(
+            where: { job in
+                job.id == jobID
+            }
+        ) {
+            updateContinuedProcessingProgress(
+                for: job,
+                task: backgroundTask,
+                completedUnitOverride:
+                    operation == .reconvertOnly
+                    ? 0
+                    : nil
+            )
+        }
+
+        let operationTask = Task { @MainActor [weak self, weak configuration] in
+            await Task.yield()
+
+            guard let self else {
+                backgroundTask.setTaskCompleted(
+                    success: false
+                )
+                return
+            }
+
+            let succeeded: Bool
+
+            switch operation {
+            case .prepareConvertAndUpload:
+                succeeded = await self
+                    .runPreparationAndConversionPipeline(
+                        jobID: jobID
+                    )
+
+            case .reconvertOnly:
+                succeeded = await self
+                    .runReconversionPipeline(
+                        jobID: jobID
+                    )
+            }
+
+            let wasCancelled = Task.isCancelled
+
+            if wasCancelled {
+                self.markContinuedProcessingDeferred(
+                    jobID: jobID,
+                    message:
+                        "Background processing stopped before the batch finished. Saved JPEGs were preserved; tap Continue to resume."
+                )
+            } else {
+                self.clearContinuedProcessingState(
+                    jobID: jobID,
+                    identifier: expectedIdentifier
+                )
+            }
+
+            if
+                succeeded,
+                !wasCancelled,
+                operation == .prepareConvertAndUpload,
+                let configuration
+            {
+                Task { @MainActor [weak self, weak configuration] in
+                    guard
+                        let self,
+                        let configuration
+                    else {
+                        return
+                    }
+
+                    await self.runUploadPipeline(
+                        jobID: jobID,
+                        using: configuration
+                    )
+                }
+
+                // Give the upload pipeline an opportunity to enqueue
+                // its first file-backed background URLSession task
+                // before this CPU-processing grant is completed.
+                await Task.yield()
+            }
+
+            self.activeContinuedProcessingTasks
+                .removeValue(forKey: jobID)
+
+            backgroundTask.setTaskCompleted(
+                success: succeeded && !wasCancelled
+            )
+        }
+
+        activeContinuedProcessingTasks[jobID] =
+            ActiveContinuedProcessingTask(
+                backgroundTask: backgroundTask,
+                operationTask: operationTask
+            )
+
+        backgroundTask.expirationHandler = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.expireContinuedProcessing(
+                    jobID: jobID
+                )
+            }
+        }
+    }
+
+    private func expireContinuedProcessing(
+        jobID: UUID
+    ) {
+        guard
+            let activeTask =
+                activeContinuedProcessingTasks[jobID]
+        else {
+            return
+        }
+
+        activeTask.operationTask.cancel()
+
+        markContinuedProcessingDeferred(
+            jobID: jobID,
+            message:
+                "iPadOS deferred this background task. PickPic preserved completed conversions and can resume from the next missing photo."
+        )
+    }
+
+    private func markContinuedProcessingDeferred(
+        jobID: UUID,
+        message: String
+    ) {
+        do {
+            try updateJob(jobID) { job in
+                guard
+                    job.continuedProcessing != nil
+                else {
+                    return
+                }
+
+                job.continuedProcessing?.status = .deferred
+                job.continuedProcessing?.endedAt = Date()
+                job.continuedProcessing?.message = message
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save the deferred background-processing state: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearContinuedProcessingState(
+        jobID: UUID,
+        identifier: String
+    ) {
+        do {
+            try updateJob(jobID) { job in
+                guard
+                    job.continuedProcessing?
+                        .identifier == identifier
+                else {
+                    return
+                }
+
+                job.continuedProcessing = nil
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not clear the background-processing state: \(error.localizedDescription)"
         }
     }
 
@@ -707,6 +1115,17 @@ final class UploadQueueStore: ObservableObject {
             activeConnectivityOperationIDs.removeValue(
                 forKey: jobID
             )
+
+            activeContinuedProcessingTasks[
+                jobID
+            ]?.operationTask.cancel()
+            activeContinuedProcessingTasks.removeValue(
+                forKey: jobID
+            )
+
+            ContinuedProcessingTaskCoordinator
+                .shared
+                .cancel(jobID: jobID)
         }
 
         for job in removedJobs {
@@ -2248,29 +2667,88 @@ final class UploadQueueStore: ObservableObject {
         jobID: UUID,
         using configuration: APIConfigurationStore
     ) async {
-        guard !runningPipelineJobIDs.contains(jobID) else {
+        guard beginPipeline(jobID: jobID) else {
             return
         }
-
-        runningPipelineJobIDs.insert(jobID)
 
         defer {
-            runningPipelineJobIDs.remove(jobID)
+            endPipeline(jobID: jobID)
         }
 
-        guard let startingStage = stage(for: jobID) else {
+        guard await prepareAndConvertWithinPipeline(
+            jobID: jobID
+        ) else {
             return
+        }
+
+        guard stage(for: jobID) == .readyToUpload else {
+            return
+        }
+
+        await uploadAllPhotos(
+            jobID: jobID,
+            using: configuration
+        )
+    }
+
+    private func runPreparationAndConversionPipeline(
+        jobID: UUID
+    ) async -> Bool {
+        guard beginPipeline(jobID: jobID) else {
+            return false
+        }
+
+        defer {
+            endPipeline(jobID: jobID)
+        }
+
+        return await prepareAndConvertWithinPipeline(
+            jobID: jobID
+        )
+    }
+
+    private func runReconversionPipeline(
+        jobID: UUID
+    ) async -> Bool {
+        guard beginPipeline(jobID: jobID) else {
+            return false
+        }
+
+        defer {
+            endPipeline(jobID: jobID)
+        }
+
+        guard
+            stage(for: jobID) == .prepared
+                || stage(for: jobID) == .readyToUpload
+        else {
+            return false
+        }
+
+        await convertAllPhotos(jobID: jobID)
+
+        return !Task.isCancelled
+            && stage(for: jobID) == .readyToUpload
+    }
+
+    private func prepareAndConvertWithinPipeline(
+        jobID: UUID
+    ) async -> Bool {
+        guard let startingStage = stage(for: jobID) else {
+            return false
         }
 
         switch startingStage {
         case .queued,
                 .failed:
             await prepare(jobID: jobID)
+
             guard !Task.isCancelled else {
-                return
+                return false
             }
+
             guard stage(for: jobID) == .prepared else {
-                return
+                return false
             }
 
         case .prepared,
@@ -2281,25 +2759,35 @@ final class UploadQueueStore: ObservableObject {
                 .converting,
                 .uploading,
                 .completed:
-            return
+            return false
         }
 
         if stage(for: jobID) == .prepared {
             await convertAllPhotos(jobID: jobID)
+
             guard !Task.isCancelled else {
-                return
-            }
-            guard stage(for: jobID) == .readyToUpload else {
-                return
+                return false
             }
         }
 
-        if stage(for: jobID) == .readyToUpload {
-            await uploadAllPhotos(
-                jobID: jobID,
-                using: configuration
-            )
+        return stage(for: jobID) == .readyToUpload
+    }
+
+    private func beginPipeline(
+        jobID: UUID
+    ) -> Bool {
+        guard !runningPipelineJobIDs.contains(jobID) else {
+            return false
         }
+
+        runningPipelineJobIDs.insert(jobID)
+        return true
+    }
+
+    private func endPipeline(
+        jobID: UUID
+    ) {
+        runningPipelineJobIDs.remove(jobID)
     }
 
     func runTestPreviewPipeline(
@@ -2382,6 +2870,66 @@ final class UploadQueueStore: ObservableObject {
 
         jobs = updatedJobs
         loadErrorMessage = nil
+
+        updateContinuedProcessingProgress(
+            for: updatedJobs[index]
+        )
+    }
+
+    private func updateContinuedProcessingProgress(
+        for job: UploadJob,
+        task: BGContinuedProcessingTask? = nil,
+        completedUnitOverride: Int? = nil
+    ) {
+        guard
+            let backgroundTask = task
+                ?? activeContinuedProcessingTasks[
+                    job.id
+                ]?.backgroundTask
+        else {
+            return
+        }
+
+        let totalUnitCount = Int64(
+            max(job.photoCount, 1)
+        )
+        let completedUnitCount = Int64(
+            min(
+                max(
+                    completedUnitOverride
+                    ?? job.conversionProcessedCount,
+                    0
+                ),
+                job.photoCount
+            )
+        )
+
+        backgroundTask.progress.totalUnitCount =
+            totalUnitCount
+        backgroundTask.progress.completedUnitCount =
+            completedUnitCount
+        
+        let completed = Int(completedUnitCount)
+        let total = Int(totalUnitCount)
+
+        switch job.continuedProcessing?.operation {
+        case .prepareConvertAndUpload:
+            backgroundTask.updateTitle(
+                "Preparing \(job.eventTitle)",
+                subtitle:
+                    "\(completed) of \(total) photos converted"
+            )
+
+        case .reconvertOnly:
+            backgroundTask.updateTitle(
+                "Rebuilding \(job.eventTitle)",
+                subtitle:
+                    "\(completed) of \(total) photos reconverted"
+            )
+
+        case nil:
+            break
+        }
     }
 
     private func load() {
@@ -2409,11 +2957,52 @@ final class UploadQueueStore: ObservableObject {
             var unavailablePreparedBatchCount = 0
             var fullyRecoveredBatchCount = 0
             var restoredBackgroundTransferCount = 0
+            var deferredContinuedProcessingCount = 0
             let recoveryDate = Date()
 
             for index in decodedJobs.indices {
                 let originalStage =
                     decodedJobs[index].stage
+
+                if var continuedProcessing =
+                    decodedJobs[index].continuedProcessing
+                {
+                    ContinuedProcessingTaskCoordinator
+                        .shared
+                        .cancel(
+                            jobID: decodedJobs[index].id
+                        )
+
+                    switch originalStage {
+                    case .readyToUpload,
+                            .uploading,
+                            .completed:
+                        decodedJobs[index]
+                            .continuedProcessing = nil
+                        changedRecoveredState = true
+
+                    case .queued,
+                            .preparing,
+                            .prepared,
+                            .converting,
+                            .failed:
+                        if continuedProcessing.status
+                            != .deferred
+                        {
+                            continuedProcessing.status =
+                                .deferred
+                            continuedProcessing.endedAt =
+                                recoveryDate
+                            continuedProcessing.message =
+                                "The previous iPadOS background-processing task ended. Saved work is ready to resume."
+                            decodedJobs[index]
+                                .continuedProcessing =
+                                    continuedProcessing
+                            changedRecoveredState = true
+                            deferredContinuedProcessingCount += 1
+                        }
+                    }
+                }
 
                 switch originalStage {
                 case .prepared,
@@ -2713,6 +3302,16 @@ final class UploadQueueStore: ObservableObject {
                     \(restoredBackgroundTransferCount) iPadOS background \
                     transfer\(restoredBackgroundTransferCount == 1 ? "" : "s") \
                     will be reconnected.
+                    """
+                )
+            }
+
+            if deferredContinuedProcessingCount > 0 {
+                recoveryDetails.append(
+                    """
+                    \(deferredContinuedProcessingCount) continued-processing
+                    task\(deferredContinuedProcessingCount == 1 ? "" : "s")
+                    can resume from saved progress.
                     """
                 )
             }
