@@ -1,4 +1,5 @@
 import { requireAdminAccess, type AccessEnvironment } from "./access.ts";
+import { scheduleUploadStartedNotification } from "./telegram.ts";
 
 interface CreateEventBody {
   title?: unknown;
@@ -475,6 +476,27 @@ function toPhotoRecord(
   };
 }
 
+async function openDraftEventForUpload(
+  env: Env,
+  eventId: string,
+): Promise<void> {
+  const updatedAt = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      UPDATE events
+      SET
+        status = 'ready',
+        updated_at = ?
+      WHERE
+        id = ?
+        AND status = 'draft'
+    `,
+  )
+    .bind(updatedAt, eventId)
+    .run();
+}
+
 async function eventExists(eventId: string, env: Env): Promise<boolean> {
   const event = await env.DB.prepare(
     `
@@ -865,6 +887,7 @@ async function createPhoto(
   request: Request,
   env: Env,
   eventId: string,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   if (!(await eventExists(eventId, env))) {
     return jsonResponse({ error: "Event not found." }, 404);
@@ -928,6 +951,9 @@ async function createPhoto(
   const duplicatePhoto = await findDuplicatePhoto(env, eventId, sourceSha256);
 
   if (duplicatePhoto) {
+    await openDraftEventForUpload(env, eventId);
+    scheduleUploadStartedNotification(env, ctx, eventId);
+
     return jsonResponse({
       duplicate: true,
       existingPhotoId: duplicatePhoto.id,
@@ -1025,6 +1051,9 @@ async function createPhoto(
     );
 
     if (duplicateAfterInsert) {
+      await openDraftEventForUpload(env, eventId);
+      scheduleUploadStartedNotification(env, ctx, eventId);
+
       return jsonResponse({
         duplicate: true,
         existingPhotoId: duplicateAfterInsert.id,
@@ -1039,6 +1068,9 @@ async function createPhoto(
       500,
     );
   }
+
+  await openDraftEventForUpload(env, eventId);
+  scheduleUploadStartedNotification(env, ctx, eventId);
 
   const photo: PhotoRecord = {
     id: photoId,
@@ -2653,7 +2685,7 @@ async function getPhotoVariantImage(
 }
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/admin/")) {
@@ -2719,7 +2751,7 @@ export default {
       const eventId = decodeURIComponent(eventPhotosMatch[1]);
 
       if (request.method === "POST") {
-        return createPhoto(request, env, eventId);
+        return createPhoto(request, env, eventId, ctx);
       }
 
       if (request.method === "GET") {
