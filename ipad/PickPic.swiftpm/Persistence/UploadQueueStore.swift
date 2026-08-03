@@ -431,8 +431,11 @@ final class UploadQueueStore: ObservableObject {
             currentJob.continuedProcessing?
                 .operation == operation
         else {
+            // The persisted job was already removed or reconciled. There is
+            // no remaining system work, so finish without leaving a stale
+            // failed item in iPadOS.
             backgroundTask.setTaskCompleted(
-                success: false
+                success: true
             )
             return
         }
@@ -479,8 +482,11 @@ final class UploadQueueStore: ObservableObject {
             await Task.yield()
 
             guard let self else {
+                // Per-photo checkpoints are already durable. If the store
+                // disappears during teardown, finish the system task cleanly
+                // and let launch recovery reconcile the saved queue.
                 backgroundTask.setTaskCompleted(
-                    success: false
+                    success: true
                 )
                 return
             }
@@ -545,8 +551,13 @@ final class UploadQueueStore: ObservableObject {
             self.activeContinuedProcessingTasks
                 .removeValue(forKey: jobID)
 
+            // PickPic records conversion failures, cancellation, and
+            // deferred work in the durable queue. Reporting those app-level
+            // outcomes as a BG task failure can leave a persistent failed
+            // system item that cannot be dismissed programmatically. Once
+            // the queue checkpoint is saved, the system task itself is done.
             backgroundTask.setTaskCompleted(
-                success: succeeded && !wasCancelled
+                success: true
             )
         }
 

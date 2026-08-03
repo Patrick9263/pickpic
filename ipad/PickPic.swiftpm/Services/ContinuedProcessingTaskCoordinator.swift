@@ -69,7 +69,10 @@ final class ContinuedProcessingTaskCoordinator:
                     let continuedTask =
                         task as? BGContinuedProcessingTask
                 else {
-                    task.setTaskCompleted(success: false)
+                    // A stale or mismatched scheduler callback has no
+                    // PickPic work left to perform. Complete it cleanly so
+                    // iPadOS does not retain a failed system task item.
+                    task.setTaskCompleted(success: true)
                     return
                 }
 
@@ -80,8 +83,11 @@ final class ContinuedProcessingTaskCoordinator:
                 self?.lock.unlock()
 
                 guard let handler else {
+                    // The job was cancelled or reconciled before this
+                    // callback arrived. Its durable state already lives in
+                    // UploadQueueStore, so dismiss the stale system task.
                     continuedTask.setTaskCompleted(
-                        success: false
+                        success: true
                     )
                     return
                 }
