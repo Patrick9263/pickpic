@@ -1,6 +1,11 @@
 import Combine
 import Foundation
 
+private struct CachedEventList: Codable {
+    let events: [PickPicEvent]
+    let savedAt: Date
+}
+
 @MainActor
 final class EventListViewModel:
     ObservableObject
@@ -25,6 +30,24 @@ final class EventListViewModel:
     @Published private(set)
     var errorMessage: String?
 
+    private let fileManager: FileManager
+    private let cacheURL: URL
+    private var cachedAt: Date?
+    private var hasCachedSnapshot = false
+
+    init(
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        cacheURL = AppStorageService.rootURL
+            .appendingPathComponent(
+                "events-cache.json",
+                isDirectory: false
+            )
+
+        restoreCachedEvents()
+    }
+
     func load(
         using configuration:
         APIConfigurationStore
@@ -34,15 +57,22 @@ final class EventListViewModel:
         }
 
         guard configuration.isConfigured else {
-            events = []
-            statisticsByEventID = [:]
-            statisticsFailedEventIDs = []
+            if hasCachedSnapshot {
+                errorMessage = cachedEventsMessage(
+                    detail:
+                        "Open Connection Settings to refresh from PickPic."
+                )
+            } else {
+                events = []
+                statisticsByEventID = [:]
+                statisticsFailedEventIDs = []
 
-            errorMessage =
-                """
-                Open Connection Settings to connect \
-                to PickPic.
-                """
+                errorMessage =
+                    """
+                    Open Connection Settings to connect \
+                    to PickPic.
+                    """
+            }
 
             return
         }
@@ -72,6 +102,8 @@ final class EventListViewModel:
             statisticsFailedEventIDs
                 .intersection(validEventIDs)
 
+            persistCachedEvents()
+
             isLoading = false
 
             await refreshStatistics(
@@ -79,8 +111,15 @@ final class EventListViewModel:
             )
         } catch {
             isLoading = false
-            errorMessage =
-            error.localizedDescription
+
+            if hasCachedSnapshot {
+                errorMessage = cachedEventsMessage(
+                    detail: error.localizedDescription
+                )
+            } else {
+                errorMessage =
+                error.localizedDescription
+            }
         }
     }
 
@@ -181,6 +220,7 @@ final class EventListViewModel:
         )
 
         errorMessage = nil
+        persistCachedEvents()
     }
 
     func replaceStatistics(
@@ -217,6 +257,7 @@ final class EventListViewModel:
         }
 
         events[index] = updatedEvent
+        persistCachedEvents()
     }
 
     func removeEvent(
@@ -230,5 +271,86 @@ final class EventListViewModel:
         statisticsFailedEventIDs.remove(
             eventID
         )
+
+        persistCachedEvents()
+    }
+
+    private func restoreCachedEvents() {
+        guard fileManager.fileExists(
+            atPath: cacheURL.path
+        ) else {
+            return
+        }
+
+        do {
+            let data = try Data(
+                contentsOf: cacheURL
+            )
+
+            let snapshot = try JSONDecoder()
+                .decode(
+                    CachedEventList.self,
+                    from: data
+                )
+
+            events = snapshot.events
+            cachedAt = snapshot.savedAt
+            hasCachedSnapshot = true
+        } catch {
+            print(
+                "Unable to restore cached events:",
+                error
+            )
+        }
+    }
+
+    private func persistCachedEvents() {
+        let savedAt = Date()
+        let snapshot = CachedEventList(
+            events: events,
+            savedAt: savedAt
+        )
+
+        do {
+            try fileManager.createDirectory(
+                at: AppStorageService.rootURL,
+                withIntermediateDirectories: true
+            )
+
+            let data = try JSONEncoder()
+                .encode(snapshot)
+
+            try data.write(
+                to: cacheURL,
+                options: .atomic
+            )
+
+            cachedAt = savedAt
+            hasCachedSnapshot = true
+        } catch {
+            print(
+                "Unable to persist cached events:",
+                error
+            )
+        }
+    }
+
+    private func cachedEventsMessage(
+        detail: String
+    ) -> String {
+        let savedDescription: String
+
+        if let cachedAt {
+            savedDescription = cachedAt.formatted(
+                date: .abbreviated,
+                time: .shortened
+            )
+        } else {
+            savedDescription = "an earlier session"
+        }
+
+        return """
+        Showing saved events from \(savedDescription). \(detail)
+        """
     }
 }
