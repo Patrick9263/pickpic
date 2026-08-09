@@ -1,7 +1,6 @@
 import type { GalleryPhotoGroup } from "./types";
 import type { GalleryPhotoRecord } from "../../types";
 import { useState } from "react";
-
 type GalleryGridProps = {
   group: GalleryPhotoGroup;
   togglingPhotoId: string | null;
@@ -13,7 +12,6 @@ type GalleryGridProps = {
   selectedPhotoIds: Set<string>;
   togglePhotoSelection(photo: GalleryPhotoRecord): void;
 };
-
 function GalleryGrid({
   group,
   togglingPhotoId,
@@ -32,14 +30,12 @@ function GalleryGrid({
     () => new Set(),
   );
   const [retryCounts, setRetryCounts] = useState<Record<string, number>>({});
-
   return (
     <div className="gallery-grid">
       {group.photos.map((photo) => {
         const isToggling = togglingPhotoId === photo.id;
         const isPriority = priorityPhotoIds.has(photo.id);
         const isSelected = selectedPhotoIds.has(photo.id);
-        const canSelect = photo.finalPhoto !== null;
         const displayedThumbnail = photo.finalPhoto
           ? photo.finalPhoto.variants.thumbnail
           : photo.variants.thumbnail;
@@ -56,7 +52,6 @@ function GalleryGrid({
             : gridImageUrl;
         const isLoaded = loadedPhotoIds.has(photo.id);
         const hasFailed = failedPhotoIds.has(photo.id);
-
         function retryImage(): void {
           setLoadedPhotoIds((currentIds) => {
             const nextIds = new Set(currentIds);
@@ -73,13 +68,11 @@ function GalleryGrid({
             [photo.id]: (currentCounts[photo.id] ?? 0) + 1,
           }));
         }
-
         return (
           <article
             className={[
               "gallery-photo-card",
               isSelected ? "gallery-photo-card-selected" : "",
-              isSelecting && !canSelect ? "gallery-photo-card-unavailable" : "",
             ]
               .filter(Boolean)
               .join(" ")}
@@ -94,26 +87,19 @@ function GalleryGrid({
                   retryImage();
                   return;
                 }
-
                 if (isSelecting) {
-                  if (canSelect) {
-                    togglePhotoSelection(photo);
-                  }
-
+                  togglePhotoSelection(photo);
                   return;
                 }
-
                 openPhoto(photo);
               }}
               aria-label={
                 hasFailed
                   ? `Retry loading ${photo.originalFilename}`
                   : isSelecting
-                    ? canSelect
-                      ? `${isSelected ? "Deselect" : "Select"} ${
-                          photo.originalFilename
-                        }`
-                      : `${photo.originalFilename} does not have a final image`
+                    ? `${isSelected ? "Deselect" : "Select"} ${
+                        photo.originalFilename
+                      }`
                     : `Open ${photo.originalFilename}`
               }
               aria-pressed={isSelecting ? isSelected : undefined}
@@ -131,7 +117,6 @@ function GalleryGrid({
                 {!isLoaded && !hasFailed && (
                   <div className="gallery-image-skeleton" aria-hidden="true" />
                 )}
-
                 {hasFailed ? (
                   <div className="gallery-image-error">
                     <span>Image unavailable</span>
@@ -172,22 +157,19 @@ function GalleryGrid({
                 )}
               </div>
             </button>
-
             {isSelecting && (
               <span
                 className={[
                   "gallery-selection-indicator",
                   isSelected ? "gallery-selection-indicator-selected" : "",
-                  !canSelect ? "gallery-selection-indicator-unavailable" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
                 aria-hidden="true"
               >
-                {isSelected ? "✓" : !canSelect ? "—" : ""}
+                {isSelected ? "✓" : ""}
               </span>
             )}
-
             {photo.finalPhoto && (
               <span className="gallery-final-badge">Final</span>
             )}
@@ -212,7 +194,6 @@ function GalleryGrid({
                 }
               >
                 <span aria-hidden="true">♥</span>
-
                 <span>{photo.heartCount}</span>
               </button>
             )}
