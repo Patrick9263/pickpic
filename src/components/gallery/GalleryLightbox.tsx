@@ -17,7 +17,6 @@ interface PointerStart {
   x: number;
   y: number;
 }
-
 const SWIPE_THRESHOLD = 60;
 const TAP_MOVEMENT_THRESHOLD = 12;
 const SIDE_TAP_RATIO = 0.3;
@@ -34,14 +33,12 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
     return false;
   }
-
   return Boolean(
     target.closest(
       "button, a, input, textarea, select, [contenteditable='true']",
     ),
   );
 }
-
 type GalleryLightboxProps = {
   selectedPhoto: GalleryPhotoRecord;
   closeLightbox: () => void;
@@ -65,7 +62,6 @@ type GalleryLightboxProps = {
   onNext: () => void;
   interactionsEnabled: boolean;
 };
-
 function GalleryLightbox({
   selectedPhoto,
   closeLightbox,
@@ -93,7 +89,6 @@ function GalleryLightbox({
   const pointerStartRef = useRef<PointerStart | null>(null);
   const navigationFrameRef = useRef<number | null>(null);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
-
   const runNavigation = useCallback((navigate: () => void): void => {
     /*
      * Collapse duplicate navigation callbacks that occur in the same frame.
@@ -103,7 +98,6 @@ function GalleryLightbox({
     if (navigationFrameRef.current !== null) {
       return;
     }
-
     navigate();
     navigationFrameRef.current = window.requestAnimationFrame(() => {
       navigationFrameRef.current = null;
@@ -121,7 +115,6 @@ function GalleryLightbox({
       runNavigation(onNext);
     }
   }, [canGoNext, onNext, runNavigation]);
-
   useEffect(() => {
     dialogRef.current?.focus({ preventScroll: true });
   }, []);
@@ -129,7 +122,6 @@ function GalleryLightbox({
   useEffect(() => {
     setIsImageLoaded(false);
   }, [selectedImageUrl]);
-
   useEffect(() => {
     const body = document.body;
     const documentElement = document.documentElement;
@@ -143,7 +135,6 @@ function GalleryLightbox({
       width: body.style.width,
     };
     const previousOverscrollBehavior = documentElement.style.overscrollBehavior;
-
     /*
      * position: fixed is more reliable than overflow: hidden alone on iOS
      * Safari and keeps the gallery from moving behind the lightbox.
@@ -155,7 +146,6 @@ function GalleryLightbox({
     body.style.top = `-${scrollPosition}px`;
     body.style.width = "100%";
     documentElement.style.overscrollBehavior = "none";
-
     return () => {
       body.style.left = previousBodyStyles.left;
       body.style.overflow = previousBodyStyles.overflow;
@@ -167,7 +157,6 @@ function GalleryLightbox({
       window.scrollTo(0, scrollPosition);
     };
   }, []);
-
   useEffect(
     () => () => {
       if (navigationFrameRef.current !== null) {
@@ -188,7 +177,6 @@ function GalleryLightbox({
       if (isTypingTarget(event.target)) {
         return;
       }
-
       if (event.key === "ArrowLeft" && canGoPrevious) {
         event.preventDefault();
         navigatePrevious();
@@ -206,7 +194,6 @@ function GalleryLightbox({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [canGoNext, canGoPrevious, closeLightbox, navigateNext, navigatePrevious]);
-
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
     pointerStartRef.current = null;
 
@@ -226,7 +213,6 @@ function GalleryLightbox({
 
     event.currentTarget.setPointerCapture(event.pointerId);
   }
-
   function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>): void {
     const start = pointerStartRef.current;
 
@@ -243,7 +229,6 @@ function GalleryLightbox({
     if (isInteractiveTarget(event.target)) {
       return;
     }
-
     const horizontalMovement = event.clientX - start.x;
     const verticalMovement = event.clientY - start.y;
     const absoluteHorizontal = Math.abs(horizontalMovement);
@@ -258,7 +243,6 @@ function GalleryLightbox({
       } else {
         navigatePrevious();
       }
-
       return;
     }
 
@@ -279,7 +263,6 @@ function GalleryLightbox({
       navigateNext();
     }
   }
-
   function handlePointerCancel(): void {
     pointerStartRef.current = null;
   }
@@ -301,7 +284,6 @@ function GalleryLightbox({
       tabIndex={-1}
     >
       <div className="lightbox-backdrop" aria-hidden="true" />
-
       <div className="lightbox-content">
         <div
           className="lightbox-image-stage"
@@ -329,7 +311,6 @@ function GalleryLightbox({
               />
             </svg>
           </button>
-
           <button
             className="lightbox-nav lightbox-nav-previous"
             type="button"
@@ -350,7 +331,6 @@ function GalleryLightbox({
               />
             </svg>
           </button>
-
           {!isImageLoaded && (
             <div
               className="lightbox-image-loading"
@@ -365,7 +345,6 @@ function GalleryLightbox({
             onLoad={() => setIsImageLoaded(true)}
             draggable={false}
           />
-
           <button
             className="lightbox-nav lightbox-nav-next"
             type="button"
@@ -387,12 +366,10 @@ function GalleryLightbox({
             </svg>
           </button>
         </div>
-
         <div className="lightbox-details">
           <p className="lightbox-position" aria-live="polite">
             {photoIndex + 1} of {photoCount}
           </p>
-
           {selectedPhoto.finalPhoto && (
             <div className="photo-version-controls">
               <div className="photo-version-toggle">
@@ -405,7 +382,6 @@ function GalleryLightbox({
                 >
                   Original
                 </button>
-
                 <button
                   type="button"
                   className={
@@ -416,7 +392,6 @@ function GalleryLightbox({
                   Final
                 </button>
               </div>
-
               <a
                 className="download-final-link"
                 href={selectedPhoto.finalPhoto.imageUrl}
@@ -427,11 +402,22 @@ function GalleryLightbox({
             </div>
           )}
 
+          {!selectedPhoto.finalPhoto && (
+            <div className="photo-version-controls">
+              <a
+                className="download-final-link"
+                href={selectedPhoto.imageUrl}
+                download={selectedPhoto.originalFilename}
+              >
+                Download photo
+              </a>
+            </div>
+          )}
+
           <div className="lightbox-footer">
             <p title={selectedPhoto.originalFilename}>
               {selectedPhoto.originalFilename}
             </p>
-
             <button
               className={`lightbox-heart-button ${
                 selectedPhoto.viewerHearted
@@ -446,7 +432,6 @@ function GalleryLightbox({
               aria-pressed={selectedPhoto.viewerHearted}
             >
               <span aria-hidden="true">♥</span>
-
               <span>
                 {!interactionsEnabled
                   ? "Gallery closed"
@@ -458,7 +443,6 @@ function GalleryLightbox({
               <span>{selectedPhoto.heartCount}</span>
             </button>
           </div>
-
           <GalleryComments
             selectedPhoto={selectedPhoto}
             commentActionId={commentActionId}
@@ -475,5 +459,4 @@ function GalleryLightbox({
     </div>
   );
 }
-
 export default GalleryLightbox;

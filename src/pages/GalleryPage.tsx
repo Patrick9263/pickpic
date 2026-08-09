@@ -13,7 +13,6 @@ import type {
   GalleryPhotoGroup,
   PhotoVersion,
 } from "../components/gallery/types";
-
 interface GalleryEvent {
   title: string;
   status: EventStatus;
@@ -41,7 +40,6 @@ interface GalleryPageProps {
 type GalleryGrouping = "all" | "day" | "location";
 
 type GalleryFilter = "all" | "liked" | "finals";
-
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
 
@@ -59,7 +57,6 @@ function sanitizeDownloadFilename(filename: string): string {
 
   return sanitized || "photo.jpg";
 }
-
 function createUniqueDownloadNames(filenames: string[]): string[] {
   const usedNames = new Set<string>();
 
@@ -72,7 +69,6 @@ function createUniqueDownloadNames(filenames: string[]): string[] {
 
     let candidate = sanitized;
     let suffix = 2;
-
     while (usedNames.has(candidate.toLowerCase())) {
       candidate = `${baseName} (${suffix})${extension}`;
       suffix += 1;
@@ -87,7 +83,6 @@ function formatApproximateByteSize(byteSize: number): string {
   if (byteSize < 1_000_000) {
     return `${Math.max(1, Math.round(byteSize / 1_000))} KB`;
   }
-
   if (byteSize < 1_000_000_000) {
     return `${new Intl.NumberFormat(undefined, {
       maximumFractionDigits: 1,
@@ -105,8 +100,7 @@ function createArchiveFilename(title: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80)
     .toLowerCase();
-
-  return `${sanitizedTitle || "pickpic-gallery"}-finals.zip`;
+  return `${sanitizedTitle || "pickpic-gallery"}-photos.zip`;
 }
 
 function getOrCreateVisitorToken(): string {
@@ -127,7 +121,6 @@ function formatDayGroupLabel(dayKey: string): string {
   if (dayKey === "unknown") {
     return "Date unavailable";
   }
-
   const [year, month, day] = dayKey.split("-").map(Number);
 
   return new Intl.DateTimeFormat(undefined, {
@@ -143,7 +136,6 @@ function comparePhotos(
     const captureDateComparison = first.capturedAt.localeCompare(
       second.capturedAt,
     );
-
     if (captureDateComparison !== 0) {
       return captureDateComparison;
     }
@@ -166,7 +158,6 @@ function comparePhotos(
   if (filenameComparison !== 0) {
     return filenameComparison;
   }
-
   // Final fallback if filenames are identical.
   return first.createdAt.localeCompare(second.createdAt);
 }
@@ -189,7 +180,6 @@ function buildGalleryGroups(
   }
 
   const groups = new Map<string, GalleryPhotoRecord[]>();
-
   for (const photo of sortedPhotos) {
     let key: string;
 
@@ -204,7 +194,6 @@ function buildGalleryGroups(
     } else {
       key = "unknown";
     }
-
     const groupPhotos = groups.get(key) ?? [];
 
     groupPhotos.push(photo);
@@ -220,7 +209,6 @@ function buildGalleryGroups(
         mapUrl: null,
       };
     }
-
     if (key === "unknown") {
       return {
         key,
@@ -239,7 +227,6 @@ function buildGalleryGroups(
       mapUrl: "https://www.google.com/maps?q=" + encodeURIComponent(key),
     };
   });
-
   return results.sort((first, second) => {
     if (first.key === "unknown") {
       return 1;
@@ -262,7 +249,6 @@ function getDefaultPreviewUrl(photo: GalleryPhotoRecord): string {
 
   return photo.variants.preview?.imageUrl ?? photo.imageUrl;
 }
-
 function GalleryPage({ shareToken }: GalleryPageProps) {
   const [visitorToken] = useState(getOrCreateVisitorToken);
   const [displayName, setDisplayName] = useState(
@@ -299,7 +285,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     if (!gallery) {
       return [];
     }
-
     switch (filter) {
       case "liked":
         return gallery.photos.filter((photo) => photo.heartCount > 0);
@@ -316,29 +301,24 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     () => buildGalleryGroups(filteredPhotos, grouping),
     [filteredPhotos, grouping],
   );
-
   const visiblePhotos = useMemo(
     () => photoGroups.flatMap((group) => group.photos),
     [photoGroups],
   );
 
-  const downloadableVisiblePhotos = useMemo(
-    () => visiblePhotos.filter((photo) => photo.finalPhoto !== null),
-    [visiblePhotos],
-  );
+  const downloadableVisiblePhotos = visiblePhotos;
 
   const allVisibleSelected =
     downloadableVisiblePhotos.length > 0 &&
     downloadableVisiblePhotos.every((photo) => selectedPhotoIds.has(photo.id));
-
   const selectedDownloadByteSize = useMemo(
     () =>
       visiblePhotos.reduce((totalByteSize, photo) => {
-        if (!selectedPhotoIds.has(photo.id) || !photo.finalPhoto) {
+        if (!selectedPhotoIds.has(photo.id)) {
           return totalByteSize;
         }
 
-        return totalByteSize + photo.finalPhoto.byteSize;
+        return totalByteSize + (photo.finalPhoto?.byteSize ?? photo.byteSize);
       }, 0),
     [selectedPhotoIds, visiblePhotos],
   );
@@ -347,7 +327,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     () => new Set(visiblePhotos.slice(0, 3).map((photo) => photo.id)),
     [visiblePhotos],
   );
-
   const interactionsEnabled = gallery?.event.status === "ready";
   const selectedPhotoIndex =
     selectedPhotoId === null
@@ -385,7 +364,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     ? getDefaultPreviewUrl(previousPhoto)
     : null;
   const nextPhotoImageUrl = nextPhoto ? getDefaultPreviewUrl(nextPhoto) : null;
-
   useEffect(() => {
     if (selectedPhotoIndex >= 0) {
       lastVisiblePhotoIndexRef.current = selectedPhotoIndex;
@@ -407,7 +385,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setCommentText("");
       return;
     }
-
     const replacementIndex = Math.min(
       lastVisiblePhotoIndexRef.current,
       visiblePhotos.length - 1,
@@ -424,7 +401,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     selectedPhotoIndex,
     visiblePhotos,
   ]);
-
   useEffect(() => {
     const imageUrls = [previousPhotoImageUrl, nextPhotoImageUrl].filter(
       (imageUrl): imageUrl is string => imageUrl !== null,
@@ -444,7 +420,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     async function loadGallery(): Promise<void> {
       setIsLoading(true);
       setLoadError(null);
-
       try {
         const body = await fetchJson<GalleryResponse>(
           `/api/galleries/${encodeURIComponent(shareToken)}`,
@@ -454,7 +429,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             },
           },
         );
-
         if (!isCancelled) {
           setGallery(body);
         }
@@ -479,7 +453,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       isCancelled = true;
     };
   }, [shareToken, visitorToken]);
-
   async function resolveDisplayName(): Promise<string | null> {
     const existingName = displayName.trim();
 
@@ -497,7 +470,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
     if (resolvedName.length === 0 || resolvedName.length > 80) {
       setActionError("Your name must be between 1 and 80 characters.");
-
       return null;
     }
 
@@ -515,7 +487,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       );
       return;
     }
-
     let resolvedDisplayName = displayName.trim();
     if (!photo.viewerHearted) {
       const resolvedName = await resolveDisplayName();
@@ -532,7 +503,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
     try {
       const method = photo.viewerHearted ? "DELETE" : "PUT";
-
       const body = await fetchJson<HeartResponse>(
         `/api/galleries/${encodeURIComponent(
           shareToken,
@@ -555,7 +525,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               : undefined,
         },
       );
-
       if (filter === "liked" && selectedPhotoId === photo.id) {
         if (body.heartCount === 0) {
           setRetainedLikedPhotoId(photo.id);
@@ -570,7 +539,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         if (!currentGallery) {
           return currentGallery;
         }
-
         return {
           ...currentGallery,
           photos: currentGallery.photos.map((currentPhoto) =>
@@ -594,7 +562,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setTogglingPhotoId(null);
     }
   }
-
   async function submitComment(
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
@@ -613,7 +580,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
     if (trimmedComment.length === 0 || trimmedComment.length > 1000) {
       setActionError("Your comment must be between 1 and 1000 characters.");
-
       return;
     }
 
@@ -625,7 +591,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
     setIsSubmittingComment(true);
     setActionError(null);
-
     try {
       const responseBody = await fetchJson<CommentResponse>(
         `/api/galleries/${encodeURIComponent(
@@ -643,7 +608,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           }),
         },
       );
-
       setGallery((currentGallery) => {
         if (!currentGallery) {
           return currentGallery;
@@ -661,7 +625,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           ),
         };
       });
-
       setCommentText("");
     } catch (caughtError) {
       setActionError(
@@ -680,7 +643,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
       return;
     }
-
     if (!selectedPhoto || !comment.viewerOwned) {
       return;
     }
@@ -701,7 +663,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
     setCommentActionId(comment.id);
     setActionError(null);
-
     try {
       const responseBody = await fetchJson<CommentResponse>(
         `/api/galleries/${encodeURIComponent(
@@ -718,12 +679,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           body: JSON.stringify({ body }),
         },
       );
-
       setGallery((currentGallery) => {
         if (!currentGallery) {
           return currentGallery;
         }
-
         return {
           ...currentGallery,
           photos: currentGallery.photos.map((photo) =>
@@ -750,7 +709,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setCommentActionId(null);
     }
   }
-
   async function deleteComment(
     comment: ViewerPhotoCommentRecord,
   ): Promise<void> {
@@ -770,7 +728,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
     setCommentActionId(comment.id);
     setActionError(null);
-
     try {
       await fetchJson<{
         deletedCommentId: string;
@@ -787,12 +744,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           },
         },
       );
-
       setGallery((currentGallery) => {
         if (!currentGallery) {
           return currentGallery;
         }
-
         return {
           ...currentGallery,
           photos: currentGallery.photos.map((photo) =>
@@ -817,7 +772,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setCommentActionId(null);
     }
   }
-
   function closeLightbox(): void {
     const photoIdToRestore = selectedPhotoId;
 
@@ -837,7 +791,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       });
     }
   }
-
   function openPhoto(photo: GalleryPhotoRecord): void {
     setRetainedLikedPhotoId(null);
     setSelectedPhotoId(photo.id);
@@ -852,7 +805,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setCommentText("");
     setActionError(null);
   }
-
   function showPreviousPhoto(): void {
     if (!previousPhoto) {
       return;
@@ -875,7 +827,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setActionError(null);
     setIsSelecting(true);
   }
-
   function exitSelectionMode(): void {
     setSelectedPhotoIds(new Set());
     setActionError(null);
@@ -883,10 +834,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   }
 
   function togglePhotoSelection(photo: GalleryPhotoRecord): void {
-    if (!photo.finalPhoto) {
-      return;
-    }
-
     setSelectedPhotoIds((currentIds) => {
       const nextIds = new Set(currentIds);
 
@@ -899,7 +846,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       return nextIds;
     });
   }
-
   function selectAllVisiblePhotos(): void {
     setSelectedPhotoIds(
       new Set(downloadableVisiblePhotos.map((photo) => photo.id)),
@@ -913,45 +859,46 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   async function downloadSelectedPhotos(): Promise<void> {
     if (!gallery || selectedPhotoIds.size === 0 || downloadProgress !== null) {
       if (selectedPhotoIds.size === 0) {
-        setActionError("Select at least one final photo to download.");
+        setActionError("Select at least one photo to download.");
       }
 
       return;
     }
-
-    const selectedPhotos = visiblePhotos.filter(
-      (photo) => selectedPhotoIds.has(photo.id) && photo.finalPhoto !== null,
+    const selectedPhotos = visiblePhotos.filter((photo) =>
+      selectedPhotoIds.has(photo.id),
     );
 
     if (selectedPhotos.length === 0) {
-      setActionError("The selected photos do not have final images.");
+      setActionError("The selected photos are no longer available.");
       return;
     }
 
     const entryNames = createUniqueDownloadNames(
-      selectedPhotos.map((photo) => photo.finalPhoto!.originalFilename),
+      selectedPhotos.map(
+        (photo) => photo.finalPhoto?.originalFilename ?? photo.originalFilename,
+      ),
     );
 
     setActionError(null);
     setDownloadProgress({ completed: 0, total: selectedPhotos.length });
-
     try {
       async function* createZipInputs() {
         for (const [index, photo] of selectedPhotos.entries()) {
-          const finalPhoto = photo.finalPhoto!;
-          const response = await fetch(finalPhoto.imageUrl, {
+          const downloadUrl = photo.finalPhoto?.imageUrl ?? photo.imageUrl;
+          const downloadFilename =
+            photo.finalPhoto?.originalFilename ?? photo.originalFilename;
+          const downloadDate = photo.finalPhoto?.uploadedAt ?? photo.createdAt;
+
+          const response = await fetch(downloadUrl, {
             cache: "no-store",
           });
 
           if (!response.ok || !response.body) {
-            throw new Error(
-              `Unable to download ${finalPhoto.originalFilename}.`,
-            );
+            throw new Error(`Unable to download ${downloadFilename}.`);
           }
-
           yield {
             name: entryNames[index],
-            lastModified: new Date(finalPhoto.uploadedAt),
+            lastModified: new Date(downloadDate),
             input: response.body,
           };
 
@@ -961,17 +908,15 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           });
         }
       }
-
       /*
        * Build the archive in the viewer's browser instead of inside the
        * Cloudflare Worker. The Worker Free CPU allowance is too small for
-       * calculating CRC-32 across a larger set of full-resolution JPEGs,
+       * calculating CRC-32 across a larger set of selected JPEGs,
        * which can terminate a streamed response and leave an invalid ZIP.
        */
       const zipBlob = await downloadZip(createZipInputs()).blob();
       const objectUrl = URL.createObjectURL(zipBlob);
       const link = document.createElement("a");
-
       link.href = objectUrl;
       link.download = createArchiveFilename(gallery.event.title);
 
@@ -990,7 +935,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setDownloadProgress(null);
     }
   }
-
   const selectedImageUrl = selectedPhoto
     ? selectedVersion === "final" && selectedPhoto.finalPhoto
       ? (selectedPhoto.finalPhoto.variants.preview?.imageUrl ??
@@ -1007,7 +951,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       </main>
     );
   }
-
   if (loadError || !gallery) {
     return (
       <main className="gallery-message">
@@ -1028,7 +971,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         <a className="gallery-brand" href="/">
           PickPic
         </a>
-
         <div className="gallery-heading">
           <p className="gallery-label">Shared gallery</p>
 
@@ -1041,17 +983,15 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 }`
               : `${filteredPhotos.length} of ${gallery.photos.length} photos`}
           </p>
-
           <p className="gallery-instructions">
             {interactionsEnabled
               ? "Heart a photo to request an edit or another revision."
-              : "This gallery is closed. Photos and final downloads remain available, but new edit requests and comments are disabled."}
+              : "This gallery is closed. Photos and downloads remain available, but new edit requests and comments are disabled."}
           </p>
 
           <div className="gallery-toolbar">
             <div className="gallery-toolbar-section">
               <span className="gallery-toolbar-label">Show</span>
-
               <div
                 className="gallery-filter-controls"
                 aria-label="Filter gallery photos"
@@ -1077,10 +1017,8 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 ))}
               </div>
             </div>
-
             <div className="gallery-toolbar-section">
               <span className="gallery-toolbar-label">Group</span>
-
               <div
                 className="gallery-grouping-controls"
                 aria-label="Group gallery photos"
@@ -1106,7 +1044,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 ))}
               </div>
             </div>
-
             <button
               className={[
                 "gallery-select-button",
@@ -1122,14 +1059,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </div>
         </div>
       </header>
-
       {!interactionsEnabled && (
         <div className="gallery-closed-banner" role="status">
           <strong>Gallery closed</strong>
 
-          <span>
-            You can continue viewing photos and downloading final images.
-          </span>
+          <span>You can continue viewing and downloading photos.</span>
         </div>
       )}
 
@@ -1137,7 +1071,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         {actionError && (
           <div className="gallery-action-error" role="alert">
             <span>{actionError}</span>
-
             <button type="button" onClick={() => setActionError(null)}>
               Dismiss
             </button>
@@ -1151,14 +1084,12 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 {selectedPhotoIds.size}{" "}
                 {selectedPhotoIds.size === 1 ? "photo" : "photos"} selected
               </strong>
-
               <span>
                 {selectedDownloadByteSize > 0
                   ? `Approx. ${formatApproximateByteSize(selectedDownloadByteSize)} download`
-                  : "Only final photos can be downloaded."}
+                  : "Selected photos are ready to download."}
               </span>
             </div>
-
             <div className="gallery-selection-actions">
               <button
                 className="gallery-select-all-button"
@@ -1174,7 +1105,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   ? "Clear selection"
                   : `Select all (${downloadableVisiblePhotos.length})`}
               </button>
-
               <button
                 className="gallery-download-button"
                 type="button"
@@ -1194,7 +1124,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             </div>
           </div>
         )}
-
         {gallery.photos.length === 0 ? (
           <div className="gallery-empty">
             <h2>No photos yet</h2>
@@ -1205,7 +1134,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             <h2>
               {filter === "liked" ? "No liked photos" : "No final photos"}
             </h2>
-
             <p>
               {filter === "liked"
                 ? "No photos have been liked yet."
@@ -1220,13 +1148,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   <header className="gallery-group-header">
                     <div>
                       <h2>{group.label}</h2>
-
                       <span>
                         {group.photos.length}{" "}
                         {group.photos.length === 1 ? "photo" : "photos"}
                       </span>
                     </div>
-
                     {group.mapUrl && (
                       <a href={group.mapUrl} target="_blank" rel="noreferrer">
                         View area
@@ -1250,7 +1176,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </div>
         )}
       </main>
-
       {selectedPhoto && (
         <GalleryLightbox
           selectedPhoto={selectedPhoto}
@@ -1279,5 +1204,4 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     </div>
   );
 }
-
 export default GalleryPage;
