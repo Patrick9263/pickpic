@@ -108,7 +108,30 @@ enum AppStorageService {
             isDirectory: true
         )
     }
-    
+
+    /*
+     * Holds the single RAW most recently handed to an external editor.
+     * The copy exists so the share sheet never has to read through a
+     * security-scoped folder bookmark, which the receiving app cannot
+     * rely on once the sheet has been dismissed.
+     */
+    static var editHandoffStagingURL: URL {
+        rootURL.appendingPathComponent(
+            "EditHandoffStaging",
+            isDirectory: true
+        )
+    }
+
+    static func ensureEditHandoffCapacity(
+        fileByteSize: Int64
+    ) throws {
+        try ensureCapacity(
+            requiredBytes:
+                max(fileByteSize, 0)
+                + finalProcessingReserve
+        )
+    }
+
     static func ensureProofBatchCapacity(
         photoCount: Int
     ) throws {
@@ -241,13 +264,29 @@ enum AppStorageService {
             inside: multipartUploadsURL,
             keepingNames: []
         )
-        
+
         removedItemCount +=
         multipartResult.removedItemCount
-        
+
         reclaimedBytes +=
         multipartResult.reclaimedBytes
-        
+
+        /*
+         * Runs at launch only, so it never removes a copy an editor is
+         * still reading from a handoff in progress.
+         */
+        let editHandoffResult =
+        try cleanupChildren(
+            inside: editHandoffStagingURL,
+            keepingNames: []
+        )
+
+        removedItemCount +=
+        editHandoffResult.removedItemCount
+
+        reclaimedBytes +=
+        editHandoffResult.reclaimedBytes
+
         return StorageCleanupResult(
             removedItemCount:
                 removedItemCount,

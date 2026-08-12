@@ -17,7 +17,10 @@ struct LikedPhotosView: View {
     LikedPhotosViewModel()
     
     @State private var showingFolderPicker = false
-    
+
+    @State private var dragErrorMessage: String?
+
+
     private var folderReference:
     EventFolderReference?
     {
@@ -60,6 +63,17 @@ struct LikedPhotosView: View {
                 Section {
                     Label(
                         loadErrorMessage,
+                        systemImage:
+                            "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.red)
+                }
+            }
+
+            if let dragErrorMessage {
+                Section {
+                    Label(
+                        dragErrorMessage,
                         systemImage:
                             "exclamationmark.triangle"
                     )
@@ -248,9 +262,7 @@ struct LikedPhotosView: View {
     }
 
     private var likedPhotosSection: some View {
-        Section(
-            "Liked Photos (\(viewModel.likedPhotos.count))"
-        ) {
+        Section {
             if
                 viewModel.isLoading,
                 viewModel.photos.isEmpty
@@ -271,12 +283,56 @@ struct LikedPhotosView: View {
                 ForEach(
                     viewModel.likedPhotos
                 ) { photo in
-                    LikedPhotoRow(photo: photo)
+                    /*
+                     * Only a row backed by an event folder is
+                     * draggable. Attaching the gesture regardless lets
+                     * the row lift while carrying an empty provider,
+                     * which reads as the drop target silently refusing
+                     * a perfectly good file.
+                     */
+                    if folderReference != nil {
+                        LikedPhotoRow(
+                            photo: photo,
+                            isDraggable: true
+                        )
+                        .onDrag {
+                            dragProvider(for: photo)
+                        }
+                    } else {
+                        LikedPhotoRow(
+                            photo: photo,
+                            isDraggable: false
+                        )
+                    }
+                }
+            }
+        } header: {
+            Text(
+                "Liked Photos (\(viewModel.likedPhotos.count))"
+            )
+        } footer: {
+            if !viewModel.likedPhotos.isEmpty {
+                if folderReference == nil {
+                    Text(
+                        """
+                        Select this event's folder above to drag \
+                        these photos into an editor.
+                        """
+                    )
+                } else {
+                    Text(
+                        """
+                        Open an editor beside PickPic, then drag \
+                        a photo into it. Save the result into \
+                        the event's Edited folder and PickPic \
+                        uploads it as the final.
+                        """
+                    )
                 }
             }
         }
     }
-    
+
     private func syncResultSection(
         _ result: ToEditSyncResult
     ) -> some View {
@@ -400,6 +456,108 @@ struct LikedPhotosView: View {
         )
     }
 
+    /*
+     * Supplies the RAW to a drop target such as an editor running in
+     * Split View.
+     *
+     * Staging happens here, synchronously, rather than inside an
+     * asynchronous file-representation handler. That handler runs after
+     * the drop, so anything it throws surfaces nowhere and the drop just
+     * silently does nothing. Doing the copy up front costs a moment when
+     * the drag starts but makes failures visible.
+     *
+     * NSItemProvider(contentsOf:) registers the file the same way the
+     * Files app does, deriving the type from the URL, instead of
+     * hand-rolling a representation a drop target might not accept.
+     */
+    /*
+     * Most specific first: a target picking the first type it
+     * understands should get the truest description of the file.
+     * The generic image types are the fallback that lets an editor
+     * accept a RAW this system has no declaration for.
+     */
+    static func dragTypeIdentifiers(
+        for filename: String
+    ) -> [String] {
+        var identifiers: [String] = []
+
+        let fileExtension =
+        (filename as NSString).pathExtension
+
+        if
+            let resolved = UTType(
+                filenameExtension: fileExtension
+            )?.identifier
+        {
+            identifiers.append(resolved)
+        }
+
+        identifiers.append(UTType.rawImage.identifier)
+        identifiers.append(UTType.image.identifier)
+
+        var seen: Set<String> = []
+
+        return identifiers.filter { identifier in
+            seen.insert(identifier).inserted
+        }
+    }
+
+    private func dragProvider(
+        for photo: ServerPhotoRecord
+    ) -> NSItemProvider {
+        guard let folderReference else {
+            return NSItemProvider()
+        }
+
+        do {
+            let stagedURL =
+            try ToEditSyncService
+                .stageFileForEditing(
+                    named: photo.originalFilename,
+                    reference: folderReference
+                )
+
+            let provider = NSItemProvider()
+
+            provider.suggestedName =
+            photo.originalFilename
+
+            /*
+             * A drop target decides whether to accept a drag from the
+             * types the session advertises, before asking for any data.
+             * Relying on the extension alone means advertising nothing
+             * useful on a system that does not declare Sony RAW, and the
+             * target then refuses the drop with no badge and no error.
+             */
+            for identifier in Self.dragTypeIdentifiers(
+                for: photo.originalFilename
+            ) {
+                provider.registerFileRepresentation(
+                    forTypeIdentifier: identifier,
+                    fileOptions: [],
+                    visibility: .all
+                ) { completion in
+                    /*
+                     * Already staged above, so this only hands back a
+                     * path and cannot fail silently.
+                     */
+                    completion(stagedURL, false, nil)
+
+                    return nil
+                }
+            }
+
+            dragErrorMessage = nil
+
+            return provider
+        } catch {
+            dragErrorMessage =
+            error.localizedDescription
+
+            return NSItemProvider()
+        }
+    }
+
     private func refreshAndSync() async {
         if let folderReference {
             await syncRequestedPhotos(
@@ -416,19 +574,25 @@ struct LikedPhotosView: View {
 
 private struct LikedPhotoRow: View {
     let photo: ServerPhotoRecord
-    
+
+    /*
+     * False until an event folder is selected, because without one
+     * there is no To Edit folder to drag the RAW out of.
+     */
+    let isDraggable: Bool
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "heart.fill")
                 .foregroundStyle(.red)
-            
+
             VStack(
                 alignment: .leading,
                 spacing: 4
             ) {
                 Text(photo.originalFilename)
                     .lineLimit(1)
-                
+
                 Label(
                     photo.workflowStatus.title,
                     systemImage:
@@ -438,11 +602,23 @@ private struct LikedPhotoRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            
+
             Spacer()
-            
+
             Text("\(photo.heartCount)")
                 .font(.headline)
+
+            if isDraggable {
+                Image(
+                    systemName:
+                        "line.3.horizontal"
+                )
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .accessibilityLabel(
+                    "Drag \(photo.originalFilename) into an editor"
+                )
+            }
         }
         .padding(.vertical, 3)
     }

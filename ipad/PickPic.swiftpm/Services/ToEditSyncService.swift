@@ -42,7 +42,125 @@ enum ToEditSyncError: LocalizedError {
     }
 }
 
+enum ToEditFileError: LocalizedError {
+    case folderUnavailable
+    case notSyncedYet(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .folderUnavailable:
+            return """
+            PickPic could not access the saved event folder. \
+            Select the folder again.
+            """
+
+        case let .notSyncedYet(filename):
+            return """
+            \(filename) is not in To Edit yet. Sync requested \
+            photos first.
+            """
+        }
+    }
+}
+
 enum ToEditSyncService {
+    /*
+     * Stages a liked photo's RAW inside the app container and returns
+     * that copy, for handing to an external editor.
+     *
+     * The copy is the point. Sharing the file straight out of To Edit
+     * means sharing through a security-scoped folder bookmark, and the
+     * receiving app reads the file *after* the share sheet closes — by
+     * which time the scope is gone and it silently receives nothing.
+     * A copy inside the container has no such lifetime.
+     *
+     * Stale copies are swept at launch by AppStorageService.cleanup,
+     * never here, so a handoff still in flight is never pulled away.
+     */
+    static func stageFileForEditing(
+        named filename: String,
+        reference: EventFolderReference
+    ) throws -> URL {
+        let resolved = try FolderBookmarkService.resolve(
+            reference.bookmarkData
+        )
+
+        let eventFolderURL = resolved.url
+
+        guard
+            eventFolderURL
+                .startAccessingSecurityScopedResource()
+        else {
+            throw ToEditFileError.folderUnavailable
+        }
+
+        defer {
+            eventFolderURL
+                .stopAccessingSecurityScopedResource()
+        }
+
+        let sourceURL =
+        eventFolderURL
+            .appending(
+                path: UploadPreparationService
+                    .toEditFolderName
+            )
+            .appending(path: filename)
+
+        let fileManager = FileManager.default
+
+        guard
+            fileManager.fileExists(
+                atPath: sourceURL.path
+            )
+        else {
+            throw ToEditFileError
+                .notSyncedYet(filename)
+        }
+
+        let stagingURL =
+        AppStorageService.editHandoffStagingURL
+
+        /*
+         * Only ever one staged RAW at a time. Clearing on the way in
+         * keeps a large file from lingering until the next launch.
+         */
+        if fileManager.fileExists(
+            atPath: stagingURL.path
+        ) {
+            try fileManager.removeItem(
+                at: stagingURL
+            )
+        }
+
+        try fileManager.createDirectory(
+            at: stagingURL,
+            withIntermediateDirectories: true
+        )
+
+        let sourceByteSize =
+        (try? sourceURL.resourceValues(
+            forKeys: [.fileSizeKey]
+        ).fileSize)
+            .map(Int64.init)
+        ?? 0
+
+        try AppStorageService
+            .ensureEditHandoffCapacity(
+                fileByteSize: sourceByteSize
+            )
+
+        let stagedURL =
+        stagingURL.appending(path: filename)
+
+        try fileManager.copyItem(
+            at: sourceURL,
+            to: stagedURL
+        )
+
+        return stagedURL
+    }
+
     static func sync(
         reference: EventFolderReference,
         photos: [ServerPhotoRecord]
