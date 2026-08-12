@@ -241,6 +241,7 @@ struct EventListView: View {
                                 jobs.filter { job in
                                     switch job.stage {
                                     case .preparing,
+                                            .preflighting,
                                             .converting,
                                             .uploading:
                                         return true

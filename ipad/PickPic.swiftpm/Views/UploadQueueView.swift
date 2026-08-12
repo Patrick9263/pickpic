@@ -41,6 +41,7 @@ struct UploadQueueView: View {
         eventJobs.contains { job in
             switch job.stage {
             case .preparing,
+                    .preflighting,
                     .converting,
                     .uploading:
                 return true
@@ -66,6 +67,7 @@ struct UploadQueueView: View {
         eventJobs.contains { job in
             guard
                 job.stage == .preparing
+                    || job.stage == .preflighting
                     || job.stage == .converting
             else {
                 return false
@@ -222,6 +224,15 @@ struct UploadQueueView: View {
                                 )
                         }
                     },
+                    onIncludeDuplicatesChanged: {
+                        includesDuplicates in
+
+                        uploadQueue
+                            .setPreflightIncludesDuplicates(
+                                includesDuplicates,
+                                jobID: job.id
+                            )
+                    },
                     isRelinkingFolder:
                         relinkingJobID == job.id,
                     canRelinkFolder:
@@ -353,6 +364,7 @@ struct UploadQueueView: View {
             !selectedJobs.contains(
                 where: { job in
                     job.stage == .preparing
+                    || job.stage == .preflighting
                     || job.stage == .converting
                     || job.stage == .uploading
                     || job.continuedProcessing?
@@ -395,6 +407,7 @@ private struct UploadJobRow: View {
     let onConvertAll: () -> Void
     let onPause: () -> Void
     let onRetryFailedPhoto: () -> Void
+    let onIncludeDuplicatesChanged: (Bool) -> Void
     let isRelinkingFolder: Bool
     let canRelinkFolder: Bool
     let onRelinkFolder: () -> Void
@@ -460,6 +473,92 @@ private struct UploadJobRow: View {
         }
     }
     
+    /*
+     * Duplicate preflight result.
+     *
+     * Shown before conversion so the photographer can see what will be
+     * skipped and override it. Nothing is destructive here: including
+     * duplicates just converts and uploads them as before, and the server
+     * still rejects true duplicates.
+     */
+    @ViewBuilder
+    private var preflightSummary: some View {
+        if let preflight = job.preflight {
+            if let errorMessage = preflight.errorMessage {
+                Label(
+                    errorMessage,
+                    systemImage:
+                        "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else if preflight.duplicateCount > 0 {
+                VStack(
+                    alignment: .leading,
+                    spacing: 6
+                ) {
+                    Label(
+                        """
+                        \(preflight.duplicateCount) of \
+                        \(job.photoCount) photos are already in \
+                        this event
+                        """,
+                        systemImage: "doc.on.doc"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                    Toggle(
+                        "Convert them anyway",
+                        isOn: Binding(
+                            get: {
+                                !preflight
+                                    .overriddenSourcePhotoIDs
+                                    .isEmpty
+                            },
+                            set: { includesDuplicates in
+                                onIncludeDuplicatesChanged(
+                                    includesDuplicates
+                                )
+                            }
+                        )
+                    )
+                    .font(.subheadline)
+                    .disabled(
+                        isContinuedProcessingScheduledOrActive
+                    )
+
+                    Text(
+                        preflight.hasSkippableDuplicates
+                        ? """
+                        \(job.photosToConvertCount) photos will be \
+                        converted and uploaded.
+                        """
+                        : """
+                        All \(job.photoCount) photos will be \
+                        converted. The server still skips exact \
+                        duplicates on upload.
+                        """
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            if preflight.unconfirmedCount > 0 {
+                Text(
+                    """
+                    \(preflight.unconfirmedCount) photos share a \
+                    filename with existing photos but could not be \
+                    verified, so they will be converted.
+                    """
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     var body: some View {
         VStack(
             alignment: .leading,
@@ -642,7 +741,19 @@ private struct UploadJobRow: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
             
+        case .preflighting:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(
+                    "Checking which photos are already uploaded…"
+                )
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+
         case .prepared:
+            preflightSummary
+
             if job.preparedPhotos.isEmpty {
                 Label(
                     "Workflow folders are ready",
@@ -759,17 +870,31 @@ private struct UploadJobRow: View {
                         ),
                     total:
                         Double(
-                            max(job.photoCount, 1)
+                            max(
+                                job.photosToConvertCount,
+                                1
+                            )
                         )
                 )
-                
+
                 Text(
                     """
                     \(job.conversionProcessedCount) of \
-                    \(job.photoCount) photos converted
+                    \(job.photosToConvertCount) photos converted
                     """
                 )
                 .font(.subheadline)
+
+                if job.preflightSkippedPhotoCount > 0 {
+                    Text(
+                        """
+                        \(job.preflightSkippedPhotoCount) already \
+                        uploaded, skipped
+                        """
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 
                 if let filename =
                     job.conversionCurrentFilename {
@@ -1205,7 +1330,7 @@ private struct UploadJobRow: View {
             if
                 job.conversionProcessedCount > 0,
                 job.conversionProcessedCount
-                    < job.photoCount
+                    < job.photosToConvertCount
             {
                 let averageSecondsPerPhoto =
                 elapsed / Double(
@@ -1215,7 +1340,7 @@ private struct UploadJobRow: View {
                 let remaining =
                 averageSecondsPerPhoto
                 * Double(
-                    job.photoCount
+                    job.photosToConvertCount
                     - job.conversionProcessedCount
                 )
 

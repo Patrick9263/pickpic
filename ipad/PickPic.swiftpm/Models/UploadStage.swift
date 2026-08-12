@@ -9,6 +9,7 @@ enum UploadStage:
     case queued
     case preparing
     case prepared
+    case preflighting
     case converting
     case readyToUpload
     case uploading
@@ -25,7 +26,10 @@ enum UploadStage:
             
         case .prepared:
             return "Ready to Convert"
-            
+
+        case .preflighting:
+            return "Checking for Duplicates"
+
         case .converting:
             return "Converting"
             
@@ -54,6 +58,9 @@ enum UploadStage:
         case .prepared:
             return "checkmark.circle"
             
+        case .preflighting:
+            return "doc.on.doc"
+
         case .converting:
             return "photo.badge.arrow.down"
             
@@ -74,6 +81,7 @@ enum UploadStage:
     var isActiveOperation: Bool {
         switch self {
         case .preparing,
+                .preflighting,
                 .converting,
                 .uploading:
             return true

@@ -139,10 +139,16 @@ enum ImageConversionService {
         }
     }
     
+    /*
+     * When duplicate preflight has already hashed this RAW, its result is
+     * passed in so a large file is not read twice. Callers without a
+     * precomputed hash get the original behaviour.
+     */
     static func createPreparedPhoto(
         sourcePhoto: SourcePhoto,
         index: Int,
-        job: UploadJob
+        job: UploadJob,
+        precomputedSourceSha256: String? = nil
     ) throws -> PreparedPhoto {
         try withSourceFolder(
             for: job
@@ -152,17 +158,18 @@ enum ImageConversionService {
                 for: sourcePhoto,
                 inside: folderURL
             )
-            
+
             let metadata =
             PhotoMetadataService.extract(
                 from: sourceURL
             )
-            
+
             let sourceSha256 =
-            try HashingService.sha256Hex(
+            try precomputedSourceSha256
+            ?? HashingService.sha256Hex(
                 for: sourceURL
             )
-            
+
             let outputFilename =
             preparedOutputFilename(
                 for: sourcePhoto,
@@ -291,9 +298,13 @@ enum ImageConversionService {
             return false
         }
 
+        /*
+         * Photos skipped by duplicate preflight are never converted, so a
+         * complete batch matches photosToConvertCount.
+         */
         return availablePreparedPhotos(
             for: job
-        ).count == job.photoCount
+        ).count == job.photosToConvertCount
     }
 
     private static func preparedPhotoIsAvailable(

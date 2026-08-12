@@ -454,6 +454,7 @@ struct PickPicApp: App {
         jobs.contains { job in
             switch job.stage {
             case .preparing,
+                    .preflighting,
                     .converting,
                     .uploading:
                 return true

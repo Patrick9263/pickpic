@@ -94,6 +94,7 @@ struct EventDetailView: View {
         eventJobs.contains { job in
             switch job.stage {
             case .preparing,
+                    .preflighting,
                     .converting,
                     .uploading:
                 return true
