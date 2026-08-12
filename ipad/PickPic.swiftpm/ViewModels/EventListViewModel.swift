@@ -258,6 +258,43 @@ final class EventListViewModel:
         }
     }
 
+    /*
+     * Drops the local-only marker once an event is known to exist on the
+     * server, so the list stops saying otherwise without waiting for the
+     * next refresh. The event itself is already correct either way.
+     */
+    func markEventsCreatedRemotely(
+        _ eventIDs: Set<String>
+    ) {
+        guard !eventIDs.isEmpty else {
+            return
+        }
+
+        var didChange = false
+
+        events = events.map { event in
+            guard
+                event.needsRemoteCreation,
+                eventIDs.contains(event.id)
+            else {
+                return event
+            }
+
+            didChange = true
+
+            var updated = event
+            updated.isPendingCreation = false
+
+            return updated
+        }
+
+        guard didChange else {
+            return
+        }
+
+        persistCachedEvents()
+    }
+
     private func insert(
         _ event: PickPicEvent
     ) {

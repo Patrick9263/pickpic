@@ -6,7 +6,10 @@ struct ContentView: View {
 
     @EnvironmentObject private var feedback:
     AppFeedbackStore
-    
+
+    @EnvironmentObject private var uploadQueue:
+    UploadQueueStore
+
     @StateObject private var viewModel =
     EventListViewModel()
     
@@ -58,6 +61,23 @@ struct ContentView: View {
                     )
                 }
             )
+            .onReceive(uploadQueue.$jobs) { jobs in
+                /*
+                 * A run only starts once the event has been created on
+                 * the server, so a started upload is proof the event is
+                 * no longer local-only. Reading startedAt rather than
+                 * the stage keeps this correct if the stage list grows.
+                 */
+                viewModel.markEventsCreatedRemotely(
+                    Set(
+                        jobs.compactMap { job in
+                            job.uploadProgress.startedAt == nil
+                            ? nil
+                            : job.eventID
+                        }
+                    )
+                )
+            }
             .toolbar {
                 ToolbarItem(
                     placement: .topBarTrailing
