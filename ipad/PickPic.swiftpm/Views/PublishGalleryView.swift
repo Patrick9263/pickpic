@@ -52,12 +52,21 @@ struct PublishGalleryView: View {
     }
     
     private var canPublish: Bool {
+        /*
+         * An event created offline has no record on the server to
+         * publish and no share token yet. It reaches the server with
+         * its first upload, which is also when it becomes publishable.
+         */
+        guard !event.needsRemoteCreation else {
+            return false
+        }
+
         switch event.status {
         case .draft,
                 .uploading,
                 .editing:
             return true
-            
+
         case .ready,
                 .completed,
                 .archived:
@@ -79,8 +88,21 @@ struct PublishGalleryView: View {
                 }
                 
                 photoCountContent
-                
+
                 statusDescription
+
+                if event.needsRemoteCreation {
+                    Label(
+                        """
+                        This event exists only on this iPad. It \
+                        reaches PickPic with its first upload, and \
+                        can be published after that.
+                        """,
+                        systemImage: "icloud.slash"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
             
             galleryActions

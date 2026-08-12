@@ -10,6 +10,13 @@ struct EventResponse: Decodable {
 
 struct CreateEventRequest: Encodable {
     let title: String
+
+    /*
+     * Supplying the id makes creation idempotent, so an event first
+     * named offline keeps its identity and a retry cannot leave a
+     * duplicate behind.
+     */
+    let id: String?
 }
 
 struct UpdateEventRequest: Encodable {

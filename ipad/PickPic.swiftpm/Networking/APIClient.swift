@@ -166,21 +166,23 @@ struct APIClient {
     }
     
     func createEvent(
-        title: String
+        title: String,
+        id: String? = nil
     ) async throws -> PickPicEvent {
         let url = baseURL
             .appending(path: "api")
             .appending(path: "admin")
             .appending(path: "events")
-        
+
         var request = makeAdminJSONRequest(
             url: url
         )
-        
+
         request.httpMethod = "POST"
         request.httpBody = try JSONEncoder().encode(
             CreateEventRequest(
-                title: title
+                title: title,
+                id: id
             )
         )
         

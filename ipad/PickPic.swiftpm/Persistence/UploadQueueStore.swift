@@ -1990,6 +1990,52 @@ final class UploadQueueStore: ObservableObject {
             return
         }
 
+        /*
+         * An event named while offline exists only on this device, and
+         * posting a photo to an event the server does not know returns
+         * 404. Creating it is idempotent, so this runs for every job
+         * rather than tracking which events are pending: one small
+         * request against a batch of full-size uploads, and no new
+         * persisted field on UploadJob, whose hand-written decoder is
+         * the most destructive thing here to get wrong.
+         */
+        do {
+            _ = try await client.createEvent(
+                title: currentJob.eventTitle,
+                id: currentJob.eventID
+            )
+        } catch {
+            /*
+             * Marked as waiting rather than merely failed, so that
+             * resumeWaitingForConnectivityJobs picks the job up when the
+             * network returns. Without this the batch sits at
+             * readyToUpload until it is started by hand, which is not
+             * how any other connectivity interruption behaves.
+             */
+            do {
+                let waitingSince = Date()
+
+                try updateJob(jobID) { job in
+                    job.uploadProgress
+                        .waitingForConnectivitySince =
+                            waitingSince
+
+                    job.uploadProgress.errorMessage =
+                        "Waiting for an internet connection. PickPic will continue automatically."
+
+                    job.uploadProgress.lastFailure = nil
+                    job.uploadProgress.pausedAt = nil
+
+                    job.updatedAt = waitingSince
+                }
+            } catch {
+                loadErrorMessage =
+                    error.localizedDescription
+            }
+
+            return
+        }
+
         let startedAt =
         currentJob.uploadProgress.startedAt
         ?? Date()
