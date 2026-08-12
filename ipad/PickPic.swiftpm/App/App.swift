@@ -437,14 +437,45 @@ struct PickPicApp: App {
             }
 
             feedback.show(
-                title: "Proof upload complete",
-                detail:
-                    "\(job.eventTitle): \(job.newlyUploadedPhotoCount) uploaded, \(job.duplicatePhotoCount) already existed, and \(job.optimizedPhotoCount) optimized.",
+                title: completionTitle(for: job),
+                detail: completionDetail(for: job),
                 systemImage: "checkmark.circle.fill"
             )
         }
 
         previousJobStages = currentStages
+    }
+
+    /*
+     * A job that uploaded nothing is still a success: it means the event
+     * already had every photo. Saying "0 uploaded" for that reads like a
+     * failure, so it gets its own wording.
+     */
+    private func completionTitle(
+        for job: UploadJob
+    ) -> String {
+        job.newlyUploadedPhotoCount == 0
+            && job.alreadyExistedPhotoCount > 0
+        ? "Nothing left to upload"
+        : "Proof upload complete"
+    }
+
+    private func completionDetail(
+        for job: UploadJob
+    ) -> String {
+        let existing = job.alreadyExistedPhotoCount
+        let uploaded = job.newlyUploadedPhotoCount
+
+        if uploaded == 0, existing > 0 {
+            let photoDescription =
+            existing == 1
+            ? "photo was"
+            : "photos were"
+
+            return "\(job.eventTitle): all \(existing) \(photoDescription) already uploaded, so nothing was converted."
+        }
+
+        return "\(job.eventTitle): \(uploaded) uploaded, \(existing) already existed, and \(job.optimizedPhotoCount) optimized."
     }
 
     private func updateIdleTimer(
