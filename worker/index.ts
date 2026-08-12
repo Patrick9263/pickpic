@@ -3,6 +3,7 @@ import { scheduleUploadStartedNotification } from "./telegram.ts";
 
 interface CreateEventBody {
   title?: unknown;
+  id?: unknown;
 }
 
 interface UpdateEventBody {
@@ -253,6 +254,9 @@ interface VariantPhotoRow {
 interface StoredVariantRow {
   storageKey: string;
 }
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 
@@ -641,6 +645,27 @@ async function eventExists(eventId: string, env: Env): Promise<boolean> {
   return event !== null;
 }
 
+async function findEventById(
+  eventId: string,
+  env: Env,
+): Promise<EventRecord | null> {
+  return env.DB.prepare(
+    `
+      SELECT
+        id,
+        title,
+        share_token AS shareToken,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM events
+      WHERE id = ?
+    `,
+  )
+    .bind(eventId)
+    .first<EventRecord>();
+}
+
 function isGalleryStatus(value: unknown): value is GalleryStatus {
   return (
     value === "draft" ||
@@ -773,10 +798,32 @@ async function createEvent(request: Request, env: Env): Promise<Response> {
     );
   }
 
+  /*
+   * A client may supply the id so that creating an event is idempotent.
+   * The iPad needs to name an event before it can reach the network, and
+   * retrying a create it never saw the result of must converge on the
+   * same event rather than leaving a duplicate behind.
+   */
+  let requestedId: string | null = null;
+
+  if (body.id !== undefined) {
+    if (typeof body.id !== "string" || !UUID_PATTERN.test(body.id)) {
+      return jsonResponse({ error: "An event id must be a UUID." }, 400);
+    }
+
+    requestedId = body.id.toLowerCase();
+
+    const existing = await findEventById(requestedId, env);
+
+    if (existing) {
+      return jsonResponse({ event: existing }, 200);
+    }
+  }
+
   const now = new Date().toISOString();
 
   const event: EventRecord = {
-    id: crypto.randomUUID(),
+    id: requestedId ?? crypto.randomUUID(),
     title,
     shareToken: generateShareToken(),
     status: "draft",
@@ -784,28 +831,45 @@ async function createEvent(request: Request, env: Env): Promise<Response> {
     updatedAt: now,
   };
 
-  await env.DB.prepare(
-    `
-      INSERT INTO events (
-        id,
-        title,
-        share_token,
-        status,
-        created_at,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-    `,
-  )
-    .bind(
-      event.id,
-      event.title,
-      event.shareToken,
-      event.status,
-      event.createdAt,
-      event.updatedAt,
+  try {
+    await env.DB.prepare(
+      `
+        INSERT INTO events (
+          id,
+          title,
+          share_token,
+          status,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
     )
-    .run();
+      .bind(
+        event.id,
+        event.title,
+        event.shareToken,
+        event.status,
+        event.createdAt,
+        event.updatedAt,
+      )
+      .run();
+  } catch (error) {
+    /*
+     * Two creates for the same id can pass the check above concurrently,
+     * leaving the loser here. Returning the winner keeps the call
+     * idempotent instead of surfacing a primary-key error.
+     */
+    if (requestedId) {
+      const existing = await findEventById(requestedId, env);
+
+      if (existing) {
+        return jsonResponse({ event: existing }, 200);
+      }
+    }
+
+    throw error;
+  }
 
   return jsonResponse({ event }, 201);
 }
