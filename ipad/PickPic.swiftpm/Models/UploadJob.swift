@@ -106,6 +106,20 @@ struct UploadJob:
         )
     }
 
+    /*
+     * Every photo the event already had, however it was discovered:
+     * skipped locally by preflight, or rejected by the server after an
+     * upload attempt. The two never overlap, because a preflight-skipped
+     * photo is never prepared and so can never be uploaded.
+     *
+     * The pipeline keeps those cases apart on purpose. The photographer
+     * does not care which path found the duplicate, so display uses this.
+     */
+    var alreadyExistedPhotoCount: Int {
+        duplicatePhotoCount
+            + preflightSkippedPhotoCount
+    }
+
     var optimizedPhotoCount: Int {
         preparedPhotos.reduce(0) { count, photo in
             if uploadProgress

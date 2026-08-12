@@ -1271,7 +1271,15 @@ private struct UploadJobRow: View {
                 value: "0"
             )
 
-            if job.duplicatePhotoCount > 0 {
+            if job.preflightSkippedPhotoCount > 0 {
+                Text(
+                    job.preflightSkippedPhotoCount == 1
+                    ? "1 already-existing photo skipped conversion entirely."
+                    : "\(job.preflightSkippedPhotoCount) already-existing photos skipped conversion entirely."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else if job.duplicatePhotoCount > 0 {
                 Text(
                     "Already-existing photos skipped a duplicate full upload."
                 )
@@ -1367,7 +1375,7 @@ private struct UploadJobRow: View {
         LabeledContent(
             "Already existed",
             value:
-                "\(job.duplicatePhotoCount)"
+                "\(job.alreadyExistedPhotoCount)"
         )
 
         LabeledContent(
@@ -1376,10 +1384,15 @@ private struct UploadJobRow: View {
                 "\(job.optimizedPhotoCount)"
         )
 
+        /*
+         * Counts down the photos this job will actually convert, so a job
+         * whose duplicates were all skipped by preflight reaches zero
+         * instead of stalling at the full selection count.
+         */
         LabeledContent(
             "Remaining",
             value:
-                "\(max(job.photoCount - job.uploadedPhotoCount, 0))"
+                "\(max(job.photosToConvertCount - job.uploadedPhotoCount, 0))"
         )
 
         let elapsed = job.uploadElapsedDuration(
