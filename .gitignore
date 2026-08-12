@@ -161,6 +161,9 @@ vite.config.ts.timestamp-*
 .dev.vars*
 !.dev.vars.example
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # Swift / Xcode
 **/.build/
 **/.swiftpm/xcode/
