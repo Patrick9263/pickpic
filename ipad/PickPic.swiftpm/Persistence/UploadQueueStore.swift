@@ -2005,19 +2005,28 @@ final class UploadQueueStore: ObservableObject {
                 id: currentJob.eventID
             )
         } catch {
+            /*
+             * Marked as waiting rather than merely failed, so that
+             * resumeWaitingForConnectivityJobs picks the job up when the
+             * network returns. Without this the batch sits at
+             * readyToUpload until it is started by hand, which is not
+             * how any other connectivity interruption behaves.
+             */
             do {
+                let waitingSince = Date()
+
                 try updateJob(jobID) { job in
+                    job.uploadProgress
+                        .waitingForConnectivitySince =
+                            waitingSince
+
                     job.uploadProgress.errorMessage =
-                    """
-                    PickPic could not reach the server to \
-                    create this event. Uploading will work \
-                    once you are back online.
-                    """
+                        "Waiting for an internet connection. PickPic will continue automatically."
 
                     job.uploadProgress.lastFailure = nil
                     job.uploadProgress.pausedAt = nil
 
-                    job.updatedAt = Date()
+                    job.updatedAt = waitingSince
                 }
             } catch {
                 loadErrorMessage =
