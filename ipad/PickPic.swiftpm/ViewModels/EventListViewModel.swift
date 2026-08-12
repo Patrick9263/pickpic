@@ -87,10 +87,28 @@ final class EventListViewModel:
             let loadedEvents =
             try await client.fetchEvents()
 
-            events = loadedEvents
+            let loadedEventIDs =
+            Set(loadedEvents.map(\.id))
+
+            /*
+             * Events created offline are not on the server yet, so a
+             * refresh would drop them from the list and strand the work
+             * queued against them. They survive here until the server
+             * reports the same id back, which is how a pending event
+             * stops being pending.
+             */
+            let unsyncedEvents =
+            events.filter { event in
+                event.needsRemoteCreation
+                    && !loadedEventIDs.contains(event.id)
+            }
+
+            events = unsyncedEvents + loadedEvents
 
             let validEventIDs =
-            Set(loadedEvents.map(\.id))
+            loadedEventIDs.union(
+                unsyncedEvents.map(\.id)
+            )
 
             statisticsByEventID =
             statisticsByEventID.filter {
@@ -189,38 +207,94 @@ final class EventListViewModel:
         failedEventIDs
     }
 
+    /*
+     * The id is chosen here rather than by the server, so an event can
+     * be named and worked on before the network is reachable and still
+     * keep that identity once it syncs. Creation is idempotent server
+     * side, so retrying with the same id converges instead of leaving a
+     * duplicate.
+     */
     func createEvent(
         title: String,
         using configuration:
         APIConfigurationStore
     ) async throws {
-        let client =
-        try configuration.makeClient()
+        let eventID = UUID().uuidString.lowercased()
 
-        let createdEvent =
-        try await client.createEvent(
-            title: title
-        )
+        do {
+            let client =
+            try configuration.makeClient()
 
-        events.removeAll { event in
-            event.id == createdEvent.id
+            let createdEvent =
+            try await client.createEvent(
+                title: title,
+                id: eventID
+            )
+
+            insert(createdEvent)
+        } catch {
+            /*
+             * Only an unreachable server justifies working offline. A
+             * request the server actively rejected, such as an invalid
+             * title, is a real failure and must surface.
+             */
+            guard isOfflineError(error) else {
+                throw error
+            }
+
+            let now = Date()
+
+            insert(
+                PickPicEvent(
+                    id: eventID,
+                    title: title,
+                    shareToken: "",
+                    status: .draft,
+                    createdAt: now,
+                    updatedAt: now,
+                    isPendingCreation: true
+                )
+            )
+        }
+    }
+
+    private func insert(
+        _ event: PickPicEvent
+    ) {
+        events.removeAll { existing in
+            existing.id == event.id
         }
 
         events.insert(
-            createdEvent,
+            event,
             at: 0
         )
 
-        statisticsByEventID[
-            createdEvent.id
-        ] = .empty
+        statisticsByEventID[event.id] = .empty
 
-        statisticsFailedEventIDs.remove(
-            createdEvent.id
-        )
+        statisticsFailedEventIDs.remove(event.id)
 
         errorMessage = nil
         persistCachedEvents()
+    }
+
+    /*
+     * Treats an unconfigured client and a transport failure as offline.
+     * APIClientError.server means the request reached PickPic and was
+     * refused, which is not something waiting will fix.
+     */
+    private func isOfflineError(
+        _ error: Error
+    ) -> Bool {
+        if error is URLError {
+            return true
+        }
+
+        if case APIClientError.server = error {
+            return false
+        }
+
+        return true
     }
 
     func replaceStatistics(

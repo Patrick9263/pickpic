@@ -60,6 +60,29 @@ struct PickPicEvent: Identifiable, Hashable, Codable {
     let status: Status
     let createdAt: Date
     let updatedAt: Date
+
+    /*
+     * Set on an event created while offline, which exists only on this
+     * device until its first successful sync.
+     *
+     * Optional so that events decoded from the server, and events cached
+     * before this existed, both read as nil and are treated as created.
+     * The id is chosen locally and never changes, so nothing keyed by it
+     * has to be rewritten once the server knows about the event.
+     */
+    var isPendingCreation: Bool? = nil
+
+    var needsRemoteCreation: Bool {
+        isPendingCreation == true
+    }
+
+    /*
+     * A pending event has no share token until the server assigns one.
+     */
+    var isPublishable: Bool {
+        !needsRemoteCreation
+            && !shareToken.isEmpty
+    }
 }
 
 extension PickPicEvent {

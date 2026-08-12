@@ -1990,6 +1990,43 @@ final class UploadQueueStore: ObservableObject {
             return
         }
 
+        /*
+         * An event named while offline exists only on this device, and
+         * posting a photo to an event the server does not know returns
+         * 404. Creating it is idempotent, so this runs for every job
+         * rather than tracking which events are pending: one small
+         * request against a batch of full-size uploads, and no new
+         * persisted field on UploadJob, whose hand-written decoder is
+         * the most destructive thing here to get wrong.
+         */
+        do {
+            _ = try await client.createEvent(
+                title: currentJob.eventTitle,
+                id: currentJob.eventID
+            )
+        } catch {
+            do {
+                try updateJob(jobID) { job in
+                    job.uploadProgress.errorMessage =
+                    """
+                    PickPic could not reach the server to \
+                    create this event. Uploading will work \
+                    once you are back online.
+                    """
+
+                    job.uploadProgress.lastFailure = nil
+                    job.uploadProgress.pausedAt = nil
+
+                    job.updatedAt = Date()
+                }
+            } catch {
+                loadErrorMessage =
+                    error.localizedDescription
+            }
+
+            return
+        }
+
         let startedAt =
         currentJob.uploadProgress.startedAt
         ?? Date()

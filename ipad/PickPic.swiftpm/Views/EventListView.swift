@@ -810,6 +810,15 @@ private struct EventRow: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
+                if event.needsRemoteCreation {
+                    Label(
+                        "On this iPad only",
+                        systemImage: "icloud.slash"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
                 statisticsLine
 
                 if unfinishedJobCount > 0 {
