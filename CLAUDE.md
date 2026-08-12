@@ -30,7 +30,23 @@ There is **no test suite**. `npm run check` is the only automated gate.
 
 Prettier 3 reads `.gitignore` (there is no `.prettierignore`), so anything ignored by the repo is also skipped by `format:check` — but it does **not** read a global gitignore. If `npm run check` starts failing on a local-only file that git seems to ignore, that's why: add the path to the repo's `.gitignore` rather than reformatting the file or "fixing" unrelated source.
 
-The iPad app builds through **`ipad/PickPic.xcodeproj`** (Xcode, physical iPad), not through the `.swiftpm` package, even though the sources live under `ipad/PickPic.swiftpm/`. There is no CLI build script for it in this repo.
+The iPad app builds through **`ipad/PickPic.xcodeproj`** (scheme `PickPic`, one target), not through the `.swiftpm` package, even though the sources live under `ipad/PickPic.swiftpm/`. Patrick normally builds to a physical iPad from Xcode. To verify compilation from the CLI without code signing:
+
+```bash
+xcodebuild -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/pickpic-build clean build
+```
+
+Two gotchas. `xcode-select` on this machine may point at `/Library/Developer/CommandLineTools`, which makes `xcodebuild` fail outright; prefix the command with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` to work around it without sudo. And use a scratch `-derivedDataPath` rather than wiping the shared DerivedData Xcode is using.
+
+Because sources are listed explicitly in `project.pbxproj` (see trap 3), a green build is not proof that a new file is actually compiled — it may just be absent. Confirm against the compile list:
+
+```bash
+cat /tmp/pickpic-build/Build/Intermediates.noindex/PickPic.build/Debug-iphonesimulator/PickPic.build/Objects-normal/arm64/PickPic.SwiftFileList
+```
+
+It should hold every `.swift` under `PickPic.swiftpm/` plus the generated `GeneratedAssetSymbols.swift`.
 
 D1 migrations are **applied manually and deliberately stay out of CI.** Don't wire them into a workflow.
 
