@@ -268,6 +268,40 @@ final class UploadQueueStore: ObservableObject {
         )
     }
 
+    /*
+     * Lets the photographer convert photos preflight identified as
+     * already uploaded. The duplicates themselves are kept in the
+     * preflight result so the choice can be reversed before conversion
+     * starts.
+     */
+    func setPreflightIncludesDuplicates(
+        _ includesDuplicates: Bool,
+        jobID: UUID
+    ) {
+        do {
+            try updateJob(jobID) { job in
+                guard var state = job.preflight else {
+                    return
+                }
+
+                if includesDuplicates {
+                    state.overrideAllDuplicates()
+                } else {
+                    state.clearOverrides()
+                }
+
+                job.preflight = state
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+            """
+            The duplicate selection could not be saved: \
+            \(error.localizedDescription)
+            """
+        }
+    }
+
     func startUserInitiatedReconversion(
         jobID: UUID
     ) {
@@ -380,7 +414,8 @@ final class UploadQueueStore: ObservableObject {
                 case .prepareConvertAndUpload:
                     preparationSucceeded = await self
                         .runPreparationAndConversionPipeline(
-                            jobID: job.id
+                            jobID: job.id,
+                            using: configuration
                         )
 
                 case .reconvertOnly:
@@ -497,7 +532,8 @@ final class UploadQueueStore: ObservableObject {
             case .prepareConvertAndUpload:
                 succeeded = await self
                     .runPreparationAndConversionPipeline(
-                        jobID: jobID
+                        jobID: jobID,
+                        using: configuration
                     )
 
             case .reconvertOnly:
@@ -659,6 +695,7 @@ final class UploadQueueStore: ObservableObject {
                 job.eventID == eventID
                 && job.stage != .completed
                 && job.stage != .preparing
+                && job.stage != .preflighting
                 && job.stage != .converting
                 && job.stage != .uploading
             }
@@ -1174,6 +1211,7 @@ final class UploadQueueStore: ObservableObject {
 
         switch currentJob.stage {
         case .preparing,
+                .preflighting,
                 .converting,
                 .uploading:
             throw UploadFolderRelinkError
@@ -1374,8 +1412,134 @@ final class UploadQueueStore: ObservableObject {
         }
     }
 
-    func convertAllPhotos(
+    /*
+     * Duplicate preflight.
+     *
+     * Runs before conversion so RAWs the event already has are never
+     * decoded. This is purely an optimisation: the worker still performs
+     * the authoritative duplicate check on upload, so any failure here is
+     * recorded and the pipeline converts exactly as it did before.
+     */
+    func runPreflight(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) async {
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.stage == .prepared,
+            currentJob.preflight?.didComplete != true
+        else {
+            return
+        }
+
+        let client: APIClient
+
+        do {
+            client = try configuration.makeClient()
+        } catch {
+            recordPreflightFailure(
+                jobID: jobID,
+                error: error
+            )
+
+            return
+        }
+
+        do {
+            try updateJob(jobID) { job in
+                job.stage = .preflighting
+                job.updatedAt = Date()
+            }
+        } catch {
+            /*
+             * Without a durable stage change there is nothing to recover
+             * from, so fall through to conversion untouched.
+             */
+            return
+        }
+
+        do {
+            let result = try await
+            DuplicatePreflightService.run(
+                job: currentJob,
+                existingState: currentJob.preflight,
+                client: client
+            )
+
+            try updateJob(jobID) { job in
+                job.preflight = result.state
+
+                /*
+                 * The stage is only restored if preflight still owns it,
+                 * so a pause or cancellation that landed while hashing is
+                 * not overwritten.
+                 */
+                if job.stage == .preflighting {
+                    job.stage = .prepared
+                }
+
+                job.updatedAt = Date()
+            }
+        } catch is CancellationError {
+            /*
+             * Confirmed hashes are already durable, so the next run
+             * resumes where this one stopped.
+             */
+            restorePreparedStage(jobID: jobID)
+        } catch {
+            recordPreflightFailure(
+                jobID: jobID,
+                error: error
+            )
+
+            restorePreparedStage(jobID: jobID)
+        }
+    }
+
+    private func recordPreflightFailure(
+        jobID: UUID,
+        error: Error
+    ) {
+        try? updateJob(jobID) { job in
+            var state = job.preflight ?? .empty
+
+            state.errorMessage =
+            """
+            PickPic could not check for duplicates: \
+            \(error.localizedDescription) \
+            All photos will be converted.
+            """
+
+            job.preflight = state
+            job.updatedAt = Date()
+        }
+    }
+
+    private func restorePreparedStage(
         jobID: UUID
+    ) {
+        try? updateJob(jobID) { job in
+            guard job.stage == .preflighting else {
+                return
+            }
+
+            job.stage = .prepared
+            job.updatedAt = Date()
+        }
+    }
+
+    /*
+     * honoringPreflight is false when the photographer explicitly asked
+     * for a reconversion, which is an instruction to redo the work rather
+     * than to skip photos the event already has.
+     */
+    func convertAllPhotos(
+        jobID: UUID,
+        honoringPreflight: Bool = true
     ) async {
         guard
             let currentJob = jobs.first(
@@ -1387,6 +1551,49 @@ final class UploadQueueStore: ObservableObject {
                 || currentJob.stage
                 == .readyToUpload
         else {
+            return
+        }
+
+        let preflightState =
+        honoringPreflight
+        ? currentJob.preflight
+        : nil
+
+        /*
+         * Every photo in this folder is already in the event, so there is
+         * nothing to convert or upload. Completing the job here avoids
+         * leaving it parked at readyToUpload with an empty batch.
+         */
+        if
+            let preflightState,
+            preflightState.skippedCount
+                >= currentJob.photoCount,
+            currentJob.photoCount > 0
+        {
+            let completedAt = Date()
+
+            do {
+                try updateJob(jobID) { job in
+                    job.stage = .completed
+                    job.conversionCurrentFilename = nil
+                    job.conversionCompletedAt =
+                        completedAt
+                    job.conversionErrorMessage = nil
+                    job.uploadProgress.completedAt =
+                        completedAt
+                    job.uploadProgress.errorMessage = nil
+                    job.uploadProgress.lastFailure = nil
+                    job.updatedAt = completedAt
+                }
+            } catch {
+                loadErrorMessage =
+                """
+                Every photo was already uploaded, but the \
+                queue could not be updated: \
+                \(error.localizedDescription)
+                """
+            }
+
             return
         }
 
@@ -1539,11 +1746,39 @@ final class UploadQueueStore: ObservableObject {
                     continue
                 }
 
+                /*
+                 * Preflight confirmed this RAW is already in the event,
+                 * so the expensive decode is skipped entirely. The photo
+                 * is simply never prepared, which keeps the upload queue
+                 * consistent without any extra bookkeeping.
+                 */
+                if
+                    preflightState?
+                        .shouldSkipConversion(
+                            forSourcePhotoID:
+                                sourcePhoto.id
+                        )
+                    == true
+                {
+                    continue
+                }
+
                 try updateJob(jobID) { job in
                     job.conversionCurrentFilename =
                     sourcePhoto.filename
                     job.updatedAt = Date()
                 }
+
+                /*
+                 * Reuse the hash preflight already computed so a large
+                 * RAW is never read twice.
+                 */
+                let precomputedSha256 =
+                preflightState?
+                    .precomputedSha256(
+                        forSourcePhotoID:
+                            sourcePhoto.id
+                    )
 
                 let preparedPhoto =
                 try await Task.detached(
@@ -1554,7 +1789,9 @@ final class UploadQueueStore: ObservableObject {
                             .createPreparedPhoto(
                                 sourcePhoto: sourcePhoto,
                                 index: index,
-                                job: convertingJob
+                                job: convertingJob,
+                                precomputedSourceSha256:
+                                    precomputedSha256
                             )
                     }
                 }.value
@@ -1682,10 +1919,15 @@ final class UploadQueueStore: ObservableObject {
             return
         }
 
+        /*
+         * Photos preflight confirmed the event already has are never
+         * converted, so a complete batch matches photosToConvertCount
+         * rather than the full photo count.
+         */
         guard
             !currentJob.preparedPhotos.isEmpty,
             currentJob.preparedPhotos.count
-                == currentJob.photoCount
+                == currentJob.photosToConvertCount
         else {
             do {
                 try updateJob(jobID) { job in
@@ -2687,7 +2929,8 @@ final class UploadQueueStore: ObservableObject {
         }
 
         guard await prepareAndConvertWithinPipeline(
-            jobID: jobID
+            jobID: jobID,
+            using: configuration
         ) else {
             return
         }
@@ -2703,7 +2946,8 @@ final class UploadQueueStore: ObservableObject {
     }
 
     private func runPreparationAndConversionPipeline(
-        jobID: UUID
+        jobID: UUID,
+        using configuration: APIConfigurationStore?
     ) async -> Bool {
         guard beginPipeline(jobID: jobID) else {
             return false
@@ -2714,7 +2958,8 @@ final class UploadQueueStore: ObservableObject {
         }
 
         return await prepareAndConvertWithinPipeline(
-            jobID: jobID
+            jobID: jobID,
+            using: configuration
         )
     }
 
@@ -2736,14 +2981,22 @@ final class UploadQueueStore: ObservableObject {
             return false
         }
 
-        await convertAllPhotos(jobID: jobID)
+        /*
+         * A reconversion is an explicit instruction to redo the work, so
+         * preflight skips are deliberately not applied here.
+         */
+        await convertAllPhotos(
+            jobID: jobID,
+            honoringPreflight: false
+        )
 
         return !Task.isCancelled
             && stage(for: jobID) == .readyToUpload
     }
 
     private func prepareAndConvertWithinPipeline(
-        jobID: UUID
+        jobID: UUID,
+        using configuration: APIConfigurationStore?
     ) async -> Bool {
         guard let startingStage = stage(for: jobID) else {
             return false
@@ -2767,10 +3020,25 @@ final class UploadQueueStore: ObservableObject {
             break
 
         case .preparing,
+                .preflighting,
                 .converting,
                 .uploading,
                 .completed:
             return false
+        }
+
+        if
+            stage(for: jobID) == .prepared,
+            let configuration
+        {
+            await runPreflight(
+                jobID: jobID,
+                using: configuration
+            )
+
+            guard !Task.isCancelled else {
+                return false
+            }
         }
 
         if stage(for: jobID) == .prepared {
@@ -2839,6 +3107,7 @@ final class UploadQueueStore: ObservableObject {
             break
 
         case .preparing,
+                .preflighting,
                 .converting,
                 .readyToUpload,
                 .uploading,
@@ -2901,8 +3170,20 @@ final class UploadQueueStore: ObservableObject {
             return
         }
 
+        /*
+         * A reconversion deliberately ignores preflight skips, so it
+         * counts every photo. The normal pipeline counts only the photos
+         * it will actually convert, otherwise the iPadOS progress
+         * indicator could never reach completion.
+         */
+        let photosInScope =
+        job.continuedProcessing?.operation
+        == .reconvertOnly
+        ? job.photoCount
+        : job.photosToConvertCount
+
         let totalUnitCount = Int64(
-            max(job.photoCount, 1)
+            max(photosInScope, 1)
         )
         let completedUnitCount = Int64(
             min(
@@ -2911,7 +3192,7 @@ final class UploadQueueStore: ObservableObject {
                     ?? job.conversionProcessedCount,
                     0
                 ),
-                job.photoCount
+                photosInScope
             )
         )
 
@@ -2995,6 +3276,7 @@ final class UploadQueueStore: ObservableObject {
                     case .queued,
                             .preparing,
                             .prepared,
+                            .preflighting,
                             .converting,
                             .failed:
                         if continuedProcessing.status
@@ -3017,6 +3299,7 @@ final class UploadQueueStore: ObservableObject {
 
                 switch originalStage {
                 case .prepared,
+                        .preflighting,
                         .converting,
                         .readyToUpload,
                         .uploading:
@@ -3058,6 +3341,17 @@ final class UploadQueueStore: ObservableObject {
                         recoveryDate
                     changedRecoveredState = true
                     interruptedJobCount += 1
+
+                case .preflighting:
+                    /*
+                     * Preflight is cheap and restartable, and any hashes
+                     * it already computed are persisted, so returning to
+                     * .prepared resumes rather than restarts the work.
+                     */
+                    decodedJobs[index].stage = .prepared
+                    decodedJobs[index].updatedAt =
+                        recoveryDate
+                    changedRecoveredState = true
 
                 case .converting:
                     let recoveredCount =

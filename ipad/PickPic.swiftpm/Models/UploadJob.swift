@@ -28,7 +28,9 @@ struct UploadJob:
     var conversionErrorMessage: String?
     
     var preparedPhotos: [PreparedPhoto]
-    
+
+    var preflight: PreflightState?
+
     var conversionProcessedCount: Int
     var conversionCurrentFilename: String?
     var conversionStartedAt: Date?
@@ -68,6 +70,23 @@ struct UploadJob:
         }
     }
     
+    /*
+     * Photos preflight identified as already present in the event, which
+     * conversion will skip. Distinct from duplicatePhotoCount, which
+     * counts duplicates the server rejected after an upload attempt.
+     */
+    var preflightSkippedPhotoCount: Int {
+        preflight?.skippedCount ?? 0
+    }
+
+    var photosToConvertCount: Int {
+        max(
+            photoCount
+                - preflightSkippedPhotoCount,
+            0
+        )
+    }
+
     var duplicatePhotoCount: Int {
         preparedPhotos.reduce(0) { count, photo in
             if uploadProgress
@@ -190,6 +209,8 @@ struct UploadJob:
         String? = nil,
         preparedPhotos:
         [PreparedPhoto] = [],
+        preflight:
+        PreflightState? = nil,
         conversionProcessedCount:
         Int = 0,
         conversionCurrentFilename:
@@ -220,6 +241,7 @@ struct UploadJob:
         self.conversionErrorMessage =
         conversionErrorMessage
         self.preparedPhotos = preparedPhotos
+        self.preflight = preflight
         self.conversionProcessedCount =
         conversionProcessedCount
         self.conversionCurrentFilename =
@@ -251,6 +273,7 @@ struct UploadJob:
         case conversionPreview
         case conversionErrorMessage
         case preparedPhotos
+        case preflight
         case conversionProcessedCount
         case conversionCurrentFilename
         case conversionStartedAt
@@ -344,7 +367,13 @@ struct UploadJob:
             forKey: .preparedPhotos
         )
         ?? []
-        
+
+        preflight =
+        try container.decodeIfPresent(
+            PreflightState.self,
+            forKey: .preflight
+        )
+
         conversionProcessedCount =
         try container.decodeIfPresent(
             Int.self,

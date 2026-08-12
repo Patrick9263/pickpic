@@ -54,6 +54,8 @@
 		CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */; };
 		CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */; };
 		CD5F4D47301C80320048327C /* ContinuedProcessingTaskCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */; };
+		CDFF00010000000000000000 /* PreflightState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00000000000000000000 /* PreflightState.swift */; };
+		CDFF00030000000000000000 /* DuplicatePreflightService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00020000000000000000 /* DuplicatePreflightService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -105,6 +107,8 @@
 		CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadSession.swift; sourceTree = "<group>"; };
 		CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedProcessingState.swift; sourceTree = "<group>"; };
 		CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedProcessingTaskCoordinator.swift; sourceTree = "<group>"; };
+		CDFF00000000000000000000 /* PreflightState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreflightState.swift; sourceTree = "<group>"; };
+		CDFF00020000000000000000 /* DuplicatePreflightService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicatePreflightService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -183,6 +187,7 @@
 		CD5F4CEF301C80320048327C /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				CDFF00000000000000000000 /* PreflightState.swift */,
 				CD5F4CE6301C80320048327C /* ConversionPreview.swift */,
 				CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */,
 				CD5F4CE7301C80320048327C /* EventFolderReference.swift */,
@@ -225,6 +230,7 @@
 		CD5F4D04301C80320048327C /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				CDFF00020000000000000000 /* DuplicatePreflightService.swift */,
 				CD5F4CF9301C80320048327C /* AppStorageService.swift */,
 				CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */,
 				CD5F4CFA301C80320048327C /* EditedFolderService.swift */,
@@ -353,6 +359,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CDFF00030000000000000000 /* DuplicatePreflightService.swift in Sources */,
+				CDFF00010000000000000000 /* PreflightState.swift in Sources */,
 				CD5F4D16301C80320048327C /* PickPicEnvironment.swift in Sources */,
 				CD5F4D17301C80320048327C /* UploadQueueView.swift in Sources */,
 				CD5F4D18301C80320048327C /* UploadPreparationService.swift in Sources */,

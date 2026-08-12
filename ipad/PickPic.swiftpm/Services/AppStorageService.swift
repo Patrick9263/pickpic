@@ -160,11 +160,12 @@ enum AppStorageService {
 
                 switch job.stage {
                 case .prepared,
+                        .preflighting,
                         .converting,
                         .readyToUpload,
                         .uploading:
                     return job.id.uuidString
-                    
+
                 case .queued,
                         .preparing,
                         .completed,

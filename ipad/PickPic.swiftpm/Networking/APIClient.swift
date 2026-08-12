@@ -63,6 +63,11 @@ struct APIClient {
         configuration.waitsForConnectivity = true
         return URLSession(configuration: configuration)
     }()
+    /*
+     * Kept below the worker's per-request filename cap.
+     */
+    private static let preflightChunkSize = 500
+
     private static let filenameHeaderAllowed =
     CharacterSet(
         charactersIn:
@@ -822,6 +827,141 @@ struct APIClient {
             fromFile: fileURL,
             delegate: connectivityDelegate
         )
+    }
+
+    /*
+     * Asks the event which of these RAW filenames it already knows about,
+     * returning the stored hashes so the caller can confirm locally.
+     *
+     * Requests are chunked because a large shoot can exceed what the
+     * worker accepts in a single call.
+     */
+    func preflightPhotoFilenames(
+        _ filenames: [String],
+        eventID: String
+    ) async throws -> [PreflightMatch] {
+        guard !filenames.isEmpty else {
+            return []
+        }
+
+        var matches: [PreflightMatch] = []
+
+        for chunk in stride(
+            from: 0,
+            to: filenames.count,
+            by: Self.preflightChunkSize
+        ) {
+            let upperBound = min(
+                chunk + Self.preflightChunkSize,
+                filenames.count
+            )
+
+            let chunkedFilenames = Array(
+                filenames[chunk..<upperBound]
+            )
+
+            let chunkedMatches =
+            try await preflightChunk(
+                chunkedFilenames,
+                eventID: eventID
+            )
+
+            matches.append(
+                contentsOf: chunkedMatches
+            )
+        }
+
+        return matches
+    }
+
+    private func preflightChunk(
+        _ filenames: [String],
+        eventID: String
+    ) async throws -> [PreflightMatch] {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+            .appending(path: "photos")
+            .appending(path: "preflight")
+
+        var request = makeAdminJSONRequest(
+            url: url
+        )
+
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.httpBody = try JSONEncoder().encode(
+            PhotoPreflightRequest(
+                filenames: filenames
+            )
+        )
+
+        let (data, response) =
+        try await session.data(for: request)
+
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+
+            throw APIClientError.server(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+
+        guard contentType.contains(
+            "application/json"
+        ) else {
+            throw APIClientError.unexpectedResponse
+        }
+
+        do {
+            return try makeDecoder().decode(
+                PhotoPreflightResponse.self,
+                from: data
+            )
+            .matches
+        } catch {
+            print(
+                "Preflight decoding failed:",
+                error
+            )
+
+            throw APIClientError.unexpectedResponse
+        }
     }
 
     func fetchEventPhotos(

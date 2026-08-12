@@ -176,6 +176,24 @@ interface DuplicatePhotoRow {
   duplicateVariant: "original" | "final";
 }
 
+interface PreflightRequestBody {
+  filenames?: unknown;
+}
+
+interface PreflightMatchRow {
+  id: string;
+  filename: string;
+  sourceSha256: string | null;
+  finalSha256: string | null;
+}
+
+interface PreflightMatch {
+  filename: string;
+  photoId: string;
+  sourceSha256: string | null;
+  finalSha256: string | null;
+}
+
 interface PhotoUploadMetadata {
   capturedAt: string | null;
   latitude: number | null;
@@ -237,6 +255,10 @@ interface StoredVariantRow {
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
+
+const MAX_PREFLIGHT_FILENAMES = 2000;
+
+const PREFLIGHT_CHUNK_SIZE = 90;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
@@ -371,6 +393,16 @@ function getSourceSha256(request: Request): string | null {
   return value;
 }
 
+/*
+ * A photo counts as a duplicate when the incoming source hash matches
+ * either the stored original hash or the stored final hash, scoped to a
+ * single event.
+ *
+ * This rule is mirrored client-side by the iPad preflight check, which
+ * compares against both hashes returned by preflightPhotos below. Keep
+ * the two in sync: preflight is only an optimisation, and this function
+ * remains the authoritative check.
+ */
 async function findDuplicatePhoto(
   env: Env,
   eventId: string,
@@ -396,6 +428,104 @@ async function findDuplicatePhoto(
   )
     .bind(sourceSha256, eventId, sourceSha256, sourceSha256)
     .first<DuplicatePhotoRow>();
+}
+
+/*
+ * Duplicate preflight.
+ *
+ * The iPad sends the RAW filenames it is about to convert. We return the
+ * stored hashes for any filename this event already knows about, so the
+ * client can hash just those few files locally and skip converting them.
+ *
+ * Filenames alone are not sufficient evidence: Sony bodies reset frame
+ * counters, so DSC01015.ARW legitimately recurs across cards. The client
+ * therefore confirms by hash before skipping anything.
+ */
+async function preflightPhotos(
+  request: Request,
+  env: Env,
+  eventId: string,
+): Promise<Response> {
+  if (!(await eventExists(eventId, env))) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  let body: PreflightRequestBody;
+
+  try {
+    body = (await request.json()) as PreflightRequestBody;
+  } catch {
+    return jsonResponse({ error: "A JSON body is required." }, 400);
+  }
+
+  const requestedFilenames = body?.filenames;
+
+  if (!Array.isArray(requestedFilenames)) {
+    return jsonResponse({ error: "A filenames array is required." }, 400);
+  }
+
+  if (requestedFilenames.length > MAX_PREFLIGHT_FILENAMES) {
+    return jsonResponse(
+      {
+        error: `At most ${MAX_PREFLIGHT_FILENAMES} filenames may be checked at once.`,
+      },
+      400,
+    );
+  }
+
+  const filenames = Array.from(
+    new Set(
+      requestedFilenames.filter(
+        (filename): filename is string =>
+          typeof filename === "string" &&
+          filename.length > 0 &&
+          filename.length <= 255 &&
+          !filename.includes("\0"),
+      ),
+    ),
+  );
+
+  if (filenames.length === 0) {
+    return jsonResponse({ matches: [] });
+  }
+
+  const matches: PreflightMatch[] = [];
+
+  /*
+   * Chunked to stay well inside D1's bound-parameter limit.
+   */
+  for (let index = 0; index < filenames.length; index += PREFLIGHT_CHUNK_SIZE) {
+    const chunk = filenames.slice(index, index + PREFLIGHT_CHUNK_SIZE);
+
+    const placeholders = chunk.map(() => "?").join(", ");
+
+    const result = await env.DB.prepare(
+      `
+        SELECT
+          id,
+          original_filename AS filename,
+          source_sha256 AS sourceSha256,
+          final_sha256 AS finalSha256
+        FROM photos
+        WHERE
+          event_id = ?
+          AND original_filename IN (${placeholders})
+      `,
+    )
+      .bind(eventId, ...chunk)
+      .all<PreflightMatchRow>();
+
+    for (const row of result.results) {
+      matches.push({
+        filename: row.filename,
+        photoId: row.id,
+        sourceSha256: row.sourceSha256,
+        finalSha256: row.finalSha256,
+      });
+    }
+  }
+
+  return jsonResponse({ matches });
 }
 
 function getFilename(request: Request): string | null {
@@ -2741,6 +2871,20 @@ export default {
       const eventId = decodeURIComponent(adminEventStatusMatch[1]);
 
       return setEventStatus(request, env, eventId);
+    }
+
+    const eventPhotosPreflightMatch = url.pathname.match(
+      /^\/api\/admin\/events\/([^/]+)\/photos\/preflight$/,
+    );
+
+    if (eventPhotosPreflightMatch) {
+      if (request.method !== "POST") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      const eventId = decodeURIComponent(eventPhotosPreflightMatch[1]);
+
+      return preflightPhotos(request, env, eventId);
     }
 
     const eventPhotosMatch = url.pathname.match(

@@ -25,6 +25,14 @@ struct EventPhotosResponse: Decodable {
     let photos: [ServerPhotoRecord]
 }
 
+struct PhotoPreflightRequest: Encodable {
+    let filenames: [String]
+}
+
+struct PhotoPreflightResponse: Decodable {
+    let matches: [PreflightMatch]
+}
+
 struct SetPhotoWorkflowRequest: Encodable {
     let status: String
 }
