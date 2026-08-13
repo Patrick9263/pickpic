@@ -153,6 +153,58 @@ struct ServerPhotoRecord:
     let workflowStatus: ServerPhotoWorkflowStatus
     let variants: ServerImageVariantSet
     let finalPhoto: ServerFinalPhotoSummary?
+
+    /*
+     * Kept as a string rather than a Date on purpose. The server stores
+     * capture time as YYYY-MM-DDTHH:mm:ss with no zone, which the
+     * client's ISO 8601 decoding rejects outright — decoding it as a
+     * Date would throw and take the whole photo list with it.
+     *
+     * A capture time is wall-clock time on the camera anyway, so it is
+     * read and shown without any zone conversion.
+     *
+     * Optional because the server sends null whenever a photo carried no
+     * capture time, which is common enough that nothing may depend on it.
+     */
+    let capturedAt: String?
+
+    var capturedAtDisplay: String? {
+        guard let capturedAt else {
+            return nil
+        }
+
+        let parser = DateFormatter()
+        parser.locale = Locale(
+            identifier: "en_US_POSIX"
+        )
+        parser.timeZone = .current
+        parser.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+
+        guard
+            let date = parser.date(from: capturedAt)
+        else {
+            return nil
+        }
+
+        let display = DateFormatter()
+        display.locale = .current
+        display.timeZone = .current
+        display.dateFormat = nil
+        display.timeStyle = .short
+        display.dateStyle = .none
+
+        return display.string(from: date)
+    }
+
+    /*
+     * The stored thumbnail for the final when there is one, otherwise
+     * for the original, matching what the photographer would expect to
+     * be looking at.
+     */
+    var thumbnailPath: String? {
+        finalPhoto?.variants.thumbnail?.imageUrl
+            ?? variants.thumbnail?.imageUrl
+    }
 }
 
 struct EventPhotoStatistics:

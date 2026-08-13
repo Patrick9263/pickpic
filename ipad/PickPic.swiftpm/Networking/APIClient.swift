@@ -1303,6 +1303,74 @@ struct APIClient {
         }
     }
     
+    /*
+     * Fetches an image the API returned a path for, such as a stored
+     * thumbnail.
+     *
+     * The path arrives relative, and the whole admin hostname sits
+     * behind Access, so this cannot be handed to AsyncImage: the request
+     * has to carry the service token like any other.
+     */
+    func fetchImageData(
+        path: String
+    ) async throws -> Data {
+        guard
+            let url = URL(
+                string: path,
+                relativeTo: baseURL
+            )
+        else {
+            throw APIClientError.invalidResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+
+        request.setValue(
+            "image/*",
+            forHTTPHeaderField: "Accept"
+        )
+
+        request.setValue(
+            clientID,
+            forHTTPHeaderField:
+                "CF-Access-Client-Id"
+        )
+
+        request.setValue(
+            clientSecret,
+            forHTTPHeaderField:
+                "CF-Access-Client-Secret"
+        )
+
+        let (data, response) =
+        try await session.data(for: request)
+
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            throw APIClientError.server(
+                statusCode: httpResponse.statusCode,
+                message: HTTPURLResponse
+                    .localizedString(
+                        forStatusCode:
+                            httpResponse.statusCode
+                    )
+            )
+        }
+
+        return data
+    }
+
     private func makeAdminJSONRequest(
         url: URL
     ) -> URLRequest {

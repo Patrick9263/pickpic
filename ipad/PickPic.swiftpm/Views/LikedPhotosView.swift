@@ -572,6 +572,137 @@ struct LikedPhotosView: View {
     }
 }
 
+/*
+ * Stored thumbnails, kept in memory so scrolling a list does not refetch
+ * images that have already been decoded. Bounded by count rather than
+ * bytes because these are small, fixed-size proofs.
+ */
+@MainActor
+final class ThumbnailCache {
+    static let shared = ThumbnailCache()
+
+    private let storage = NSCache<
+        NSString,
+        UIImage
+    >()
+
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+
+    private init() {
+        storage.countLimit = 300
+    }
+
+    func cachedImage(
+        forPath path: String
+    ) -> UIImage? {
+        storage.object(
+            forKey: path as NSString
+        )
+    }
+
+    func image(
+        forPath path: String,
+        using configuration: APIConfigurationStore
+    ) async -> UIImage? {
+        if let cached = cachedImage(forPath: path) {
+            return cached
+        }
+
+        if let existing = inFlight[path] {
+            return await existing.value
+        }
+
+        let task = Task<UIImage?, Never> {
+            guard
+                let client = try? configuration
+                    .makeClient(),
+                let data = try? await client
+                    .fetchImageData(path: path),
+                let image = UIImage(data: data)
+            else {
+                return nil
+            }
+
+            return image
+        }
+
+        inFlight[path] = task
+
+        let image = await task.value
+
+        inFlight[path] = nil
+
+        if let image {
+            storage.setObject(
+                image,
+                forKey: path as NSString
+            )
+        }
+
+        return image
+    }
+}
+
+private struct PhotoThumbnail: View {
+    let path: String?
+    let size: CGFloat
+
+    @EnvironmentObject private var configuration:
+    APIConfigurationStore
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(
+                        contentMode: .fill
+                    )
+            } else {
+                /*
+                 * A photo with no stored thumbnail is not an error: it
+                 * predates variant generation, or its upload has not
+                 * finished. The placeholder says so quietly.
+                 */
+                Rectangle()
+                    .fill(.quaternary)
+                    .overlay {
+                        Image(
+                            systemName: "photo"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    }
+            }
+        }
+        .frame(
+            width: size,
+            height: size
+        )
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: 6
+            )
+        )
+        .task(id: path) {
+            guard
+                let path,
+                image == nil
+            else {
+                return
+            }
+
+            image = await ThumbnailCache.shared
+                .image(
+                    forPath: path,
+                    using: configuration
+                )
+        }
+    }
+}
+
 private struct LikedPhotoRow: View {
     let photo: ServerPhotoRecord
 
@@ -581,10 +712,21 @@ private struct LikedPhotoRow: View {
      */
     let isDraggable: Bool
 
+    private var subtitle: String {
+        [
+            photo.capturedAtDisplay,
+            photo.workflowStatus.title
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
+    }
+
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "heart.fill")
-                .foregroundStyle(.red)
+            PhotoThumbnail(
+                path: photo.thumbnailPath,
+                size: 52
+            )
 
             VStack(
                 alignment: .leading,
@@ -593,20 +735,31 @@ private struct LikedPhotoRow: View {
                 Text(photo.originalFilename)
                     .lineLimit(1)
 
+                /*
+                 * Capture time distinguishes frames that a repeated
+                 * status label cannot, and Sony reuses filenames across
+                 * shoots, so it is often the only thing that does.
+                 */
                 Label(
-                    photo.workflowStatus.title,
+                    subtitle,
                     systemImage:
                         photo.workflowStatus
                         .systemImage
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
 
             Spacer()
 
-            Text("\(photo.heartCount)")
-                .font(.headline)
+            Label(
+                "\(photo.heartCount)",
+                systemImage: "heart.fill"
+            )
+            .font(.subheadline)
+            .foregroundStyle(.red)
+            .labelStyle(.titleAndIcon)
 
             if isDraggable {
                 Image(

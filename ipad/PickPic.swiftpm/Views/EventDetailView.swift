@@ -77,6 +77,110 @@ struct EventDetailView: View {
         onEventDeleted
     }
     
+    /*
+     * The one thing worth doing next, chosen from the event's own state.
+     * Everything it can point at stays reachable below; this only saves
+     * reading ten rows of equal weight to work out which applies.
+     *
+     * Ordered by urgency: work already started outranks work available,
+     * and anything needing the network outranks publishing.
+     */
+    private enum PrimaryAction {
+        case importPhotos
+        case continueUpload
+        case uploadReadyFinals
+        case reviewLiked
+        case publish
+
+        var title: String {
+            switch self {
+            case .importPhotos:
+                return "Import Photos"
+
+            case .continueUpload:
+                return "Continue Upload"
+
+            case .uploadReadyFinals:
+                return "Upload Ready Finals"
+
+            case .reviewLiked:
+                return "Review Liked Photos"
+
+            case .publish:
+                return "Publish & Share"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .importPhotos:
+                return "photo.badge.plus"
+
+            case .continueUpload:
+                return "clock.arrow.circlepath"
+
+            case .uploadReadyFinals:
+                return "bolt.circle.fill"
+
+            case .reviewLiked:
+                return "heart.fill"
+
+            case .publish:
+                return "square.and.arrow.up"
+            }
+        }
+
+        var reason: String {
+            switch self {
+            case .importPhotos:
+                return "This event has no photos yet."
+
+            case .continueUpload:
+                return "This event has uploads that have not finished."
+
+            case .uploadReadyFinals:
+                return "Edited files are waiting in the Edited folder."
+
+            case .reviewLiked:
+                return "Viewers have asked for edits."
+
+            case .publish:
+                return "Proofs are uploaded and the gallery is not open yet."
+            }
+        }
+    }
+
+    private var primaryAction: PrimaryAction? {
+        if unfinishedEventJobCount > 0 {
+            return .continueUpload
+        }
+
+        if eventJobs.isEmpty,
+            (dashboardStatistics?.uploadedProofCount ?? 0) == 0 {
+            return .importPhotos
+        }
+
+        if (dashboardReadyFinalCount ?? 0) > 0 {
+            return .uploadReadyFinals
+        }
+
+        if (dashboardStatistics?.likedPhotoCount ?? 0) > 0 {
+            return .reviewLiked
+        }
+
+        /*
+         * An event still only on this iPad has nothing to publish, and
+         * PublishGalleryView blocks it anyway.
+         */
+        if event.status == .draft,
+            !event.needsRemoteCreation,
+            (dashboardStatistics?.uploadedProofCount ?? 0) > 0 {
+            return .publish
+        }
+
+        return nil
+    }
+
     private var eventJobs: [UploadJob] {
         uploadQueue.jobs(
             for: event.id
@@ -156,8 +260,67 @@ struct EventDetailView: View {
         ]
     }
     
+    @ViewBuilder
+    private var primaryActionSection: some View {
+        if let primaryAction {
+            Section {
+                NavigationLink {
+                    primaryDestination(
+                        for: primaryAction
+                    )
+                } label: {
+                    Label(
+                        primaryAction.title,
+                        systemImage:
+                            primaryAction.systemImage
+                    )
+                    .font(.headline)
+                }
+                .listRowBackground(
+                    Color.accentColor
+                )
+                .foregroundStyle(.white)
+            } footer: {
+                Text(primaryAction.reason)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func primaryDestination(
+        for action: PrimaryAction
+    ) -> some View {
+        switch action {
+        case .importPhotos:
+            PhotoImportView(event: event)
+
+        case .continueUpload:
+            UploadQueueView(event: event)
+
+        case .uploadReadyFinals:
+            FinalUploadsView(
+                event: event,
+                automaticallyUploadReadyFinals: true
+            )
+
+        case .reviewLiked:
+            LikedPhotosView(event: event)
+
+        case .publish:
+            PublishGalleryView(
+                event: event
+            ) { updatedEvent in
+                event = updatedEvent
+
+                onEventUpdated(updatedEvent)
+            }
+        }
+    }
+
     var body: some View {
         List {
+            primaryActionSection
+
             Section("Event") {
                 galleryStatusMenu
                 
@@ -282,10 +445,25 @@ struct EventDetailView: View {
                 NavigationLink {
                     LikedPhotosView(event: event)
                 } label: {
-                    Label(
-                        "Liked Photos",
-                        systemImage: "heart.fill"
-                    )
+                    HStack {
+                        Label(
+                            "Liked Photos",
+                            systemImage: "heart.fill"
+                        )
+
+                        Spacer()
+
+                        if let likedCount =
+                            dashboardStatistics?
+                            .likedPhotoCount,
+                            likedCount > 0 {
+                            Text("\(likedCount)")
+                                .font(.caption.bold())
+                                .foregroundStyle(
+                                    .secondary
+                                )
+                        }
+                    }
                 }
                 
                 NavigationLink {
@@ -315,11 +493,26 @@ struct EventDetailView: View {
                 NavigationLink {
                     FinalUploadsView(event: event)
                 } label: {
-                    Label(
-                        "Review Finals",
-                        systemImage:
-                            "photo.stack"
-                    )
+                    HStack {
+                        Label(
+                            "Review Finals",
+                            systemImage:
+                                "photo.stack"
+                        )
+
+                        Spacer()
+
+                        if let finalCount =
+                            dashboardStatistics?
+                            .uploadedFinalCount,
+                            finalCount > 0 {
+                            Text("\(finalCount)")
+                                .font(.caption.bold())
+                                .foregroundStyle(
+                                    .secondary
+                                )
+                        }
+                    }
                 }
             }
             
