@@ -13,18 +13,11 @@ struct EventListView: View {
     let isLoadingStatistics: Bool
     let errorMessage: String?
 
+    @Binding var selectedEventID: String?
+
     let onRefresh: () async -> Void
     let onCreateEvent:
     (String) async throws -> Void
-
-    let onEventUpdated:
-    (PickPicEvent) -> Void
-
-    let onEventStatisticsUpdated:
-    (String, EventPhotoStatistics) -> Void
-
-    let onEventDeleted:
-    (String) -> Void
 
     @EnvironmentObject private var uploadQueue:
     UploadQueueStore
@@ -122,7 +115,7 @@ struct EventListView: View {
     }
 
     var body: some View {
-        List {
+        List(selection: $selectedEventID) {
             if
                 let errorMessage,
                 !events.isEmpty
@@ -213,7 +206,13 @@ struct EventListView: View {
                 }
             } else {
                 ForEach(visibleEvents) { event in
-                    NavigationLink(value: event) {
+                    /*
+                     * Tagged rather than wrapped in a link, so the
+                     * sidebar drives the detail column instead of
+                     * pushing over itself. In compact width the split
+                     * view collapses and this still reads as a push.
+                     */
+                    Group {
                         let jobs = uploadQueue.jobs(
                             for: event.id
                         )
@@ -257,23 +256,11 @@ struct EventListView: View {
                                 .count
                         )
                     }
+                    .tag(event.id)
                 }
             }
         }
         .navigationTitle("Events")
-        .navigationDestination(
-            for: PickPicEvent.self
-        ) { event in
-            EventDetailView(
-                event: event,
-                onEventUpdated:
-                    onEventUpdated,
-                onEventStatisticsUpdated:
-                    onEventStatisticsUpdated,
-                onEventDeleted:
-                    onEventDeleted
-            )
-        }
         .searchable(
             text: $searchText,
             prompt: "Search events"
