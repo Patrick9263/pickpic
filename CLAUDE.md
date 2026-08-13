@@ -38,7 +38,11 @@ xcodebuild -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug 
   -derivedDataPath /tmp/pickpic-build clean build
 ```
 
-Two gotchas. `xcode-select` on this machine may point at `/Library/Developer/CommandLineTools`, which makes `xcodebuild` fail outright; prefix the command with `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` to work around it without sudo. And use a scratch `-derivedDataPath` rather than wiping the shared DerivedData Xcode is using.
+Use a scratch `-derivedDataPath` rather than wiping the shared DerivedData Xcode is using.
+
+If `xcodebuild` ever reports that the active developer directory is `/Library/Developer/CommandLineTools`, `xcode-select` is pointed at the wrong place. Check with `xcode-select -p`; the fix needs sudo, so ask rather than working around it — `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` as a command prefix is a stopgap only.
+
+Debug builds put the app's code in `PickPic.app/PickPic.debug.dylib`, not the `PickPic` stub binary. When checking whether a change actually made it into a build, run `strings` against the dylib.
 
 Because sources are listed explicitly in `project.pbxproj` (see trap 3), a green build is not proof that a new file is actually compiled — it may just be absent. Confirm against the compile list:
 
