@@ -293,7 +293,10 @@ struct LikedPhotosView: View {
                     if folderReference != nil {
                         LikedPhotoRow(
                             photo: photo,
-                            isDraggable: true
+                            isDraggable: true,
+                            onCopyName: {
+                                copyBaseName(for: photo)
+                            }
                         )
                         .onDrag {
                             dragProvider(for: photo)
@@ -301,7 +304,10 @@ struct LikedPhotosView: View {
                     } else {
                         LikedPhotoRow(
                             photo: photo,
-                            isDraggable: false
+                            isDraggable: false,
+                            onCopyName: {
+                                copyBaseName(for: photo)
+                            }
                         )
                     }
                 }
@@ -453,6 +459,31 @@ struct LikedPhotosView: View {
             detail:
                 "\(event.title): copied \(result.copiedPhotoCount) \(fileDescription) into To Edit.",
             systemImage: "heart.circle.fill"
+        )
+    }
+
+    /*
+     * Puts the filename without its extension on the clipboard, because
+     * an editor exporting the edit does not prefill a name and the
+     * Edited folder is matched on exactly this stem.
+     *
+     * Original casing is kept for legibility; the match lowercases both
+     * sides, so it does not have to be typed back exactly.
+     */
+    private func copyBaseName(
+        for photo: ServerPhotoRecord
+    ) {
+        let baseName =
+        (photo.originalFilename as NSString)
+            .deletingPathExtension
+
+        UIPasteboard.general.string = baseName
+
+        feedback.show(
+            title: "Name copied",
+            detail:
+                "Paste \(baseName) when saving the edit into the Edited folder.",
+            systemImage: "doc.on.doc.fill"
         )
     }
 
@@ -712,6 +743,8 @@ private struct LikedPhotoRow: View {
      */
     let isDraggable: Bool
 
+    let onCopyName: () -> Void
+
     private var subtitle: String {
         [
             photo.capturedAtDisplay,
@@ -760,6 +793,22 @@ private struct LikedPhotoRow: View {
             .font(.subheadline)
             .foregroundStyle(.red)
             .labelStyle(.titleAndIcon)
+
+            Button(action: onCopyName) {
+                Label(
+                    "Copy Name",
+                    systemImage: "doc.on.doc"
+                )
+                .labelStyle(.iconOnly)
+            }
+            /*
+             * Borderless so the button takes the tap without the row's
+             * drag gesture swallowing it.
+             */
+            .buttonStyle(.borderless)
+            .accessibilityLabel(
+                "Copy the name of \(photo.originalFilename) without its extension"
+            )
 
             if isDraggable {
                 Image(
