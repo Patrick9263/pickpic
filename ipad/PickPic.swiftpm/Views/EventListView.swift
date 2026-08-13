@@ -261,6 +261,12 @@ struct EventListView: View {
             }
         }
         .navigationTitle("Events")
+        /*
+         * A large title sits on its own line instead of competing with
+         * the filter, settings, add and sidebar controls, which in a
+         * narrow sidebar left room for only "Ev…".
+         */
+        .navigationBarTitleDisplayMode(.large)
         .searchable(
             text: $searchText,
             prompt: "Search events"
@@ -788,12 +794,32 @@ private struct EventRow: View {
             ) {
                 Text(event.title)
                     .font(.headline)
+                    .lineLimit(2)
 
-                Label(
-                    event.status.title,
-                    systemImage:
-                        event.status.systemImage
-                )
+                /*
+                 * The date shares the status line rather than occupying
+                 * a column of its own. As a separate column it competed
+                 * with the text for a narrow sidebar's width, wrapping
+                 * titles onto a third line and truncating the metrics
+                 * below to bare icons.
+                 */
+                HStack(spacing: 8) {
+                    Label(
+                        event.status.title,
+                        systemImage:
+                            event.status.systemImage
+                    )
+
+                    Spacer(minLength: 4)
+
+                    Text(
+                        event.updatedAt.formatted(
+                            date: .abbreviated,
+                            time: .omitted
+                        )
+                    )
+                    .fixedSize()
+                }
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -825,16 +851,7 @@ private struct EventRow: View {
                 }
             }
 
-            Spacer()
-
-            Text(
-                event.updatedAt.formatted(
-                    date: .abbreviated,
-                    time: .omitted
-                )
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
         .padding(.vertical, 4)
     }
@@ -909,6 +926,13 @@ private struct EventRowMetric: View {
             systemImage: systemImage
         )
         .labelStyle(.titleAndIcon)
+        /*
+         * Keeps each icon and its number together. Without this a
+         * narrow sidebar drops the numbers and leaves a row of icons at
+         * uneven spacing, which reads as a layout fault rather than as
+         * missing data.
+         */
+        .fixedSize()
         .accessibilityLabel(
             "\(value)"
         )
