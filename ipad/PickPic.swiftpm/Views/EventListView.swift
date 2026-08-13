@@ -751,20 +751,23 @@ private struct EventRow: View {
                 EventRowMetric(
                     value:
                         statistics.uploadedProofCount,
-                    systemImage: "photo"
+                    systemImage: "photo",
+                    name: "proofs"
                 )
 
                 EventRowMetric(
                     value:
                         statistics.likedPhotoCount,
-                    systemImage: "heart.fill"
+                    systemImage: "heart.fill",
+                    name: "liked"
                 )
 
                 EventRowMetric(
                     value:
                         statistics.uploadedFinalCount,
                     systemImage:
-                        "checkmark.seal.fill"
+                        "checkmark.seal.fill",
+                    name: "finals"
                 )
 
                 if
@@ -776,7 +779,8 @@ private struct EventRow: View {
                             statistics
                             .missingVariantPhotoCount,
                         systemImage:
-                            "exclamationmark.triangle.fill"
+                            "exclamationmark.triangle.fill",
+                        name: "needing web versions"
                     )
                     .foregroundStyle(.orange)
                 }
@@ -808,6 +812,12 @@ private struct EventRowMetric: View {
     let value: Int
     let systemImage: String
 
+    /*
+     * What the icon means, for anyone who cannot see it. Without this
+     * the row announces as a run of bare numbers.
+     */
+    let name: String
+
     var body: some View {
         /*
          * Built by hand rather than as a Label so the gap between an
@@ -832,7 +842,7 @@ private struct EventRowMetric: View {
         .fixedSize()
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "\(value)"
+            "\(value) \(name)"
         )
     }
 }
