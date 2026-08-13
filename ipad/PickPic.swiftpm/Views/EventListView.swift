@@ -51,69 +51,6 @@ struct EventListView: View {
             }
     }
 
-    private var visibleStatistics:
-    EventPhotoStatistics
-    {
-        visibleEvents.reduce(.empty) {
-            result,
-            event in
-
-            guard let statistics =
-                statisticsByEventID[event.id]
-            else {
-                return result
-            }
-
-            return EventPhotoStatistics(
-                uploadedProofCount:
-                    result.uploadedProofCount
-                    + statistics.uploadedProofCount,
-                likedPhotoCount:
-                    result.likedPhotoCount
-                    + statistics.likedPhotoCount,
-                totalHeartCount:
-                    result.totalHeartCount
-                    + statistics.totalHeartCount,
-                editingPhotoCount:
-                    result.editingPhotoCount
-                    + statistics.editingPhotoCount,
-                uploadedFinalCount:
-                    result.uploadedFinalCount
-                    + statistics.uploadedFinalCount,
-                missingVariantPhotoCount:
-                    result.missingVariantPhotoCount
-                    + statistics.missingVariantPhotoCount
-            )
-        }
-    }
-
-    private var visibleIncompleteJobCount: Int {
-        visibleEvents.reduce(0) { total, event in
-            total
-            + unfinishedJobCount(
-                for: event.id
-            )
-        }
-    }
-
-    private var visibleStatisticsAreComplete: Bool {
-        !visibleEvents.isEmpty
-        && visibleEvents.allSatisfy { event in
-            statisticsByEventID[event.id] != nil
-            && !statisticsFailedEventIDs.contains(
-                event.id
-            )
-        }
-    }
-
-    private var hasVisibleStatisticsFailure: Bool {
-        visibleEvents.contains { event in
-            statisticsFailedEventIDs.contains(
-                event.id
-            )
-        }
-    }
-
     var body: some View {
         List(selection: $selectedEventID) {
             if
@@ -143,42 +80,6 @@ struct EventListView: View {
                         }
                     }
                     .padding(.vertical, 4)
-                }
-            }
-
-            if !events.isEmpty {
-                Section {
-                    EventOverview(
-                        eventCount:
-                            visibleEvents.count,
-                        statistics:
-                            visibleStatistics,
-                        incompleteJobCount:
-                            visibleIncompleteJobCount,
-                        showsPlaceholder:
-                            !visibleStatisticsAreComplete
-                    )
-                } header: {
-                    HStack {
-                        Text("Overview")
-
-                        Spacer()
-
-                        if isLoadingStatistics {
-                            ProgressView()
-                                .controlSize(.mini)
-                        }
-                    }
-                } footer: {
-                    if hasVisibleStatisticsFailure {
-                        Label(
-                            "Some event statistics could not be refreshed.",
-                            systemImage:
-                                "exclamationmark.triangle"
-                        )
-                    } else {
-                        Text(overviewFooterText)
-                    }
                 }
             }
 
@@ -351,28 +252,6 @@ struct EventListView: View {
             if events.isEmpty {
                 emptyState
             }
-        }
-    }
-
-    private var overviewFooterText: String {
-        switch selectedFilter {
-        case .all:
-            return "Statistics for all events."
-
-        case .active:
-            return "Draft, open, active, or unfinished events."
-
-        case .draft:
-            return "Events whose public galleries are still drafts."
-
-        case .open:
-            return "Open galleries accepting requests and comments."
-
-        case .closed:
-            return "Closed galleries that remain viewable."
-
-        case .archived:
-            return "Archived galleries that are no longer public."
         }
     }
 
@@ -655,7 +534,12 @@ private enum EventDashboardSort:
     }
 }
 
-private struct EventOverview: View {
+/*
+ * Shown in the detail column when no event is selected, where an
+ * all-events summary has room to breathe. It previously sat at the top
+ * of the sidebar and pushed the events themselves out of view.
+ */
+struct EventOverview: View {
     let eventCount: Int
     let statistics: EventPhotoStatistics
     let incompleteJobCount: Int
@@ -859,7 +743,11 @@ private struct EventRow: View {
     @ViewBuilder
     private var statisticsLine: some View {
         if let statistics {
-            HStack(spacing: 12) {
+            /*
+             * Wider than the 3pt inside a metric, so each number reads
+             * as belonging to the icon on its left.
+             */
+            HStack(spacing: 14) {
                 EventRowMetric(
                     value:
                         statistics.uploadedProofCount,
@@ -921,11 +809,20 @@ private struct EventRowMetric: View {
     let systemImage: String
 
     var body: some View {
-        Label(
-            "\(value)",
-            systemImage: systemImage
-        )
-        .labelStyle(.titleAndIcon)
+        /*
+         * Built by hand rather than as a Label so the gap between an
+         * icon and its own number stays tighter than the gap between one
+         * metric and the next. A Label's default spacing made the two
+         * read as evenly spaced, so the numbers did not obviously belong
+         * to the icons beside them.
+         */
+        HStack(spacing: 3) {
+            Image(systemName: systemImage)
+                .imageScale(.small)
+
+            Text("\(value)")
+                .monospacedDigit()
+        }
         /*
          * Keeps each icon and its number together. Without this a
          * narrow sidebar drops the numbers and leaves a row of icons at
@@ -933,6 +830,7 @@ private struct EventRowMetric: View {
          * missing data.
          */
         .fixedSize()
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(value)"
         )

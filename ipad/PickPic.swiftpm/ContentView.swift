@@ -22,6 +22,84 @@ struct ContentView: View {
      */
     @State private var selectedEventID: String?
 
+    /*
+     * With nothing selected the detail column would otherwise be a large
+     * empty area, so it carries the all-events summary that used to sit
+     * at the top of the sidebar crowding out the events themselves.
+     */
+    @ViewBuilder
+    private var placeholder: some View {
+        if viewModel.events.isEmpty {
+            ContentUnavailableView(
+                "No Event Selected",
+                systemImage:
+                    "photo.on.rectangle.angled",
+                description: Text(
+                    "Create an event to start importing and sharing photos."
+                )
+            )
+        } else {
+            List {
+                Section {
+                    EventOverview(
+                        eventCount:
+                            viewModel.events.count,
+                        statistics:
+                            EventPhotoStatistics.total(
+                                for: viewModel.events,
+                                statisticsByEventID:
+                                    viewModel
+                                    .statisticsByEventID
+                            ),
+                        incompleteJobCount:
+                            viewModel.events.reduce(
+                                0
+                            ) { total, event in
+                                total
+                                + uploadQueue.jobs(
+                                    for: event.id
+                                )
+                                .filter { job in
+                                    job.stage
+                                        != .completed
+                                }
+                                .count
+                            },
+                        showsPlaceholder:
+                            !allStatisticsAreLoaded
+                    )
+                } header: {
+                    HStack {
+                        Text("Overview")
+
+                        Spacer()
+
+                        if viewModel
+                            .isLoadingStatistics {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                    }
+                } footer: {
+                    Text(
+                        "Choose an event to import photos, review likes, and publish its gallery."
+                    )
+                }
+            }
+            .navigationTitle("All Events")
+        }
+    }
+
+    private var allStatisticsAreLoaded: Bool {
+        !viewModel.events.isEmpty
+        && viewModel.events.allSatisfy { event in
+            viewModel.statisticsByEventID[event.id]
+                != nil
+            && !viewModel.statisticsFailedEventIDs
+                .contains(event.id)
+        }
+    }
+
     private var selectedEvent: PickPicEvent? {
         guard let selectedEventID else {
             return nil
@@ -137,14 +215,7 @@ struct ContentView: View {
                      */
                     .id(selectedEvent.id)
                 } else {
-                    ContentUnavailableView(
-                        "No Event Selected",
-                        systemImage:
-                            "photo.on.rectangle.angled",
-                        description: Text(
-                            "Choose an event to import photos, review likes, and publish its gallery."
-                        )
-                    )
+                    placeholder
                 }
             }
         }
