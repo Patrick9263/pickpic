@@ -211,6 +211,47 @@ struct EventPhotoStatistics:
     Hashable,
     Sendable
 {
+    /*
+     * Sums the statistics of whichever events have them, skipping any
+     * that have not loaded. Shared so the sidebar and the detail
+     * placeholder cannot drift into reporting different totals.
+     */
+    static func total(
+        for events: [PickPicEvent],
+        statisticsByEventID:
+            [String: EventPhotoStatistics]
+    ) -> EventPhotoStatistics {
+        events.reduce(.empty) { result, event in
+            guard
+                let statistics =
+                    statisticsByEventID[event.id]
+            else {
+                return result
+            }
+
+            return EventPhotoStatistics(
+                uploadedProofCount:
+                    result.uploadedProofCount
+                    + statistics.uploadedProofCount,
+                likedPhotoCount:
+                    result.likedPhotoCount
+                    + statistics.likedPhotoCount,
+                totalHeartCount:
+                    result.totalHeartCount
+                    + statistics.totalHeartCount,
+                editingPhotoCount:
+                    result.editingPhotoCount
+                    + statistics.editingPhotoCount,
+                uploadedFinalCount:
+                    result.uploadedFinalCount
+                    + statistics.uploadedFinalCount,
+                missingVariantPhotoCount:
+                    result.missingVariantPhotoCount
+                    + statistics.missingVariantPhotoCount
+            )
+        }
+    }
+
     let uploadedProofCount: Int
     let likedPhotoCount: Int
     let totalHeartCount: Int

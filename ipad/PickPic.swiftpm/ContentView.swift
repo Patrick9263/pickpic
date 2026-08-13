@@ -14,9 +14,104 @@ struct ContentView: View {
     EventListViewModel()
     
     @State private var showingSettings = false
-    
+
+    /*
+     * Selection is held by id rather than by event, because an event
+     * changes identity whenever its status or title updates and a
+     * value-based selection would be dropped underneath the detail.
+     */
+    @State private var selectedEventID: String?
+
+    /*
+     * With nothing selected the detail column would otherwise be a large
+     * empty area, so it carries the all-events summary that used to sit
+     * at the top of the sidebar crowding out the events themselves.
+     */
+    @ViewBuilder
+    private var placeholder: some View {
+        if viewModel.events.isEmpty {
+            ContentUnavailableView(
+                "No Event Selected",
+                systemImage:
+                    "photo.on.rectangle.angled",
+                description: Text(
+                    "Create an event to start importing and sharing photos."
+                )
+            )
+        } else {
+            List {
+                Section {
+                    EventOverview(
+                        eventCount:
+                            viewModel.events.count,
+                        statistics:
+                            EventPhotoStatistics.total(
+                                for: viewModel.events,
+                                statisticsByEventID:
+                                    viewModel
+                                    .statisticsByEventID
+                            ),
+                        incompleteJobCount:
+                            viewModel.events.reduce(
+                                0
+                            ) { total, event in
+                                total
+                                + uploadQueue.jobs(
+                                    for: event.id
+                                )
+                                .filter { job in
+                                    job.stage
+                                        != .completed
+                                }
+                                .count
+                            },
+                        showsPlaceholder:
+                            !allStatisticsAreLoaded
+                    )
+                } header: {
+                    HStack {
+                        Text("Overview")
+
+                        Spacer()
+
+                        if viewModel
+                            .isLoadingStatistics {
+                            ProgressView()
+                                .controlSize(.mini)
+                        }
+                    }
+                } footer: {
+                    Text(
+                        "Choose an event to import photos, review likes, and publish its gallery."
+                    )
+                }
+            }
+            .navigationTitle("All Events")
+        }
+    }
+
+    private var allStatisticsAreLoaded: Bool {
+        !viewModel.events.isEmpty
+        && viewModel.events.allSatisfy { event in
+            viewModel.statisticsByEventID[event.id]
+                != nil
+            && !viewModel.statisticsFailedEventIDs
+                .contains(event.id)
+        }
+    }
+
+    private var selectedEvent: PickPicEvent? {
+        guard let selectedEventID else {
+            return nil
+        }
+
+        return viewModel.events.first { event in
+            event.id == selectedEventID
+        }
+    }
+
     var body: some View {
-        NavigationStack {
+        NavigationSplitView {
             EventListView(
                 events: viewModel.events,
                 statisticsByEventID:
@@ -29,6 +124,7 @@ struct ContentView: View {
                     viewModel.isLoadingStatistics,
                 errorMessage:
                     viewModel.errorMessage,
+                selectedEventID: $selectedEventID,
                 onRefresh: {
                     await viewModel.load(
                         using: configuration
@@ -38,26 +134,6 @@ struct ContentView: View {
                     try await viewModel.createEvent(
                         title: title,
                         using: configuration
-                    )
-                },
-                onEventUpdated: {
-                    updatedEvent in
-                    
-                    viewModel.replaceEvent(
-                        updatedEvent
-                    )
-                },
-                onEventStatisticsUpdated: {
-                    eventID, statistics in
-
-                    viewModel.replaceStatistics(
-                        statistics,
-                        for: eventID
-                    )
-                },
-                onEventDeleted: { eventID in
-                    viewModel.removeEvent(
-                        eventID: eventID
                     )
                 }
             )
@@ -91,6 +167,55 @@ struct ContentView: View {
                                 "gearshape"
                         )
                     }
+                }
+            }
+        } detail: {
+            /*
+             * The detail column carries its own stack, because an event
+             * pushes onward to import, queue, liked photos and finals.
+             */
+            NavigationStack {
+                if let selectedEvent {
+                    EventDetailView(
+                        event: selectedEvent,
+                        onEventUpdated: {
+                            updatedEvent in
+
+                            viewModel.replaceEvent(
+                                updatedEvent
+                            )
+                        },
+                        onEventStatisticsUpdated: {
+                            eventID, statistics in
+
+                            viewModel.replaceStatistics(
+                                statistics,
+                                for: eventID
+                            )
+                        },
+                        onEventDeleted: { eventID in
+                            viewModel.removeEvent(
+                                eventID: eventID
+                            )
+
+                            /*
+                             * Nothing would clear this otherwise, and
+                             * the detail would keep showing an event
+                             * that no longer exists.
+                             */
+                            if selectedEventID == eventID {
+                                selectedEventID = nil
+                            }
+                        }
+                    )
+                    /*
+                     * Ties the view's identity to the event so that
+                     * picking a different one rebuilds it. Without this
+                     * the detail keeps the first event's local state.
+                     */
+                    .id(selectedEvent.id)
+                } else {
+                    placeholder
                 }
             }
         }
