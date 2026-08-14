@@ -634,46 +634,56 @@ struct FinalUploadsView: View {
         }
     }
 
-    @ViewBuilder
+    /*
+     * Stacked here rather than left to the caller. These are several
+     * sibling views from a ViewBuilder, and the TimelineView that shows
+     * them takes a single view, so without a stack they were all handed
+     * the same frame and drew on top of one another.
+     */
     private func activeOperationMetrics(
         at date: Date
     ) -> some View {
-        if let elapsed =
-            viewModel.operationElapsedDuration(
-                at: date
-            )
-        {
-            LabeledContent(
-                "Elapsed",
-                value:
-                    formattedDuration(elapsed)
-            )
-        }
+        VStack(
+            alignment: .leading,
+            spacing: 4
+        ) {
+            if let elapsed =
+                viewModel.operationElapsedDuration(
+                    at: date
+                )
+            {
+                LabeledContent(
+                    "Elapsed",
+                    value:
+                        formattedDuration(elapsed)
+                )
+            }
 
-        if let bytesPerSecond =
-            viewModel.averageOperationBytesPerSecond(
-                at: date
-            )
-        {
-            LabeledContent(
-                "Average speed",
-                value:
-                    formattedByteRate(
-                        bytesPerSecond
-                    )
-            )
-        }
+            if let bytesPerSecond =
+                viewModel.averageOperationBytesPerSecond(
+                    at: date
+                )
+            {
+                LabeledContent(
+                    "Average speed",
+                    value:
+                        formattedByteRate(
+                            bytesPerSecond
+                        )
+                )
+            }
 
-        if let remaining =
-            viewModel.estimatedOperationRemainingDuration(
-                at: date
-            )
-        {
-            LabeledContent(
-                "Estimated remaining",
-                value:
-                    "About \(formattedDuration(remaining))"
-            )
+            if let remaining =
+                viewModel.estimatedOperationRemainingDuration(
+                    at: date
+                )
+            {
+                LabeledContent(
+                    "Estimated remaining",
+                    value:
+                        "About \(formattedDuration(remaining))"
+                )
+            }
         }
     }
 
