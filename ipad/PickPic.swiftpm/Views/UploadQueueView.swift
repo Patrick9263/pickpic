@@ -1196,10 +1196,23 @@ private struct UploadJobRow: View {
                             by: 1
                         )
                     ) { context in
-                        uploadProgressDetails(
-                            at: context.date,
-                            showsEstimate: true
-                        )
+                        /*
+                         * Stacked at this call site only. A TimelineView
+                         * takes a single view, so the several rows this
+                         * returns were handed one frame and drew over
+                         * each other. The other callers put it straight
+                         * into a stack, where wrapping it would instead
+                         * collapse the rows into one.
+                         */
+                        VStack(
+                            alignment: .leading,
+                            spacing: 4
+                        ) {
+                            uploadProgressDetails(
+                                at: context.date,
+                                showsEstimate: true
+                            )
+                        }
                     }
 
                     Text(
@@ -1320,43 +1333,48 @@ private struct UploadJobRow: View {
     private func conversionTiming(
         at date: Date
     ) -> some View {
-        if let startedAt =
-            job.conversionStartedAt {
-            let elapsed = max(
-                date.timeIntervalSince(
-                    startedAt
-                ),
-                0
-            )
-
-            LabeledContent(
-                "Elapsed",
-                value:
-                    formattedDuration(elapsed)
-            )
-
-            if
-                job.conversionProcessedCount > 0,
-                job.conversionProcessedCount
-                    < job.photosToConvertCount
-            {
-                let averageSecondsPerPhoto =
-                elapsed / Double(
-                    job.conversionProcessedCount
-                )
-
-                let remaining =
-                averageSecondsPerPhoto
-                * Double(
-                    job.photosToConvertCount
-                    - job.conversionProcessedCount
+        VStack(
+            alignment: .leading,
+            spacing: 4
+        ) {
+            if let startedAt =
+                job.conversionStartedAt {
+                let elapsed = max(
+                    date.timeIntervalSince(
+                        startedAt
+                    ),
+                    0
                 )
 
                 LabeledContent(
-                    "Estimated remaining",
+                    "Elapsed",
                     value:
-                        "About \(formattedDuration(remaining))"
+                        formattedDuration(elapsed)
                 )
+
+                if
+                    job.conversionProcessedCount > 0,
+                    job.conversionProcessedCount
+                        < job.photosToConvertCount
+                {
+                    let averageSecondsPerPhoto =
+                    elapsed / Double(
+                        job.conversionProcessedCount
+                    )
+
+                    let remaining =
+                    averageSecondsPerPhoto
+                    * Double(
+                        job.photosToConvertCount
+                        - job.conversionProcessedCount
+                    )
+
+                    LabeledContent(
+                        "Estimated remaining",
+                        value:
+                            "About \(formattedDuration(remaining))"
+                    )
+                }
             }
         }
     }
