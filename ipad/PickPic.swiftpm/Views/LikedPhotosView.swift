@@ -15,6 +15,14 @@ struct LikedPhotosView: View {
     
     @StateObject private var viewModel =
     LikedPhotosViewModel()
+
+    /*
+     * Drives the automatic pickup of finished edits. Owned here rather
+     * than shared with the Upload Finals screen so that leaving this
+     * view cancels the watch with it.
+     */
+    @StateObject private var finalUploads =
+    FinalUploadsViewModel()
     
     @State private var showingFolderPicker = false
 
@@ -165,6 +173,9 @@ struct LikedPhotosView: View {
         .task(id: event.id) {
             await refreshAndSync()
         }
+        .task(id: folderReference?.updatedAt) {
+            await watchForFinishedEdits()
+        }
     }
     
     private var eventFolderSection: some View {
@@ -237,6 +248,31 @@ struct LikedPhotosView: View {
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
+
+            Label(
+                """
+                While this screen is open it also watches Edited, and \
+                uploads finished edits as they appear.
+                """,
+                systemImage: "checkmark.seal"
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+
+            if finalUploads.isUploading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+
+                    Text(
+                        finalUploads.currentFilename
+                        ?? "Uploading finished edits…"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                }
+            }
 
             if let lastCheckedAt =
                 viewModel.lastCheckedAt {
@@ -587,6 +623,81 @@ struct LikedPhotosView: View {
 
             return NSItemProvider()
         }
+    }
+
+    /*
+     * Picks up finished edits while the photographer works through this
+     * list, so saving a JPEG into Edited is enough to get it uploaded
+     * without visiting the Upload Finals screen.
+     *
+     * Runs only while this view is on screen: the task is cancelled on
+     * the way out, which is why the watch is scoped here rather than
+     * running against every event's folder app-wide.
+     */
+    private func watchForFinishedEdits() async {
+        guard let folderReference else {
+            return
+        }
+
+        while !Task.isCancelled {
+            await finalUploads.load(
+                eventID: event.id,
+                reference: folderReference,
+                using: configuration
+            )
+
+            let readyCount =
+            finalUploads.scanResult?
+                .candidates.count
+            ?? 0
+
+            if readyCount > 0 {
+                await finalUploads.uploadAll(
+                    eventID: event.id,
+                    reference: folderReference,
+                    using: configuration
+                )
+
+                await reportFinishedEdits()
+            }
+
+            /*
+             * Matches the cadence of the liked-photo sync the app
+             * already runs, so the two settle into the same rhythm
+             * rather than competing for the folder.
+             */
+            try? await Task.sleep(
+                for: .seconds(30)
+            )
+        }
+    }
+
+    private func reportFinishedEdits() async {
+        guard
+            let uploadedCount =
+                finalUploads.lastUploadedCount,
+            uploadedCount > 0
+        else {
+            return
+        }
+
+        feedback.show(
+            title: "Finals uploaded",
+            detail:
+                uploadedCount == 1
+            ? "1 edited photo was uploaded from Edited."
+            : "\(uploadedCount) edited photos were uploaded from Edited.",
+            systemImage: "checkmark.seal.fill"
+        )
+
+        /*
+         * Refreshes the list so the photos just delivered stop showing
+         * as still waiting for an edit.
+         */
+        await viewModel.load(
+            eventID: event.id,
+            using: configuration
+        )
     }
 
     private func refreshAndSync() async {
