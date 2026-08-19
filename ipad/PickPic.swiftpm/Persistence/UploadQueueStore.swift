@@ -765,20 +765,22 @@ final class UploadQueueStore: ObservableObject {
                 continue
             }
 
-            /*
-             * A stalled job — paused, or stopped on a failure — is
-             * skipped rather than aborting the rest of the batch, so one
-             * bad photo doesn't block retrying every other unfinished
-             * job in this event.
-             */
             if refreshedJob.uploadProgress.isPaused {
-                continue
+                return
             }
 
-            if refreshedJob.uploadProgress.lastFailure
-                != nil
+            /*
+             * A job left waiting on connectivity means the network is
+             * down, so the remaining jobs would only collect timeouts —
+             * and resumeWaitingForConnectivityJobs picks all of them up
+             * together once it returns. Any other failure is specific to
+             * that photo and is skipped, so one bad frame no longer
+             * stops every later job in the event from being retried.
+             */
+            if refreshedJob.uploadProgress
+                .isWaitingForConnectivity
             {
-                continue
+                return
             }
         }
     }
