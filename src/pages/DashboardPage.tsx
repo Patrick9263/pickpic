@@ -38,6 +38,11 @@ interface DeleteEventResponse {
   eventId: string;
 }
 
+interface ClearEventPhotosResponse {
+  eventId: string;
+  deletedPhotoCount: number;
+}
+
 interface PhotosResponse {
   photos: PhotoRecord[];
 }
@@ -206,6 +211,9 @@ function DashboardPage() {
     string | null
   >(null);
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null);
+  const [clearingEventPhotosId, setClearingEventPhotosId] = useState<
+    string | null
+  >(null);
   const [showArchived, setShowArchived] = useState(false);
   const archivedEventCount = events.filter(
     (eventRecord) => eventRecord.status === "archived",
@@ -974,6 +982,61 @@ function DashboardPage() {
     }
   }
 
+  async function handleClearEventPhotos(
+    eventRecord: EventRecord,
+  ): Promise<boolean> {
+    const clearedPhotoIds = new Set(
+      (photosByEvent[eventRecord.id] ?? []).map((photo) => photo.id),
+    );
+
+    setClearingEventPhotosId(eventRecord.id);
+    setError(null);
+
+    try {
+      await fetchJson<ClearEventPhotosResponse>(
+        `/api/admin/events/${encodeURIComponent(eventRecord.id)}/photos`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventRecord.id]: [],
+      }));
+
+      setUploadProgressByEvent((currentProgress) => {
+        const nextProgress = {
+          ...currentProgress,
+        };
+
+        delete nextProgress[eventRecord.id];
+
+        return nextProgress;
+      });
+
+      setVariantRepairWarnings((currentWarnings) =>
+        Object.fromEntries(
+          Object.entries(currentWarnings).filter(
+            ([photoId]) => !clearedPhotoIds.has(photoId),
+          ),
+        ),
+      );
+
+      return true;
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to clear the event photos.",
+      );
+
+      return false;
+    } finally {
+      setClearingEventPhotosId(null);
+    }
+  }
+
   async function handleDeleteEvent(eventRecord: EventRecord): Promise<boolean> {
     const deletedPhotoIds = new Set(
       (photosByEvent[eventRecord.id] ?? []).map((photo) => photo.id),
@@ -1223,9 +1286,11 @@ function DashboardPage() {
                       handleSetEventStatus={handleSetEventStatus}
                       updatingEventTitleId={updatingEventTitleId}
                       deletingEventId={deletingEventId}
+                      clearingEventPhotosId={clearingEventPhotosId}
                       eventManagementDisabled={eventManagementDisabled}
                       handleRenameEvent={handleRenameEvent}
                       handleDeleteEvent={handleDeleteEvent}
+                      handleClearEventPhotos={handleClearEventPhotos}
                     />
                   );
                 })}

@@ -961,21 +961,15 @@ async function updateEvent(
   });
 }
 
-async function deleteEvent(env: Env, eventId: string): Promise<Response> {
-  const event = await env.DB.prepare(
-    `
-      SELECT id
-      FROM events
-      WHERE id = ?
-    `,
-  )
-    .bind(eventId)
-    .first<{ id: string }>();
-
-  if (!event) {
-    return jsonResponse({ error: "Event not found." }, 404);
-  }
-
+/*
+ * Every R2 object an event owns: originals, finals, and the thumbnail and
+ * preview variants of both. Deleting an event and clearing its photos need
+ * exactly the same set, so the query lives in one place.
+ */
+async function collectEventStorageKeys(
+  env: Env,
+  eventId: string,
+): Promise<{ storageKeys: string[]; photoCount: number }> {
   const photoResult = await env.DB.prepare(
     `
       SELECT
@@ -1013,6 +1007,29 @@ async function deleteEvent(env: Env, eventId: string): Promise<Response> {
       ].filter((storageKey): storageKey is string => storageKey !== null),
     ),
   );
+
+  return {
+    storageKeys,
+    photoCount: photoResult.results.length,
+  };
+}
+
+async function deleteEvent(env: Env, eventId: string): Promise<Response> {
+  const event = await env.DB.prepare(
+    `
+      SELECT id
+      FROM events
+      WHERE id = ?
+    `,
+  )
+    .bind(eventId)
+    .first<{ id: string }>();
+
+  if (!event) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  const { storageKeys } = await collectEventStorageKeys(env, eventId);
 
   try {
     for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
@@ -1054,6 +1071,84 @@ async function deleteEvent(env: Env, eventId: string): Promise<Response> {
   return jsonResponse({
     deleted: true,
     eventId,
+  });
+}
+
+/*
+ * Empties an event without removing it, so a shoot uploaded against the
+ * wrong event can be re-uploaded into the right one.
+ *
+ * R2 objects go first: an orphaned object costs storage but is invisible,
+ * whereas a photo row whose image is gone renders as a broken gallery. The
+ * hearts, comments, and variant rows follow the photos through their
+ * ON DELETE CASCADE foreign keys, so one delete covers them.
+ */
+async function clearEventPhotos(env: Env, eventId: string): Promise<Response> {
+  const event = await env.DB.prepare(
+    `
+      SELECT id
+      FROM events
+      WHERE id = ?
+    `,
+  )
+    .bind(eventId)
+    .first<{ id: string }>();
+
+  if (!event) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  const { storageKeys, photoCount } = await collectEventStorageKeys(
+    env,
+    eventId,
+  );
+
+  if (photoCount === 0) {
+    return jsonResponse({
+      eventId,
+      deletedPhotoCount: 0,
+    });
+  }
+
+  try {
+    for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
+      await env.pickpic_photos.delete(storageKeyChunk);
+    }
+  } catch (error) {
+    console.error("Unable to delete event photo images:", error);
+
+    return jsonResponse(
+      {
+        error: "The event images could not be deleted. No photos were removed.",
+      },
+      500,
+    );
+  }
+
+  try {
+    await env.DB.prepare(
+      `
+        DELETE FROM photos
+        WHERE event_id = ?
+      `,
+    )
+      .bind(eventId)
+      .run();
+  } catch (error) {
+    console.error("Unable to delete event photo records:", error);
+
+    return jsonResponse(
+      {
+        error:
+          "The images were deleted, but the photo records could not be removed. Try again.",
+      },
+      500,
+    );
+  }
+
+  return jsonResponse({
+    eventId,
+    deletedPhotoCount: photoCount,
   });
 }
 
@@ -2964,6 +3059,10 @@ export default {
 
       if (request.method === "GET") {
         return listPhotos(env, eventId);
+      }
+
+      if (request.method === "DELETE") {
+        return clearEventPhotos(env, eventId);
       }
 
       return jsonResponse({ error: "Method not allowed." }, 405);
