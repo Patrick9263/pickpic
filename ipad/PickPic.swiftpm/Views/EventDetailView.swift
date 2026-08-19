@@ -623,6 +623,35 @@ struct EventDetailView: View {
                 initialTitle: event.title,
                 unchangedTitle: event.title
             ) { title in
+                /*
+                 * An event still only on this iPad has no record to
+                 * update, so renaming it is a local edit. The queued
+                 * jobs carry the title that will register the event on
+                 * its first upload and have to move with it.
+                 */
+                guard !event.needsRemoteCreation else {
+                    let renamedEvent = PickPicEvent(
+                        id: event.id,
+                        title: title,
+                        shareToken: event.shareToken,
+                        status: event.status,
+                        createdAt: event.createdAt,
+                        updatedAt: Date(),
+                        isPendingCreation:
+                            event.isPendingCreation
+                    )
+
+                    uploadQueue.renameEvent(
+                        eventID: event.id,
+                        title: title
+                    )
+
+                    event = renamedEvent
+                    onEventUpdated(renamedEvent)
+
+                    return
+                }
+
                 let client =
                 try configuration.makeClient()
                 
