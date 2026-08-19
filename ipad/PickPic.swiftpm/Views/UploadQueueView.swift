@@ -985,6 +985,13 @@ private struct UploadJobRow: View {
                     alignment: .leading,
                     spacing: 8
                 ) {
+                    /*
+                     * Orange is used throughout for work that still
+                     * proceeds on its own, so a job that has stopped for
+                     * good is red here and in the sidebar's
+                     * needs-attention count. Waiting on the network is
+                     * self-healing and stays orange.
+                     */
                     Label(
                         job.uploadProgress
                             .isWaitingForConnectivity
@@ -996,7 +1003,12 @@ private struct UploadJobRow: View {
                             : "exclamationmark.triangle.fill"
                     )
                     .font(.headline)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(
+                        job.uploadProgress
+                            .isWaitingForConnectivity
+                        ? Color.orange
+                        : Color.red
+                    )
 
                     Text(failure.sourceFilename)
                         .font(.subheadline.weight(.semibold))
