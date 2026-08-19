@@ -3007,7 +3007,8 @@ final class UploadQueueStore: ObservableObject {
                 """
                 PickPic could not reach the server while uploading \
                 \(sourceFilename). PickPic saved the progress and will \
-                retry automatically.
+                retry automatically. If this keeps happening, check the \
+                server address in Settings.
                 """,
                 true,
                 true
