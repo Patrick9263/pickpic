@@ -54,6 +54,26 @@ It should hold every `.swift` under `PickPic.swiftpm/` plus the generated `Gener
 
 D1 migrations are **applied manually and deliberately stay out of CI.** Don't wire them into a workflow.
 
+## Working sessions
+
+Patrick usually drives this repo remotely, so sessions should stay cheap. Every turn resends the accumulated context, which makes a long mixed-topic session the expensive shape — not a long task.
+
+- **One PR per session.** A merged, green PR is the point to start a fresh session rather than continuing. Say so out loud when you get there; Patrick shouldn't have to ask.
+- **One surface per session** — `worker/` + `src/` (TypeScript) _or_ `ipad/` (Swift). Each pulls a different set of large files into context, so crossing between them mid-session roughly doubles what gets resent.
+- **Never read these whole.** Grep for the symbol, then read the range around it:
+
+  | File                                                      | Lines |
+  | --------------------------------------------------------- | ----- |
+  | `ipad/PickPic.swiftpm/Persistence/UploadQueueStore.swift` | 3,887 |
+  | `worker/index.ts`                                         | 3,176 |
+  | `ipad/PickPic.swiftpm/Views/UploadQueueView.swift`        | 1,577 |
+  | `ipad/PickPic.swiftpm/Views/EventDetailView.swift`        | 1,368 |
+  | `src/pages/DashboardPage.tsx`                             | 1,241 |
+
+- **Filter `xcodebuild`.** A full build log is enormous and stays in context for the rest of the session. Append `2>&1 | grep -E "error:|warning:|BUILD" | tail -30`.
+- **Device verification gets its own short session.** It produces no diff, so it shouldn't ride on the back of an implementation session already carrying a large context.
+- **Nothing is on the sandboxed `PATH`.** `node`, `npm`, and `gh` all resolve to "command not found" until you prepend their directories: `export PATH=/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:$PATH`. Do it in the same call as the command; shell state does not persist between calls.
+
 ## Traps that cost real time
 
 These are not discoverable by reading the code, and several are silently destructive.
