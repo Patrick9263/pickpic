@@ -137,6 +137,13 @@ struct EventListView: View {
                                     job.stage != .completed
                                 }
                                 .count,
+                            /*
+                             * A job waiting on connectivity also carries
+                             * a lastFailure, but it resumes on its own
+                             * and is not something to walk back to the
+                             * iPad for. Only a job that has stopped for
+                             * good counts as needing attention.
+                             */
                             stalledJobCount:
                                 jobs.filter { job in
                                     job.stage == .failed
@@ -145,6 +152,8 @@ struct EventListView: View {
                                             == .readyToUpload
                                         && job.uploadProgress
                                             .lastFailure != nil
+                                        && !job.uploadProgress
+                                            .isWaitingForConnectivity
                                     )
                                 }
                                 .count,
