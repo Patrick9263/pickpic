@@ -985,10 +985,26 @@ private struct UploadJobRow: View {
                     alignment: .leading,
                     spacing: 8
                 ) {
+                    /*
+                     * Automatic retry is keyed off the same waiting flag
+                     * whether the network dropped or the server failed,
+                     * so the title reads from isNetworkRelated to avoid
+                     * blaming the network for a server error.
+                     *
+                     * Orange is used throughout for work that still
+                     * proceeds on its own, so a job that has stopped for
+                     * good is red here and in the sidebar's
+                     * needs-attention count. Both waiting states are
+                     * self-healing and stay orange.
+                     */
                     Label(
                         job.uploadProgress
                             .isWaitingForConnectivity
-                        ? "Waiting for Network"
+                        ? (
+                            failure.isNetworkRelated
+                            ? "Waiting for Network"
+                            : "Retrying Automatically"
+                        )
                         : "Upload stopped",
                         systemImage:
                             failure.isNetworkRelated
@@ -996,7 +1012,12 @@ private struct UploadJobRow: View {
                             : "exclamationmark.triangle.fill"
                     )
                     .font(.headline)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(
+                        job.uploadProgress
+                            .isWaitingForConnectivity
+                        ? Color.orange
+                        : Color.red
+                    )
 
                     Text(failure.sourceFilename)
                         .font(.subheadline.weight(.semibold))

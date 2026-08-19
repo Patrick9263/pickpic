@@ -598,6 +598,30 @@ struct EventDetailView: View {
         }
         .navigationTitle(event.title)
         .navigationBarTitleDisplayMode(.inline)
+        /*
+         * Renaming is a normal thing to do right after creating an event,
+         * but the only other way in is at the bottom of this screen in
+         * Manage Event, which means scrolling past everything else to
+         * reach a button sitting next to Delete. Delete stays down there.
+         */
+        .toolbar {
+            ToolbarItem(
+                placement: .topBarTrailing
+            ) {
+                Button {
+                    showingRenameEvent = true
+                } label: {
+                    Label(
+                        "Rename Event",
+                        systemImage: "pencil"
+                    )
+                }
+                .disabled(
+                    isDeleting
+                    || isUpdatingStatus
+                )
+            }
+        }
         .disabled(isDeleting)
         .overlay {
             if isDeleting {
