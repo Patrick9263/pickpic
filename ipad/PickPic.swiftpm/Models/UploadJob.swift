@@ -9,7 +9,7 @@ struct UploadJob:
     let id: UUID
     
     let eventID: String
-    let eventTitle: String
+    var eventTitle: String
     
     var folderName: String
     var folderBookmarkData: Data

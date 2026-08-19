@@ -183,6 +183,47 @@ final class UploadQueueStore: ObservableObject {
         }
     }
 
+    /*
+     * Carries a rename into work already queued against the event.
+     *
+     * An event created offline is registered on the server from the
+     * job's own copy of the title, and the worker's create is idempotent
+     * in the strict sense: an id it already knows is returned untouched,
+     * never retitled. Whatever a job holds at the moment of the first
+     * successful create is therefore the name the event keeps, so a
+     * stale copy here would quietly undo the rename.
+     */
+    func renameEvent(
+        eventID: String,
+        title: String
+    ) {
+        let needsRename = jobs.contains { job in
+            job.eventID == eventID
+                && job.eventTitle != title
+        }
+
+        guard needsRename else {
+            return
+        }
+
+        var updatedJobs = jobs
+
+        for index in updatedJobs.indices
+        where updatedJobs[index].eventID == eventID {
+            updatedJobs[index].eventTitle = title
+        }
+
+        do {
+            try save(updatedJobs)
+
+            jobs = updatedJobs
+            loadErrorMessage = nil
+        } catch {
+            loadErrorMessage =
+                error.localizedDescription
+        }
+    }
+
     func completedJobCount(
         for eventID: String
     ) -> Int {
