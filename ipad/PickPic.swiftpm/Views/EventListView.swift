@@ -137,6 +137,17 @@ struct EventListView: View {
                                     job.stage != .completed
                                 }
                                 .count,
+                            stalledJobCount:
+                                jobs.filter { job in
+                                    job.stage == .failed
+                                    || (
+                                        job.stage
+                                            == .readyToUpload
+                                        && job.uploadProgress
+                                            .lastFailure != nil
+                                    )
+                                }
+                                .count,
                             activeJobCount:
                                 jobs.filter { job in
                                     switch job.stage {
@@ -648,6 +659,7 @@ private struct EventRow: View {
     let statisticsAreLoading: Bool
     let statisticsUnavailable: Bool
     let unfinishedJobCount: Int
+    let stalledJobCount: Int
     let activeJobCount: Int
 
     private var uploadStatusText: String {
@@ -718,7 +730,17 @@ private struct EventRow: View {
 
                 statisticsLine
 
-                if unfinishedJobCount > 0 {
+                if stalledJobCount > 0 {
+                    Label(
+                        stalledJobCount == 1
+                        ? "1 photo needs attention"
+                        : "\(stalledJobCount) photos need attention",
+                        systemImage:
+                            "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                } else if unfinishedJobCount > 0 {
                     Label(
                         uploadStatusText,
                         systemImage:

@@ -765,15 +765,20 @@ final class UploadQueueStore: ObservableObject {
                 continue
             }
 
+            /*
+             * A stalled job — paused, or stopped on a failure — is
+             * skipped rather than aborting the rest of the batch, so one
+             * bad photo doesn't block retrying every other unfinished
+             * job in this event.
+             */
             if refreshedJob.uploadProgress.isPaused {
-                return
+                continue
             }
 
-            if refreshedJob.uploadProgress
-                .lastFailure?
-                .isNetworkRelated == true
+            if refreshedJob.uploadProgress.lastFailure
+                != nil
             {
-                return
+                continue
             }
         }
     }
@@ -1563,13 +1568,18 @@ final class UploadQueueStore: ObservableObject {
     private func restorePreparedStage(
         jobID: UUID
     ) {
-        try? updateJob(jobID) { job in
-            guard job.stage == .preflighting else {
-                return
-            }
+        do {
+            try updateJob(jobID) { job in
+                guard job.stage == .preflighting else {
+                    return
+                }
 
-            job.stage = .prepared
-            job.updatedAt = Date()
+                job.stage = .prepared
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not resume preparing this photo after checking for duplicates: \(error.localizedDescription)"
         }
     }
 
@@ -2914,6 +2924,23 @@ final class UploadQueueStore: ObservableObject {
         isNetworkRelated: Bool,
         retryWhenConnectivityReturns: Bool
     ) {
+        if
+            let apiError = error as? APIClientError,
+            case let .server(statusCode, message) =
+                apiError,
+            (500...599).contains(statusCode)
+        {
+            return (
+                """
+                PickPic's server had a problem uploading \
+                \(sourceFilename) (\(message)). PickPic saved the \
+                progress and will retry automatically.
+                """,
+                false,
+                true
+            )
+        }
+
         let urlError: URLError?
 
         if let directError = error as? URLError {
@@ -2965,10 +2992,10 @@ final class UploadQueueStore: ObservableObject {
             return (
                 """
                 Uploading \(sourceFilename) timed out. PickPic saved the \
-                completed photos. Check the connection and retry this photo.
+                completed photos and will retry automatically.
                 """,
                 true,
-                false
+                true
             )
 
         case .cannotConnectToHost,
@@ -2977,11 +3004,11 @@ final class UploadQueueStore: ObservableObject {
             return (
                 """
                 PickPic could not reach the server while uploading \
-                \(sourceFilename). Check the server address and connection, \
-                then retry this photo.
+                \(sourceFilename). PickPic saved the progress and will \
+                retry automatically.
                 """,
                 true,
-                false
+                true
             )
 
         case .cancelled:
