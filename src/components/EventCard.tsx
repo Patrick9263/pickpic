@@ -117,9 +117,11 @@ type EventCardProps = {
   updatingEventStatusId: string | null;
   updatingEventTitleId: string | null;
   deletingEventId: string | null;
+  clearingEventPhotosId: string | null;
   eventManagementDisabled: boolean;
   handleRenameEvent(eventRecord: EventRecord, title: string): Promise<boolean>;
   handleDeleteEvent(eventRecord: EventRecord): Promise<boolean>;
+  handleClearEventPhotos(eventRecord: EventRecord): Promise<boolean>;
   handleSetEventStatus(
     eventRecord: EventRecord,
     status: GalleryStatus,
@@ -173,14 +175,18 @@ function EventCard(props: EventCardProps) {
     handleRepairPhotoVariants,
     updatingEventTitleId,
     deletingEventId,
+    clearingEventPhotosId,
     eventManagementDisabled,
     handleRenameEvent,
     handleDeleteEvent,
+    handleClearEventPhotos,
   } = props;
   const [isRenamingEvent, setIsRenamingEvent] = useState(false);
   const [renameTitle, setRenameTitle] = useState(eventRecord.title);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [showClearConfirmation, setShowClearConfirmation] = useState(false);
+  const [clearConfirmation, setClearConfirmation] = useState("");
   const [arePhotosExpanded, setArePhotosExpanded] = useState(
     () =>
       typeof window === "undefined" ||
@@ -192,16 +198,19 @@ function EventCard(props: EventCardProps) {
     eventRecord.status === "ready" || eventRecord.status === "completed";
   const isUpdatingEventTitle = updatingEventTitleId === eventRecord.id;
   const isDeletingEvent = deletingEventId === eventRecord.id;
+  const isClearingEventPhotos = clearingEventPhotosId === eventRecord.id;
   const eventActionsDisabled =
     eventManagementDisabled ||
     isUpdatingEventStatus ||
     isUpdatingEventTitle ||
-    isDeletingEvent;
+    isDeletingEvent ||
+    isClearingEventPhotos;
   const trimmedRenameTitle = renameTitle.trim();
   const renameIsValid =
     trimmedRenameTitle.length > 0 && trimmedRenameTitle.length <= 120;
   const renameHasChanged = trimmedRenameTitle !== eventRecord.title;
   const deleteIsConfirmed = deleteConfirmation === eventRecord.title;
+  const clearIsConfirmed = clearConfirmation === eventRecord.title;
 
   useEffect(() => {
     if (!isRenamingEvent) {
@@ -268,8 +277,21 @@ function EventCard(props: EventCardProps) {
 
   function openDeleteConfirmation(): void {
     setIsRenamingEvent(false);
+    setShowClearConfirmation(false);
     setDeleteConfirmation("");
     setShowDeleteConfirmation(true);
+  }
+
+  function openClearConfirmation(): void {
+    setIsRenamingEvent(false);
+    setShowDeleteConfirmation(false);
+    setClearConfirmation("");
+    setShowClearConfirmation(true);
+  }
+
+  function closeClearConfirmation(): void {
+    setClearConfirmation("");
+    setShowClearConfirmation(false);
   }
 
   function closeDeleteConfirmation(): void {
@@ -282,6 +304,18 @@ function EventCard(props: EventCardProps) {
       return;
     }
     await handleDeleteEvent(eventRecord);
+  }
+
+  async function confirmPhotoClear(): Promise<void> {
+    if (!clearIsConfirmed || eventActionsDisabled) {
+      return;
+    }
+
+    const succeeded = await handleClearEventPhotos(eventRecord);
+
+    if (succeeded) {
+      closeClearConfirmation();
+    }
   }
 
   return (
@@ -398,6 +432,15 @@ function EventCard(props: EventCardProps) {
                 <button
                   className="event-management-button event-management-button-danger"
                   type="button"
+                  disabled={eventActionsDisabled || photos.length === 0}
+                  onClick={openClearConfirmation}
+                >
+                  Clear photos
+                </button>
+
+                <button
+                  className="event-management-button event-management-button-danger"
+                  type="button"
                   disabled={eventActionsDisabled}
                   onClick={openDeleteConfirmation}
                 >
@@ -407,6 +450,58 @@ function EventCard(props: EventCardProps) {
             </>
           )}
         </div>
+        {showClearConfirmation && (
+          <div
+            className="event-delete-confirmation"
+            role="group"
+            aria-labelledby={`event-clear-title-${eventRecord.id}`}
+          >
+            <strong id={`event-clear-title-${eventRecord.id}`}>
+              Remove every photo from this event?
+            </strong>
+
+            <p>
+              This deletes all {photos.length} original photos, final photos,
+              optimized versions, comments, and hearts. The event and its
+              gallery link stay, so photos can be uploaded again. This cannot be
+              undone.
+            </p>
+
+            <label htmlFor={`event-clear-confirmation-${eventRecord.id}`}>
+              Type <code>{eventRecord.title}</code> to confirm
+            </label>
+
+            <input
+              id={`event-clear-confirmation-${eventRecord.id}`}
+              type="text"
+              value={clearConfirmation}
+              autoComplete="off"
+              disabled={isClearingEventPhotos}
+              onChange={(event) => setClearConfirmation(event.target.value)}
+            />
+
+            <div className="event-delete-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isClearingEventPhotos}
+                onClick={closeClearConfirmation}
+              >
+                Cancel
+              </button>
+
+              <button
+                className="event-delete-button"
+                type="button"
+                disabled={isClearingEventPhotos || !clearIsConfirmed}
+                onClick={() => void confirmPhotoClear()}
+              >
+                {isClearingEventPhotos ? "Removing…" : "Remove all photos"}
+              </button>
+            </div>
+          </div>
+        )}
+
         {showDeleteConfirmation && (
           <div
             className="event-delete-confirmation"
