@@ -23,9 +23,12 @@ struct FinalUploadsView: View {
     @EnvironmentObject private var feedback:
     AppFeedbackStore
     
+    @EnvironmentObject private var finishedEdits:
+    FinishedEditsWatcher
+
     @StateObject private var viewModel =
     FinalUploadsViewModel()
-    
+
     @State private var showingFolderPicker = false
     @State private var hasAttemptedAutomaticUpload = false
     
@@ -144,6 +147,18 @@ struct FinalUploadsView: View {
         .task(id: folderReference?.updatedAt) {
             await reload()
             await startAutomaticUploadIfNeeded()
+        }
+        /*
+         * This screen and the app-level watcher drive the same Edited
+         * folder through separate view models, so the watch stands down
+         * while the explicit screen is open rather than both uploading
+         * the same file.
+         */
+        .onAppear {
+            finishedEdits.suspend()
+        }
+        .onDisappear {
+            finishedEdits.resume()
         }
     }
     

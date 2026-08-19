@@ -148,6 +148,9 @@ struct PickPicApp: App {
     @StateObject private var networkMonitor =
     NetworkMonitor()
 
+    @StateObject private var finishedEdits =
+    FinishedEditsWatcher()
+
     @State private var previousJobStages:
     [UUID: UploadStage] = [:]
 
@@ -160,6 +163,7 @@ struct PickPicApp: App {
                 .environmentObject(uploadQueue)
                 .environmentObject(eventFolders)
                 .environmentObject(feedback)
+                .environmentObject(finishedEdits)
                 .task {
                     BackgroundUploadSession.shared
                         .setRestoredCompletionHandler { completion in
@@ -251,6 +255,14 @@ struct PickPicApp: App {
                             for: uploadQueue.jobs
                         )
                         retryWaitingUploadsIfPossible()
+
+                        /*
+                         * The watcher's interval does not advance while
+                         * iPadOS has the app suspended, so an edit saved
+                         * in Affinity would otherwise wait out whatever
+                         * was left of it before anything noticed.
+                         */
+                        finishedEdits.scanNow()
 
                     case .inactive,
                             .background:
