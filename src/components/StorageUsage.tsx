@@ -93,7 +93,12 @@ function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {
             Nothing is stored yet. Upload a shoot and it will appear here.
           </p>
         ) : (
-          <div className="storage-table-scroll">
+          <div
+            className="storage-table-scroll"
+            role="region"
+            aria-label="Storage by event"
+            tabIndex={0}
+          >
             <table className="storage-table">
               <thead>
                 <tr>
