@@ -20,6 +20,13 @@ struct PhotoImportView: View {
     let onChooseAnotherFolder: () -> Void
     let onStartUpload: () -> Void
     
+    /*
+     * Read only for the size estimate, which is averaged over what past
+     * jobs actually converted. The sheet still drives nothing here.
+     */
+    @EnvironmentObject private var uploadQueue:
+    UploadQueueStore
+    
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
@@ -32,7 +39,7 @@ struct PhotoImportView: View {
                  */
                 if let folderName = viewModel.folderName,
                     !viewModel.photos.isEmpty {
-                    Section("Selection") {
+                    Section {
                         LabeledContent(
                             "Event",
                             value: event.title
@@ -49,12 +56,20 @@ struct PhotoImportView: View {
                                 "\(viewModel.photos.count)"
                         )
                         
-                        LabeledContent(
-                            "Source size",
-                            value: formattedByteCount(
-                                viewModel.totalBytes
+                        if let estimate =
+                            proofSizeEstimate {
+                            LabeledContent(
+                                "Upload size",
+                                value: "About "
+                                    + formattedByteCount(
+                                        estimate.byteCount
+                                    )
                             )
-                        )
+                        }
+                    } header: {
+                        Text("Selection")
+                    } footer: {
+                        Text(uploadSizeFootnote)
                     }
                     
                     Section(
@@ -196,6 +211,41 @@ struct PhotoImportView: View {
                 }
             }
         }
+    }
+    
+    private var proofSizeEstimate:
+    UploadQueueStore.ProofSizeEstimate? {
+        uploadQueue.estimatedProofSize(
+            forPhotoCount: viewModel.photos.count
+        )
+    }
+    
+    /*
+     * The size worth showing is what leaves the iPad, which is the
+     * proofs rather than the originals — and that is also why it reads
+     * as an approximation. Preflight drops duplicates once the pipeline
+     * runs, so the real figure is usually a little lower, and the queue
+     * reports it exactly.
+     */
+    private var uploadSizeFootnote: String {
+        guard let estimate = proofSizeEstimate
+        else {
+            return """
+            PickPic uploads a converted proof of each photo, not the \
+            original file. Its size is known once conversion starts.
+            """
+        }
+        
+        let uploads =
+        estimate.sampleJobCount == 1
+        ? "your last upload"
+        : "your last \(estimate.sampleJobCount) uploads"
+        
+        return """
+        PickPic uploads a converted proof of each photo, not the \
+        original file. Estimated from \(uploads); photos already in \
+        the event are skipped, so the real total is often smaller.
+        """
     }
     
     private func formattedByteCount(
