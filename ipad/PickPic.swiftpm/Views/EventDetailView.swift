@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EventDetailView: View {
     @State private var event:
@@ -27,6 +28,25 @@ struct EventDetailView: View {
     @State private var showingRenameEvent = false
     @State private var showingDeleteConfirmation = false
     @State private var isDeleting = false
+
+    /*
+     * Importing runs from this screen rather than from a pushed one:
+     * pick a folder, confirm the scan, and the upload starts. The follow
+     * up is deferred to the sheet's dismissal instead of being triggered
+     * beside it, because a push or a second picker raised while the sheet
+     * is still animating away is dropped.
+     */
+    @StateObject private var importModel =
+    PhotoImportViewModel()
+
+    @State private var showingImportFolderPicker = false
+    @State private var showingImportConfirmation = false
+    @State private var showingUploadQueue = false
+    @State private var importQueueErrorMessage: String?
+    @State private var importScanTask: Task<Void, Never>?
+
+    @State private var importDismissAction:
+    ImportDismissAction?
     
     @State private var showingDeleteError = false
     @State private var deleteErrorMessage = ""
@@ -77,6 +97,11 @@ struct EventDetailView: View {
         onEventDeleted
     }
     
+    private enum ImportDismissAction {
+        case chooseAnotherFolder
+        case openUploadQueue
+    }
+
     /*
      * The one thing worth doing next, chosen from the event's own state.
      * Everything it can point at stays reachable below; this only saves
@@ -264,26 +289,58 @@ struct EventDetailView: View {
     private var primaryActionSection: some View {
         if let primaryAction {
             Section {
-                NavigationLink {
-                    primaryDestination(
-                        for: primaryAction
+                switch primaryAction {
+                case .importPhotos:
+                    Button {
+                        beginImport()
+                    } label: {
+                        primaryActionLabel(
+                            for: primaryAction
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Rectangle())
+                    .listRowBackground(
+                        Color.accentColor
                     )
-                } label: {
-                    Label(
-                        primaryAction.title,
-                        systemImage:
-                            primaryAction.systemImage
+                    .foregroundStyle(.white)
+
+                case .continueUpload,
+                        .uploadReadyFinals,
+                        .reviewLiked,
+                        .publish:
+                    NavigationLink {
+                        primaryDestination(
+                            for: primaryAction
+                        )
+                    } label: {
+                        primaryActionLabel(
+                            for: primaryAction
+                        )
+                    }
+                    .listRowBackground(
+                        Color.accentColor
                     )
-                    .font(.headline)
+                    .foregroundStyle(.white)
                 }
-                .listRowBackground(
-                    Color.accentColor
-                )
-                .foregroundStyle(.white)
             } footer: {
                 Text(primaryAction.reason)
             }
         }
+    }
+
+    private func primaryActionLabel(
+        for action: PrimaryAction
+    ) -> some View {
+        Label(
+            action.title,
+            systemImage: action.systemImage
+        )
+        .font(.headline)
+        .frame(
+            maxWidth: .infinity,
+            alignment: .leading
+        )
     }
 
     @ViewBuilder
@@ -292,7 +349,11 @@ struct EventDetailView: View {
     ) -> some View {
         switch action {
         case .importPhotos:
-            PhotoImportView(event: event)
+            /*
+             * Import opens the folder picker from this screen instead of
+             * pushing anything, so this case is never reached.
+             */
+            EmptyView()
 
         case .continueUpload:
             UploadQueueView(event: event)
@@ -400,10 +461,8 @@ struct EventDetailView: View {
             }
 
             Section("Photos") {
-                NavigationLink {
-                    PhotoImportView(
-                        event: event
-                    )
+                Button {
+                    beginImport()
                 } label: {
                     Label(
                         eventJobs.isEmpty
@@ -412,7 +471,13 @@ struct EventDetailView: View {
                         systemImage:
                             "photo.badge.plus"
                     )
+                    .frame(
+                        maxWidth: .infinity,
+                        alignment: .leading
+                    )
                 }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
                 
                 NavigationLink {
                     UploadQueueView(
@@ -638,6 +703,35 @@ struct EventDetailView: View {
                 )
             }
         }
+        .fileImporter(
+            isPresented: $showingImportFolderPicker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            handleImportFolderSelection(result)
+        }
+        .sheet(
+            isPresented: $showingImportConfirmation,
+            onDismiss: handleImportSheetDismiss
+        ) {
+            PhotoImportView(
+                event: event,
+                viewModel: importModel,
+                queueErrorMessage:
+                    importQueueErrorMessage,
+                onChooseAnotherFolder: {
+                    importDismissAction =
+                        .chooseAnotherFolder
+                    showingImportConfirmation = false
+                },
+                onStartUpload: startImportedUpload
+            )
+            .presentationDetents([.medium, .large])
+        }
+        .navigationDestination(
+            isPresented: $showingUploadQueue
+        ) {
+            UploadQueueView(event: event)
+        }
         .sheet(
             isPresented: $showingRenameEvent
         ) {
@@ -755,6 +849,91 @@ struct EventDetailView: View {
         }
     }
     
+    private func beginImport() {
+        importQueueErrorMessage = nil
+        importModel.clearError()
+        showingImportFolderPicker = true
+    }
+
+    private func handleImportFolderSelection(
+        _ result: Result<URL, Error>
+    ) {
+        importQueueErrorMessage = nil
+
+        switch result {
+        case let .success(folderURL):
+            /*
+             * The sheet goes up before the scan finishes so a folder full
+             * of RAWs reports that it is being read rather than leaving
+             * the tap looking ignored.
+             */
+            showingImportConfirmation = true
+
+            importScanTask?.cancel()
+
+            importScanTask = Task {
+                await importModel.scan(
+                    folderURL: folderURL
+                )
+            }
+
+        case let .failure(error):
+            importModel.showError(error)
+            showingImportConfirmation = true
+        }
+    }
+
+    /*
+     * Queueing and starting are one action. The job is still saved to the
+     * durable queue first, so an upload interrupted here is resumable from
+     * the queue exactly as before.
+     */
+    private func startImportedUpload() {
+        do {
+            let job =
+            try importModel.makeUploadJob(
+                for: event
+            )
+
+            try eventFolders.save(job: job)
+            try uploadQueue.add(job)
+
+            uploadQueue
+                .startUserInitiatedUploadPipeline(
+                    jobID: job.id,
+                    using: configuration
+                )
+
+            importQueueErrorMessage = nil
+            importDismissAction = .openUploadQueue
+            showingImportConfirmation = false
+        } catch {
+            importQueueErrorMessage =
+            error.localizedDescription
+        }
+    }
+
+    private func handleImportSheetDismiss() {
+        importScanTask?.cancel()
+        importScanTask = nil
+        importModel.reset()
+        importQueueErrorMessage = nil
+
+        let action = importDismissAction
+        importDismissAction = nil
+
+        switch action {
+        case .chooseAnotherFolder:
+            showingImportFolderPicker = true
+
+        case .openUploadQueue:
+            showingUploadQueue = true
+
+        case nil:
+            break
+        }
+    }
+
     @MainActor
     private func loadDashboard() async {
         guard

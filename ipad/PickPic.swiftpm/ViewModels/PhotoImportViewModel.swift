@@ -52,20 +52,14 @@ final class PhotoImportViewModel: ObservableObject {
         }
     }
     
-    func restoreSelection(
-        from job: UploadJob
-    ) {
-        guard
-            !isScanning,
-            folderName == nil
-        else {
-            return
-        }
-        
-        folderName = job.folderName
-        folderBookmarkData =
-        job.folderBookmarkData
-        photos = job.photos
+    /*
+     * Clears the scan so the next import starts from nothing rather than
+     * showing the folder confirmed last time.
+     */
+    func reset() {
+        folderName = nil
+        folderBookmarkData = nil
+        photos = []
         errorMessage = nil
     }
     
@@ -90,6 +84,15 @@ final class PhotoImportViewModel: ObservableObject {
             ) {
                 try Self.scanFolder(folderURL)
             }.value
+            
+            /*
+             * The sheet can be dismissed while a large folder is still
+             * being listed. Publishing then would leave a stale selection
+             * behind for the next import to start from.
+             */
+            guard !Task.isCancelled else {
+                return
+            }
             
             folderName = result.folderName
             folderBookmarkData =
