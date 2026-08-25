@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2208" height="2408" viewBox="0 0 2208 2408">
+  <defs>
+    <linearGradient id="bgLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B7CFF"/>
+      <stop offset="100%" stop-color="#8A3FFF"/>
+    </linearGradient>
+    <linearGradient id="bgDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0C1B3A"/>
+      <stop offset="100%" stop-color="#231145"/>
+    </linearGradient>
+    <linearGradient id="bgGray" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1A1A1A"/>
+      <stop offset="100%" stop-color="#2E2E2E"/>
+    </linearGradient>
+    <linearGradient id="bgTint" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#08162A"/>
+      <stop offset="100%" stop-color="#123055"/>
+    </linearGradient>
+    <linearGradient id="cardLight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F1F1F5"/>
+    </linearGradient>
+    <clipPath id="photoWindow"><rect x="304" y="244" width="416" height="360" rx="10"/></clipPath>
+    <clipPath id="iosMask"><rect x="0" y="0" width="1024" height="1024" rx="225"/></clipPath>
+  </defs>
+
+  <rect width="2208" height="2408" fill="#F5F5F7"/>
+
+  <!-- ============ LIGHT ============ -->
+  <g transform="translate(80,80)">
+    <g clip-path="url(#iosMask)">
+      <rect width="1024" height="1024" fill="url(#bgLight)"/>
+      <g transform="translate(512 512) rotate(-8) translate(-512 -512)">
+        <rect x="272" y="212" width="480" height="560" rx="28" fill="url(#cardLight)"/>
+        <g clip-path="url(#photoWindow)">
+          <rect x="304" y="244" width="416" height="360" fill="#BFE0FF"/>
+          <circle cx="620" cy="304" r="34" fill="#FFFFFF"/>
+          <path d="M264 620 L452 392 L566 506 L648 424 L760 560 L760 620 Z" fill="#2A5FCC"/>
+        </g>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="none" stroke="#FFFFFF" stroke-width="46" stroke-linejoin="round"/>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="#FF4D6D"/>
+      </g>
+    </g>
+    <text x="512" y="1104" font-family="-apple-system, Helvetica Neue, sans-serif" font-size="46" font-weight="600" fill="#1D1D1F" text-anchor="middle">Light</text>
+  </g>
+
+  <!-- ============ DARK ============ -->
+  <g transform="translate(1104,80)">
+    <g clip-path="url(#iosMask)">
+      <rect width="1024" height="1024" fill="url(#bgDark)"/>
+      <g transform="translate(512 512) rotate(-8) translate(-512 -512)">
+        <rect x="272" y="212" width="480" height="560" rx="28" fill="#D9DCE6"/>
+        <g clip-path="url(#photoWindow)">
+          <rect x="304" y="244" width="416" height="360" fill="#16305C"/>
+          <circle cx="620" cy="304" r="34" fill="#EAF2FF"/>
+          <path d="M264 620 L452 392 L566 506 L648 424 L760 560 L760 620 Z" fill="#5E8FD6"/>
+        </g>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="none" stroke="#D9DCE6" stroke-width="46" stroke-linejoin="round"/>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="#FF4D6D"/>
+      </g>
+    </g>
+    <text x="512" y="1104" font-family="-apple-system, Helvetica Neue, sans-serif" font-size="46" font-weight="600" fill="#1D1D1F" text-anchor="middle">Dark</text>
+  </g>
+
+  <!-- ============ TINTED SOURCE (grayscale) ============ -->
+  <g transform="translate(80,1264)">
+    <g clip-path="url(#iosMask)">
+      <rect width="1024" height="1024" fill="url(#bgGray)"/>
+      <g transform="translate(512 512) rotate(-8) translate(-512 -512)">
+        <rect x="272" y="212" width="480" height="560" rx="28" fill="#B4B4B4"/>
+        <g clip-path="url(#photoWindow)">
+          <rect x="304" y="244" width="416" height="360" fill="#4F4F4F"/>
+          <circle cx="620" cy="304" r="34" fill="#FFFFFF"/>
+          <path d="M264 620 L452 392 L566 506 L648 424 L760 560 L760 620 Z" fill="#8A8A8A"/>
+        </g>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="none" stroke="#3D3D3D" stroke-width="46" stroke-linejoin="round"/>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="#FFFFFF"/>
+      </g>
+    </g>
+    <text x="512" y="1104" font-family="-apple-system, Helvetica Neue, sans-serif" font-size="46" font-weight="600" fill="#1D1D1F" text-anchor="middle">Tinted — grayscale source you ship</text>
+  </g>
+
+  <!-- ============ TINTED AS RENDERED ============ -->
+  <g transform="translate(1104,1264)">
+    <g clip-path="url(#iosMask)">
+      <rect width="1024" height="1024" fill="url(#bgTint)"/>
+      <g transform="translate(512 512) rotate(-8) translate(-512 -512)">
+        <rect x="272" y="212" width="480" height="560" rx="28" fill="#7FAEDC"/>
+        <g clip-path="url(#photoWindow)">
+          <rect x="304" y="244" width="416" height="360" fill="#1B3E68"/>
+          <circle cx="620" cy="304" r="34" fill="#EAF4FF"/>
+          <path d="M264 620 L452 392 L566 506 L648 424 L760 560 L760 620 Z" fill="#4A7CB0"/>
+        </g>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="none" stroke="#123055" stroke-width="46" stroke-linejoin="round"/>
+        <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+              fill="#EAF4FF"/>
+      </g>
+    </g>
+    <text x="512" y="1104" font-family="-apple-system, Helvetica Neue, sans-serif" font-size="46" font-weight="600" fill="#1D1D1F" text-anchor="middle">Tinted — how iOS renders it</text>
+  </g>
+</svg>
