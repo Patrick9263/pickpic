@@ -164,7 +164,46 @@ struct APIClient {
             throw APIClientError.invalidEventData
         }
     }
-    
+
+    /*
+     * A whole-bucket figure rather than one event's, so this deliberately
+     * takes no event id. Nothing in the upload pipeline depends on it —
+     * a failure here is only ever presentational.
+     */
+    func fetchStorageUsage() async throws -> StorageUsageRecord {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "storage")
+
+        var request = makeAdminJSONRequest(url: url)
+        request.httpMethod = "GET"
+
+        let (data, response) =
+        try await session.data(for: request)
+
+        try validateJSONResponse(
+            data: data,
+            response: response
+        )
+
+        do {
+            return try makeDecoder().decode(
+                StorageUsageResponse.self,
+                from: data
+            )
+            .storage
+        } catch {
+            print(
+                "Storage usage decoding failed:",
+                error
+            )
+
+            throw APIClientError
+                .invalidStorageUsageResponse
+        }
+    }
+
     func createEvent(
         title: String,
         id: String? = nil

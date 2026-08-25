@@ -85,6 +85,8 @@ struct ContentView: View {
                         "Choose an event to import photos, review likes, and publish its gallery."
                     )
                 }
+
+                StorageUsagePanel()
             }
             .navigationTitle("All Events")
         }

@@ -367,6 +367,42 @@ struct FinalPhotoUploadResponse:
     let finalPhoto: ServerFinalPhotoSummary
 }
 
+struct StorageUsageResponse: Decodable {
+    let storage: StorageUsageRecord
+}
+
+/*
+ * Mirrors StorageUsageRecord in src/types.ts so the iPad and the web
+ * dashboard describe the same bucket the same way. The byte totals are
+ * Int64 because they are sums across every stored file, not a single
+ * object's size.
+ */
+struct StorageUsageRecord: Decodable {
+    let photoCount: Int
+    let finalCount: Int
+    let variantCount: Int
+    let proofBytes: Int64
+    let finalBytes: Int64
+    let variantBytes: Int64
+    let totalBytes: Int64
+    let events: [EventStorageRecord]
+}
+
+struct EventStorageRecord: Decodable, Identifiable {
+    let eventId: String
+    let title: String
+    let status: String
+    let photoCount: Int
+    let finalCount: Int
+    let variantCount: Int
+    let proofBytes: Int64
+    let finalBytes: Int64
+    let variantBytes: Int64
+    let totalBytes: Int64
+
+    var id: String { eventId }
+}
+
 enum APIClientError: LocalizedError {
     case notConfigured
     case invalidResponse
@@ -387,7 +423,8 @@ enum APIClientError: LocalizedError {
     case invalidPhotoUploadResponse
     case invalidFinalPhotoUploadResponse
     case invalidFinalVariantUploadResponse
-    
+    case invalidStorageUsageResponse
+
     var errorDescription: String? {
         switch self {
         case .notConfigured:
@@ -459,6 +496,11 @@ enum APIClientError: LocalizedError {
             return """
             PickPic returned optimized-image data that the app \
             could not read.
+            """
+
+        case .invalidStorageUsageResponse:
+            return """
+            PickPic returned storage figures that the app could not read.
             """
         }
     }
