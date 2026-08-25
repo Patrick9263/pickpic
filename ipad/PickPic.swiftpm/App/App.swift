@@ -364,7 +364,7 @@ struct PickPicApp: App {
             return
         }
 
-        var copiedPhotoCount = 0
+        var movedPhotoCount = 0
         var syncedEventCount = 0
 
         for reference in references {
@@ -387,10 +387,10 @@ struct PickPicApp: App {
                         reference: reference,
                         using: client
                     ),
-                    result.fileResult.copiedPhotoCount > 0
+                    result.fileResult.movedPhotoCount > 0
                 {
-                    copiedPhotoCount +=
-                    result.fileResult.copiedPhotoCount
+                    movedPhotoCount +=
+                    result.fileResult.movedPhotoCount
                     syncedEventCount += 1
                 }
             } catch APIClientError.server(404, _) {
@@ -400,7 +400,7 @@ struct PickPicApp: App {
                  * gets registered when its first upload runs, and an
                  * event deleted from the dashboard leaves its folder
                  * reference behind on the device. Either way there are
-                 * no requested photos to copy, and this sweep runs on
+                 * no requested photos to move, and this sweep runs on
                  * every activation — so logging it would repeat
                  * forever. The liked-photos screen still reports the
                  * 404, because there the photographer asked.
@@ -414,7 +414,7 @@ struct PickPicApp: App {
             }
         }
 
-        guard copiedPhotoCount > 0 else {
+        guard movedPhotoCount > 0 else {
             return
         }
 
@@ -424,14 +424,14 @@ struct PickPicApp: App {
         : "\(syncedEventCount) events"
 
         let fileDescription =
-        copiedPhotoCount == 1
+        movedPhotoCount == 1
         ? "file"
         : "files"
 
         feedback.show(
             title: "Liked photos synced",
             detail:
-                "Copied \(copiedPhotoCount) RAW \(fileDescription) into To Edit across \(eventDescription).",
+                "Moved \(movedPhotoCount) RAW \(fileDescription) into To Edit across \(eventDescription).",
             systemImage: "heart.circle.fill"
         )
     }

@@ -5,7 +5,7 @@ struct ToEditSyncResult:
     Sendable
 {
     let likedPhotoCount: Int
-    let copiedPhotoCount: Int
+    let movedPhotoCount: Int
     let alreadyPresentCount: Int
     
     let syncedFilenames: Set<String>
@@ -18,7 +18,8 @@ enum ToEditSyncError: LocalizedError {
     case sourceFolderUnavailable
     case invalidSourceFilename(String)
     case destinationIsDirectory(String)
-    
+    case verificationFailed(String)
+
     var errorDescription: String? {
         switch self {
         case .sourceFolderUnavailable:
@@ -26,17 +27,24 @@ enum ToEditSyncError: LocalizedError {
             PickPic could not access the saved event folder. \
             Select the folder again.
             """
-            
+
         case let .invalidSourceFilename(filename):
             return """
             The server returned an unsafe source filename: \
             \(filename).
             """
-            
+
         case let .destinationIsDirectory(filename):
             return """
             An item named \(filename) already exists in \
             To Edit, but it is not a file.
+            """
+
+        case let .verificationFailed(filename):
+            return """
+            PickPic copied \(filename) into To Edit, but the copy \
+            did not match the original byte-for-byte. The original \
+            was left in place; try syncing again.
             """
         }
     }
@@ -222,7 +230,7 @@ enum ToEditSyncService {
                 == .orderedAscending
             }
         
-        var copiedPhotoCount = 0
+        var movedPhotoCount = 0
         var alreadyPresentCount = 0
         var syncedFilenames: Set<String> = []
         var missingFilenames: [String] = []
@@ -291,18 +299,47 @@ enum ToEditSyncService {
                 continue
             }
             
+            let sourceHash =
+            try HashingService.sha256Hex(
+                for: sourceURL
+            )
+
             try FileManager.default.copyItem(
                 at: sourceURL,
                 to: destinationURL
             )
-            
-            copiedPhotoCount += 1
+
+            let destinationHash =
+            try HashingService.sha256Hex(
+                for: destinationURL
+            )
+
+            guard sourceHash == destinationHash else {
+                try? FileManager.default.removeItem(
+                    at: destinationURL
+                )
+
+                throw ToEditSyncError
+                    .verificationFailed(filename)
+            }
+
+            /*
+             * Best-effort: the verified copy in To Edit is what makes
+             * the sync correct. A source that can't be removed (a
+             * read-only file provider, say) just means this file's
+             * storage isn't reclaimed yet, not that the sync failed.
+             */
+            try? FileManager.default.removeItem(
+                at: sourceURL
+            )
+
+            movedPhotoCount += 1
             syncedFilenames.insert(filename)
         }
-        
+
         return ToEditSyncResult(
             likedPhotoCount: likedPhotos.count,
-            copiedPhotoCount: copiedPhotoCount,
+            movedPhotoCount: movedPhotoCount,
             alreadyPresentCount: alreadyPresentCount,
             syncedFilenames: syncedFilenames,
             missingFilenames: missingFilenames,

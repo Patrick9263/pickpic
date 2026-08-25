@@ -306,8 +306,9 @@ struct LikedPhotosView: View {
 
             Text(
                 """
-                Requested RAW files are copied into To Edit. \
-                Originals are never moved or deleted.
+                Requested RAW files are moved into To Edit to save \
+                space. Each file is verified against the original \
+                before it's removed from the event folder.
                 """
             )
             .font(.caption)
@@ -403,8 +404,8 @@ struct LikedPhotosView: View {
             )
             
             LabeledContent(
-                "Copied",
-                value: "\(result.copiedPhotoCount)"
+                "Moved",
+                value: "\(result.movedPhotoCount)"
             )
             
             LabeledContent(
@@ -498,20 +499,20 @@ struct LikedPhotosView: View {
         guard
             let result = viewModel.syncResult,
             result.syncedAt != previousSyncDate,
-            result.copiedPhotoCount > 0
+            result.movedPhotoCount > 0
         else {
             return
         }
 
         let fileDescription =
-        result.copiedPhotoCount == 1
+        result.movedPhotoCount == 1
         ? "RAW file"
         : "RAW files"
 
         feedback.show(
             title: "Liked photos synced",
             detail:
-                "\(event.title): copied \(result.copiedPhotoCount) \(fileDescription) into To Edit.",
+                "\(event.title): moved \(result.movedPhotoCount) \(fileDescription) into To Edit.",
             systemImage: "heart.circle.fill"
         )
     }
