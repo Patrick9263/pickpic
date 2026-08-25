@@ -184,6 +184,86 @@ final class UploadQueueStore: ObservableObject {
     }
 
     /*
+     * A guess at what an import will actually put on the wire,
+     * calibrated from conversions this iPad has already done.
+     *
+     * The source files are not the answer: a proof's size is set by the
+     * conversion's target dimension and quality, so a large RAW and a
+     * small one land at roughly the same proof size, and scaling from
+     * source bytes would be wrong rather than merely imprecise.
+     * Averaging bytes per prepared photo over the most recent jobs
+     * follows a change to the conversion settings on its own, and needs
+     * nothing new on disk — preparedPhotos already persist in
+     * upload-queue.json.
+     *
+     * A job still converting is a valid sample: every prepared photo it
+     * holds is a proof that was really written. What the estimate cannot
+     * know is how many photos preflight will skip, since that runs
+     * inside the pipeline after the upload starts, so the real total is
+     * often smaller. The queue's prepared size is the exact figure.
+     */
+    struct ProofSizeEstimate {
+        let byteCount: Int64
+        let sampleJobCount: Int
+    }
+
+    private static let proofSizeSampleJobLimit = 5
+
+    func estimatedProofSize(
+        forPhotoCount photoCount: Int
+    ) -> ProofSizeEstimate? {
+        guard photoCount > 0 else {
+            return nil
+        }
+
+        let samples =
+            jobs
+            .filter { job in
+                !job.preparedPhotos.isEmpty
+            }
+            .sorted { first, second in
+                first.updatedAt > second.updatedAt
+            }
+            .prefix(
+                Self.proofSizeSampleJobLimit
+            )
+
+        let samplePhotoCount = samples.reduce(
+            0
+        ) { count, job in
+            count + job.preparedPhotos.count
+        }
+
+        let sampleByteCount = samples.reduce(
+            Int64(0)
+        ) { total, job in
+            total + job.preparedByteCount
+        }
+
+        guard
+            samplePhotoCount > 0,
+            sampleByteCount > 0
+        else {
+            return nil
+        }
+
+        let averageByteCount =
+            Double(sampleByteCount)
+            / Double(samplePhotoCount)
+
+        let estimatedByteCount =
+            (
+                averageByteCount
+                * Double(photoCount)
+            ).rounded()
+
+        return ProofSizeEstimate(
+            byteCount: Int64(estimatedByteCount),
+            sampleJobCount: samples.count
+        )
+    }
+
+    /*
      * Carries a rename into work already queued against the event.
      *
      * An event created offline is registered on the server from the

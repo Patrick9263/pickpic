@@ -46,12 +46,6 @@ final class PhotoImportViewModel: ObservableObject {
     
     private var folderBookmarkData: Data?
     
-    var totalBytes: Int64 {
-        photos.reduce(0) { result, photo in
-            result + photo.byteSize
-        }
-    }
-    
     /*
      * Clears the scan so the next import starts from nothing rather than
      * showing the folder confirmed last time.
