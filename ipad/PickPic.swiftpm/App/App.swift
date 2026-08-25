@@ -393,6 +393,19 @@ struct PickPicApp: App {
                     result.fileResult.copiedPhotoCount
                     syncedEventCount += 1
                 }
+            } catch APIClientError.server(404, _) {
+                /*
+                 * The server does not know this event. That is normal
+                 * rather than a failure: an event created offline only
+                 * gets registered when its first upload runs, and an
+                 * event deleted from the dashboard leaves its folder
+                 * reference behind on the device. Either way there are
+                 * no requested photos to copy, and this sweep runs on
+                 * every activation — so logging it would repeat
+                 * forever. The liked-photos screen still reports the
+                 * 404, because there the photographer asked.
+                 */
+                continue
             } catch {
                 print(
                     "Automatic requested-photo sync failed for event \(reference.eventID):",
