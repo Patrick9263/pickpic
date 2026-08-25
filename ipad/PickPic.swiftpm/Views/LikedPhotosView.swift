@@ -266,9 +266,11 @@ struct LikedPhotosView: View {
                 """
                 It also watches Edited for this event and uploads \
                 finished edits as they appear, including after you leave \
-                this screen. iPadOS pauses the check while PickPic is in \
-                the background, so edits saved in another app are picked \
-                up as soon as you return.
+                this screen. Keeping PickPic on screen beside your editor \
+                keeps the check running while you work. It pauses only \
+                when PickPic is fully in the background — your editor \
+                taken full screen, the iPad locked, or PickPic swiped \
+                away — and resumes as soon as you return.
                 """,
                 systemImage: "checkmark.seal"
             )

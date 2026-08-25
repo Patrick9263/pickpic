@@ -1,106 +1,62 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
+/*
+ * The confirmation step of the import flow, presented as a sheet from
+ * EventDetailView once a folder has been picked. It owns no state: the
+ * scan lives in the hub's view model so that picking a folder, starting
+ * the pipeline and pushing the queue all happen in one place.
+ *
+ * The only decision here is "is this the right folder", which is why the
+ * summary and the file list are the whole screen and Start Upload is the
+ * single action.
+ */
 struct PhotoImportView: View {
     let event: PickPicEvent
     
-    @EnvironmentObject private var uploadQueue:
-    UploadQueueStore
-    @EnvironmentObject private var eventFolders:
-    EventFolderStore
+    @ObservedObject var viewModel:
+    PhotoImportViewModel
     
-    @StateObject private var viewModel =
-    PhotoImportViewModel()
+    let queueErrorMessage: String?
+    let onChooseAnotherFolder: () -> Void
+    let onStartUpload: () -> Void
     
-    @State private var showingFolderPicker = false
-    @State private var hasQueuedSelection = false
-    @State private var showingQueue = false
-    
-    @State private var showingQueueError = false
-    @State private var queueErrorMessage = ""
-    
-    private var eventJobs: [UploadJob] {
-        uploadQueue.jobs(for: event.id)
-    }
-    
-    private var unfinishedJobCount: Int {
-        eventJobs.filter { job in
-            job.stage != .completed
-        }
-        .count
-    }
-    
-    private var restoredJob: UploadJob? {
-        eventJobs.first { job in
-            job.stage != .completed
-        }
-        ?? eventJobs.first
-    }
+    @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        List {
-            if !eventJobs.isEmpty {
-                Section("Saved Upload Queue") {
-                    LabeledContent(
-                        "Upload jobs",
-                        value: "\(eventJobs.count)"
-                    )
-                    
-                    LabeledContent(
-                        "Still to finish",
-                        value: "\(unfinishedJobCount)"
-                    )
-                    
-                    if let restoredJob {
+        NavigationStack {
+            List {
+                /*
+                 * The problem states are drawn as an overlay, so the
+                 * summary is only listed when there is something to
+                 * confirm — otherwise it shows through them.
+                 */
+                if let folderName = viewModel.folderName,
+                    !viewModel.photos.isEmpty {
+                    Section("Selection") {
                         LabeledContent(
-                            "Latest folder",
-                            value: restoredJob.folderName
+                            "Event",
+                            value: event.title
+                        )
+                        
+                        LabeledContent(
+                            "Folder",
+                            value: folderName
+                        )
+                        
+                        LabeledContent(
+                            "Photos",
+                            value:
+                                "\(viewModel.photos.count)"
+                        )
+                        
+                        LabeledContent(
+                            "Source size",
+                            value: formattedByteCount(
+                                viewModel.totalBytes
+                            )
                         )
                     }
                     
-                    Button {
-                        showingQueue = true
-                    } label: {
-                        Label(
-                            unfinishedJobCount > 0
-                            ? "Continue Existing Upload"
-                            : "View Completed Uploads",
-                            systemImage:
-                                unfinishedJobCount > 0
-                            ? "clock.arrow.circlepath"
-                            : "checkmark.circle"
-                        )
-                    }
-                }
-            }
-            
-            if let folderName = viewModel.folderName {
-                Section("Selection") {
-                    LabeledContent(
-                        "Event",
-                        value: event.title
-                    )
-                    
-                    LabeledContent(
-                        "Folder",
-                        value: folderName
-                    )
-                    
-                    LabeledContent(
-                        "Photos",
-                        value:
-                            "\(viewModel.photos.count)"
-                    )
-                    
-                    LabeledContent(
-                        "Source size",
-                        value: formattedByteCount(
-                            viewModel.totalBytes
-                        )
-                    )
-                }
-                
-                if !viewModel.photos.isEmpty {
                     Section(
                         "Files (\(viewModel.photos.count))"
                     ) {
@@ -114,83 +70,65 @@ struct PhotoImportView: View {
                     }
                 }
             }
-        }
-        .navigationTitle("Import Photos")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(
-                placement: .topBarTrailing
-            ) {
-                Button {
-                    viewModel.clearError()
-                    showingFolderPicker = true
-                } label: {
-                    Label(
-                        eventJobs.isEmpty
-                        ? "Choose Folder"
-                        : "Choose Another Folder",
-                        systemImage: "folder"
-                    )
-                }
-            }
-        }
-        .overlay {
-            importState
-        }
-        .safeAreaInset(edge: .bottom) {
-            if !viewModel.photos.isEmpty {
-                queueControls
-            }
-        }
-        .fileImporter(
-            isPresented: $showingFolderPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            switch result {
-            case let .success(folderURL):
-                hasQueuedSelection = false
-                
-                Task {
-                    await viewModel.scan(
-                        folderURL: folderURL
-                    )
+            .navigationTitle("Import Photos")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(
+                    placement: .topBarLeading
+                ) {
+                    Button("Cancel", role: .cancel) {
+                        dismiss()
+                    }
                 }
                 
-            case let .failure(error):
-                viewModel.showError(error)
+                ToolbarItem(
+                    placement: .topBarTrailing
+                ) {
+                    Button {
+                        onChooseAnotherFolder()
+                    } label: {
+                        Label(
+                            "Choose Another Folder",
+                            systemImage: "folder"
+                        )
+                    }
+                    .disabled(viewModel.isScanning)
+                }
             }
-        }
-        .navigationDestination(
-            isPresented: $showingQueue
-        ) {
-            UploadQueueView(event: event)
-        }
-        .alert(
-            "Unable to Add Upload",
-            isPresented: $showingQueueError
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(queueErrorMessage)
-        }
-        .task(id: event.id) {
-            restoreQueuedSelection()
+            .overlay {
+                importState
+            }
+            .safeAreaInset(edge: .bottom) {
+                if !viewModel.photos.isEmpty {
+                    startControls
+                }
+            }
         }
     }
     
-    private var queueControls: some View {
+    private var startControls: some View {
         VStack(spacing: 8) {
+            if let queueErrorMessage {
+                Label(
+                    queueErrorMessage,
+                    systemImage:
+                        "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(.red)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
+            }
+            
             Button {
-                queueSelection()
+                onStartUpload()
             } label: {
                 Label(
-                    hasQueuedSelection
-                    ? "View Upload Queue"
-                    : "Add to Upload Queue",
+                    "Start Upload",
                     systemImage:
-                        hasQueuedSelection
-                    ? "arrow.up.circle.fill"
-                    : "plus.circle.fill"
+                        "arrow.up.circle.fill"
                 )
                 .frame(maxWidth: .infinity)
             }
@@ -198,15 +136,11 @@ struct PhotoImportView: View {
             .controlSize(.large)
             
             Text(
-                hasQueuedSelection
-                ? """
-                  This saved selection is already in the upload queue. \
-                  Choose another folder to add a separate batch.
-                  """
-                : """
-                  This saves a resumable upload job. No source files \
-                  are changed until the upload starts.
-                  """
+                """
+                Conversion and uploading start now and continue photo \
+                by photo. PickPic creates To Edit and Edited folders \
+                beside your photos; the originals are never changed.
+                """
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -217,7 +151,11 @@ struct PhotoImportView: View {
     
     @ViewBuilder
     private var importState: some View {
-        if viewModel.isScanning {
+        if viewModel.isScanning
+            || (
+                viewModel.folderName == nil
+                && viewModel.errorMessage == nil
+            ) {
             ProgressView("Scanning folder…")
         } else if let errorMessage =
                     viewModel.errorMessage {
@@ -233,41 +171,10 @@ struct PhotoImportView: View {
                 Button(
                     "Choose Another Folder"
                 ) {
-                    viewModel.clearError()
-                    showingFolderPicker = true
-                }
-                
-                if !eventJobs.isEmpty {
-                    Button("View Existing Queue") {
-                        showingQueue = true
-                    }
+                    onChooseAnotherFolder()
                 }
             }
-        } else if
-            viewModel.folderName == nil,
-            eventJobs.isEmpty
-        {
-            ContentUnavailableView {
-                Label(
-                    "Choose an Event Folder",
-                    systemImage: "folder"
-                )
-            } description: {
-                Text(
-                    """
-                    Select the folder containing the RAW \
-                    photos for \(event.title).
-                    """
-                )
-            } actions: {
-                Button("Choose Folder") {
-                    showingFolderPicker = true
-                }
-            }
-        } else if
-            viewModel.folderName != nil,
-            viewModel.photos.isEmpty
-        {
+        } else if viewModel.photos.isEmpty {
             ContentUnavailableView {
                 Label(
                     "No Supported Photos",
@@ -285,43 +192,9 @@ struct PhotoImportView: View {
                 Button(
                     "Choose Another Folder"
                 ) {
-                    showingFolderPicker = true
+                    onChooseAnotherFolder()
                 }
             }
-        }
-    }
-    
-    private func restoreQueuedSelection() {
-        guard let restoredJob else {
-            return
-        }
-        
-        viewModel.restoreSelection(
-            from: restoredJob
-        )
-        
-        hasQueuedSelection = true
-    }
-    
-    private func queueSelection() {
-        if hasQueuedSelection {
-            showingQueue = true
-            return
-        }
-        
-        do {
-            let job =
-            try viewModel.makeUploadJob(
-                for: event
-            )
-            try eventFolders.save(job: job)
-            try uploadQueue.add(job)
-            hasQueuedSelection = true
-            showingQueue = true
-        } catch {
-            queueErrorMessage =
-            error.localizedDescription
-            showingQueueError = true
         }
     }
     
