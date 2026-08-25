@@ -1172,6 +1172,12 @@ function DashboardPage() {
           </p>
         </section>
 
+        <StorageUsage
+          storage={storage}
+          isLoading={isLoadingStorage}
+          onRefresh={() => void loadStorageUsage()}
+        />
+
         <section className="panel create-panel">
           <div>
             <p className="section-label">New gallery</p>
@@ -1343,12 +1349,6 @@ function DashboardPage() {
             )}
           </div>
         </section>
-
-        <StorageUsage
-          storage={storage}
-          isLoading={isLoadingStorage}
-          onRefresh={() => void loadStorageUsage()}
-        />
       </main>
     </div>
   );
