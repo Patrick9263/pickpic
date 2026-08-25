@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -13,16 +14,11 @@ struct LikedPhotosView: View {
     @EnvironmentObject private var feedback:
     AppFeedbackStore
     
+    @EnvironmentObject private var finishedEdits:
+    FinishedEditsWatcher
+
     @StateObject private var viewModel =
     LikedPhotosViewModel()
-
-    /*
-     * Drives the automatic pickup of finished edits. Owned here rather
-     * than shared with the Upload Finals screen so that leaving this
-     * view cancels the watch with it.
-     */
-    @StateObject private var finalUploads =
-    FinalUploadsViewModel()
     
     @State private var showingFolderPicker = false
 
@@ -173,8 +169,25 @@ struct LikedPhotosView: View {
         .task(id: event.id) {
             await refreshAndSync()
         }
-        .task(id: folderReference?.updatedAt) {
-            await watchForFinishedEdits()
+        .onChange(
+            of: folderReference?.updatedAt,
+            initial: true
+        ) { _, _ in
+            startWatchingFinishedEdits()
+        }
+        /*
+         * The watch outlives this screen, so a final uploaded from
+         * elsewhere has to be reflected here when the list is visible.
+         */
+        .onChange(
+            of: finishedEdits.uploadGeneration
+        ) { _, _ in
+            Task {
+                await viewModel.load(
+                    eventID: event.id,
+                    using: configuration
+                )
+            }
         }
     }
     
@@ -251,21 +264,24 @@ struct LikedPhotosView: View {
 
             Label(
                 """
-                While this screen is open it also watches Edited, and \
-                uploads finished edits as they appear.
+                It also watches Edited for this event and uploads \
+                finished edits as they appear, including after you leave \
+                this screen. iPadOS pauses the check while PickPic is in \
+                the background, so edits saved in another app are picked \
+                up as soon as you return.
                 """,
                 systemImage: "checkmark.seal"
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
 
-            if finalUploads.isUploading {
+            if finishedEdits.uploads.isUploading {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
 
                     Text(
-                        finalUploads.currentFilename
+                        finishedEdits.uploads.currentFilename
                         ?? "Uploading finished edits…"
                     )
                     .font(.footnote)
@@ -626,77 +642,23 @@ struct LikedPhotosView: View {
     }
 
     /*
-     * Picks up finished edits while the photographer works through this
-     * list, so saving a JPEG into Edited is enough to get it uploaded
-     * without visiting the Upload Finals screen.
-     *
-     * Runs only while this view is on screen: the task is cancelled on
-     * the way out, which is why the watch is scoped here rather than
-     * running against every event's folder app-wide.
+     * Opening this screen is what marks an event as the one being worked
+     * on, so it is also what hands the watch to the app-level watcher.
+     * Losing the folder stops it rather than leaving it scanning a
+     * reference it can no longer resolve.
      */
-    private func watchForFinishedEdits() async {
+    private func startWatchingFinishedEdits() {
         guard let folderReference else {
+            finishedEdits.stop()
+
             return
         }
 
-        while !Task.isCancelled {
-            await finalUploads.load(
-                eventID: event.id,
-                reference: folderReference,
-                using: configuration
-            )
-
-            let readyCount =
-            finalUploads.scanResult?
-                .candidates.count
-            ?? 0
-
-            if readyCount > 0 {
-                await finalUploads.uploadAll(
-                    eventID: event.id,
-                    reference: folderReference,
-                    using: configuration
-                )
-
-                await reportFinishedEdits()
-            }
-
-            /*
-             * Matches the cadence of the liked-photo sync the app
-             * already runs, so the two settle into the same rhythm
-             * rather than competing for the folder.
-             */
-            try? await Task.sleep(
-                for: .seconds(30)
-            )
-        }
-    }
-
-    private func reportFinishedEdits() async {
-        guard
-            let uploadedCount =
-                finalUploads.lastUploadedCount,
-            uploadedCount > 0
-        else {
-            return
-        }
-
-        feedback.show(
-            title: "Finals uploaded",
-            detail:
-                uploadedCount == 1
-            ? "1 edited photo was uploaded from Edited."
-            : "\(uploadedCount) edited photos were uploaded from Edited.",
-            systemImage: "checkmark.seal.fill"
-        )
-
-        /*
-         * Refreshes the list so the photos just delivered stop showing
-         * as still waiting for an edit.
-         */
-        await viewModel.load(
+        finishedEdits.watch(
             eventID: event.id,
-            using: configuration
+            reference: folderReference,
+            configuration: configuration,
+            feedback: feedback
         )
     }
 
@@ -711,6 +673,192 @@ struct LikedPhotosView: View {
                 using: configuration
             )
         }
+    }
+}
+
+/*
+ * Watches one event's Edited folder and uploads finished edits as they
+ * appear. Owned by the app rather than by the liked-photos screen, so
+ * moving to another screen mid-session no longer stops the watch — the
+ * common case being a swap out to Affinity and back.
+ *
+ * It deliberately follows a single event, the one whose liked photos
+ * were last opened, rather than every event PickPic knows about. The
+ * folders belong to shoots that may be long finished, and scanning them
+ * all would do a lot of security-scoped work nobody asked for.
+ *
+ * iPadOS suspends the app in the background and offers no way to watch a
+ * user folder while suspended, so the periodic loop cannot see an export
+ * made while Affinity is frontmost. scanNow covers that: the app scans
+ * the moment it becomes active instead of waiting out the remainder of
+ * the interval. Once a final is found the upload itself survives
+ * backgrounding through BackgroundUploadSession.
+ *
+ * Lives here rather than in its own file to avoid editing
+ * project.pbxproj, matching ThumbnailCache below. Worth extracting when
+ * the project file is being changed anyway.
+ */
+@MainActor
+final class FinishedEditsWatcher: ObservableObject {
+    /*
+     * Incremented after each upload so a visible liked-photos list can
+     * refresh. The watcher cannot reach that view's own view model, and
+     * the photos just delivered would otherwise keep reading as still
+     * waiting for an edit.
+     */
+    @Published private(set) var uploadGeneration = 0
+
+    /*
+     * Exposed so the liked-photos screen can keep showing per-file
+     * progress. A nested ObservableObject does not republish on its own,
+     * hence the forwarding in init.
+     */
+    let uploads = FinalUploadsViewModel()
+
+    private var forwarding: AnyCancellable?
+
+    private var suspensions = 0
+
+    private var watchedEventID: String?
+    private var reference: EventFolderReference?
+    private var configuration: APIConfigurationStore?
+    private var feedback: AppFeedbackStore?
+    private var loop: Task<Void, Never>?
+
+    private static let interval = Duration.seconds(30)
+
+    init() {
+        forwarding = uploads.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+    }
+
+    func watch(
+        eventID: String,
+        reference: EventFolderReference,
+        configuration: APIConfigurationStore,
+        feedback: AppFeedbackStore
+    ) {
+        self.configuration = configuration
+        self.feedback = feedback
+        self.reference = reference
+
+        /*
+         * Restarting the loop on every appearance would reset the
+         * interval and rescan immediately, so an unchanged watch is left
+         * running as it is.
+         */
+        if
+            watchedEventID == eventID,
+            loop?.isCancelled == false
+        {
+            return
+        }
+
+        watchedEventID = eventID
+
+        loop?.cancel()
+
+        loop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.scanOnce()
+
+                try? await Task.sleep(
+                    for: Self.interval
+                )
+            }
+        }
+    }
+
+    func stop() {
+        loop?.cancel()
+        loop = nil
+        watchedEventID = nil
+        reference = nil
+    }
+
+    /*
+     * The Upload Finals screen drives the same folder through its own
+     * view model, whose busy check cannot see this one. Rather than have
+     * both upload the same file, the explicit screen takes precedence
+     * and the watch stands down while it is open. Counted rather than a
+     * flag so overlapping presentations cannot resume it early.
+     */
+    func suspend() {
+        suspensions += 1
+    }
+
+    func resume() {
+        suspensions = max(suspensions - 1, 0)
+    }
+
+    /*
+     * Called when the app becomes active. The periodic loop makes no
+     * progress while suspended, so without this a finished edit waits out
+     * whatever remained of the interval before anything notices it.
+     */
+    func scanNow() {
+        guard watchedEventID != nil else {
+            return
+        }
+
+        Task {
+            await scanOnce()
+        }
+    }
+
+    private func scanOnce() async {
+        guard suspensions == 0 else {
+            return
+        }
+
+        guard
+            let eventID = watchedEventID,
+            let reference,
+            let configuration
+        else {
+            return
+        }
+
+        await uploads.load(
+            eventID: eventID,
+            reference: reference,
+            using: configuration
+        )
+
+        let readyCount = uploads.scanResult?
+            .candidates.count
+        ?? 0
+
+        guard readyCount > 0 else {
+            return
+        }
+
+        await uploads.uploadAll(
+            eventID: eventID,
+            reference: reference,
+            using: configuration
+        )
+
+        guard
+            let uploadedCount =
+                uploads.lastUploadedCount,
+            uploadedCount > 0
+        else {
+            return
+        }
+
+        feedback?.show(
+            title: "Finals uploaded",
+            detail:
+                uploadedCount == 1
+            ? "1 edited photo was uploaded from Edited."
+            : "\(uploadedCount) edited photos were uploaded from Edited.",
+            systemImage: "checkmark.seal.fill"
+        )
+
+        uploadGeneration += 1
     }
 }
 
