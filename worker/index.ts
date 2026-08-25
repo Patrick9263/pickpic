@@ -37,6 +37,35 @@ interface EventRecord {
   updatedAt: string;
 }
 
+interface EventStorageRow {
+  eventId: string;
+  title: string;
+  status: string;
+  photoCount: number;
+  finalCount: number;
+  proofBytes: number;
+  finalBytes: number;
+}
+
+interface EventVariantStorageRow {
+  eventId: string;
+  variantCount: number;
+  variantBytes: number;
+}
+
+interface EventStorageRecord {
+  eventId: string;
+  title: string;
+  status: string;
+  photoCount: number;
+  finalCount: number;
+  variantCount: number;
+  proofBytes: number;
+  finalBytes: number;
+  variantBytes: number;
+  totalBytes: number;
+}
+
 interface FinalPhotoRecord {
   originalFilename: string;
   contentType: string;
@@ -1169,6 +1198,101 @@ async function listEvents(env: Env): Promise<Response> {
 
   return jsonResponse({
     events: result.results,
+  });
+}
+
+/*
+ * Storage usage is summed from what the database records about every
+ * stored object rather than measured against the bucket, which keeps
+ * this to two queries with no R2 listing and no extra credentials.
+ * The tradeoff is that it reports the database's belief: if a delete
+ * ever half-failed, the bucket holds more than this reports.
+ */
+async function getStorageUsage(env: Env): Promise<Response> {
+  const eventResult = await env.DB.prepare(
+    `
+      SELECT
+        e.id AS eventId,
+        e.title AS title,
+        e.status AS status,
+        COUNT(p.id) AS photoCount,
+        COUNT(p.final_storage_key) AS finalCount,
+        COALESCE(SUM(p.byte_size), 0) AS proofBytes,
+        COALESCE(SUM(p.final_byte_size), 0) AS finalBytes
+      FROM events e
+      LEFT JOIN photos p
+        ON p.event_id = e.id
+      GROUP BY e.id
+    `,
+  ).all<EventStorageRow>();
+
+  const variantResult = await env.DB.prepare(
+    `
+      SELECT
+        p.event_id AS eventId,
+        COUNT(v.storage_key) AS variantCount,
+        COALESCE(SUM(v.byte_size), 0) AS variantBytes
+      FROM photo_variants v
+      INNER JOIN photos p
+        ON p.id = v.photo_id
+      GROUP BY p.event_id
+    `,
+  ).all<EventVariantStorageRow>();
+
+  const variantsByEvent = new Map(
+    variantResult.results.map((variantRow) => [variantRow.eventId, variantRow]),
+  );
+
+  const events: EventStorageRecord[] = eventResult.results
+    .map((eventRow) => {
+      const variants = variantsByEvent.get(eventRow.eventId);
+      const variantBytes = variants?.variantBytes ?? 0;
+
+      return {
+        eventId: eventRow.eventId,
+        title: eventRow.title,
+        status: eventRow.status,
+        photoCount: eventRow.photoCount,
+        finalCount: eventRow.finalCount,
+        variantCount: variants?.variantCount ?? 0,
+        proofBytes: eventRow.proofBytes,
+        finalBytes: eventRow.finalBytes,
+        variantBytes,
+        totalBytes: eventRow.proofBytes + eventRow.finalBytes + variantBytes,
+      };
+    })
+    .sort((first, second) => second.totalBytes - first.totalBytes);
+
+  /*
+   * The totals are folded from the same per-event records the
+   * breakdown is drawn from, so the two can never disagree.
+   */
+  const totals = events.reduce(
+    (running, eventStorage) => ({
+      photoCount: running.photoCount + eventStorage.photoCount,
+      finalCount: running.finalCount + eventStorage.finalCount,
+      variantCount: running.variantCount + eventStorage.variantCount,
+      proofBytes: running.proofBytes + eventStorage.proofBytes,
+      finalBytes: running.finalBytes + eventStorage.finalBytes,
+      variantBytes: running.variantBytes + eventStorage.variantBytes,
+      totalBytes: running.totalBytes + eventStorage.totalBytes,
+    }),
+    {
+      photoCount: 0,
+      finalCount: 0,
+      variantCount: 0,
+      proofBytes: 0,
+      finalBytes: 0,
+      variantBytes: 0,
+      totalBytes: 0,
+    },
+  );
+
+  return jsonResponse({
+    storage: {
+      ...totals,
+      events,
+    },
   });
 }
 
@@ -2998,6 +3122,14 @@ export default {
       }
 
       return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    if (url.pathname === "/api/admin/storage") {
+      if (request.method !== "GET") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      return getStorageUsage(env);
     }
 
     const adminEventMatch = url.pathname.match(

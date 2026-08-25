@@ -14,9 +14,11 @@ import type {
   PhotoRecord,
   PhotoVariantSource,
   PhotoWorkflowStatus,
+  StorageUsageRecord,
   UploadBatchProgress,
 } from "../types";
 import EventCard from "../components/EventCard";
+import StorageUsage from "../components/StorageUsage";
 import { fetchJson, getErrorMessage } from "../api";
 import { extractPhotoMetadata } from "../photoMetadata";
 import {
@@ -45,6 +47,10 @@ interface ClearEventPhotosResponse {
 
 interface PhotosResponse {
   photos: PhotoRecord[];
+}
+
+interface StorageUsageResponse {
+  storage: StorageUsageRecord;
 }
 
 interface CreateEventResponse {
@@ -215,6 +221,8 @@ function DashboardPage() {
     string | null
   >(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [storage, setStorage] = useState<StorageUsageRecord | null>(null);
+  const [isLoadingStorage, setIsLoadingStorage] = useState(true);
   const archivedEventCount = events.filter(
     (eventRecord) => eventRecord.status === "archived",
   ).length;
@@ -250,9 +258,36 @@ function DashboardPage() {
     }
   }, []);
 
+  /*
+   * Storage is summed by the worker in its own query, so it loads
+   * independently of the events and their photos rather than
+   * holding up the rest of the dashboard.
+   */
+  const loadStorageUsage = useCallback(async (): Promise<void> => {
+    setIsLoadingStorage(true);
+
+    try {
+      const body = await fetchJson<StorageUsageResponse>("/api/admin/storage");
+
+      setStorage(body.storage);
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to measure stored photos.",
+      );
+    } finally {
+      setIsLoadingStorage(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadEvents();
   }, [loadEvents]);
+
+  useEffect(() => {
+    void loadStorageUsage();
+  }, [loadStorageUsage]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -500,6 +535,8 @@ function DashboardPage() {
 
     setUploadingEventId(null);
 
+    void loadStorageUsage();
+
     if (failedCount > 0) {
       setError(
         `${failedCount} ${
@@ -538,6 +575,8 @@ function DashboardPage() {
           (currentPhoto) => currentPhoto.id !== photo.id,
         ),
       }));
+
+      void loadStorageUsage();
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -773,6 +812,8 @@ function DashboardPage() {
           "The final image uploaded successfully, but its optimized web versions could not be created. PickPic will use the full image.",
         );
       }
+
+      void loadStorageUsage();
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -1023,6 +1064,8 @@ function DashboardPage() {
         ),
       );
 
+      void loadStorageUsage();
+
       return true;
     } catch (caughtError) {
       setError(
@@ -1086,6 +1129,8 @@ function DashboardPage() {
           ),
         ),
       );
+
+      void loadStorageUsage();
 
       setCopiedEventId((currentId) =>
         currentId === eventRecord.id ? null : currentId,
@@ -1298,6 +1343,12 @@ function DashboardPage() {
             )}
           </div>
         </section>
+
+        <StorageUsage
+          storage={storage}
+          isLoading={isLoadingStorage}
+          onRefresh={() => void loadStorageUsage()}
+        />
       </main>
     </div>
   );

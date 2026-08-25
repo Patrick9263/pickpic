@@ -1,0 +1,195 @@
+.storage-panel {
+  display: grid;
+  gap: 22px;
+}
+
+.storage-totals {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.storage-totals div {
+  background: #f7f5f0;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.storage-totals dt {
+  color: #77736b;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.storage-totals dd {
+  color: #171717;
+  font-size: 1.45rem;
+  font-weight: 800;
+  margin: 4px 0 0;
+}
+
+.storage-totals small {
+  color: #77736b;
+  display: block;
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+.storage-placeholder {
+  background: #f7f5f0;
+  border-radius: 12px;
+  color: #77736b;
+  margin: 0;
+  padding: 22px;
+  text-align: center;
+}
+
+/*
+ * The panel is a grid, so its children default to a minimum size
+ * of their content. Without this the wide table stretches the whole
+ * dashboard sideways on a phone instead of scrolling on its own.
+ */
+.storage-panel > * {
+  min-width: 0;
+}
+
+.storage-table-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.storage-table {
+  border-collapse: collapse;
+  min-width: 620px;
+  width: 100%;
+}
+
+.storage-table th,
+.storage-table td {
+  padding: 11px 12px;
+  text-align: right;
+  vertical-align: top;
+}
+
+.storage-table thead th {
+  border-bottom: 1px solid #e5e2db;
+  color: #77736b;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.storage-table thead th:first-child,
+.storage-table tbody th {
+  text-align: left;
+}
+
+.storage-table tbody th {
+  min-width: 220px;
+}
+
+.storage-table tbody tr + tr th,
+.storage-table tbody tr + tr td {
+  border-top: 1px solid #eeece6;
+}
+
+.storage-table td {
+  color: #302e2a;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.storage-table td small {
+  color: #77736b;
+  font-size: 0.75rem;
+}
+
+.storage-event-title {
+  color: #171717;
+  display: block;
+  font-weight: 750;
+}
+
+.storage-event-status {
+  color: #77736b;
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-top: 2px;
+  text-transform: uppercase;
+}
+
+.storage-bar {
+  background: #eeece6;
+  border-radius: 999px;
+  display: block;
+  height: 5px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.storage-bar-fill {
+  background: #7358d3;
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+  min-width: 1px;
+}
+
+.storage-total-cell {
+  font-weight: 800;
+}
+
+.storage-caveat {
+  color: #77736b;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.storage-totals dd,
+.storage-event-title {
+  color: var(--color-text);
+}
+
+.storage-totals dt,
+.storage-totals small,
+.storage-table thead th,
+.storage-table td small,
+.storage-event-status,
+.storage-caveat,
+.storage-placeholder {
+  color: var(--color-text-muted);
+}
+
+.storage-totals div,
+.storage-placeholder,
+.storage-bar {
+  background: var(--color-surface-raised);
+}
+
+.storage-table td {
+  color: var(--color-text);
+}
+
+.storage-table thead th {
+  border-color: var(--color-border);
+}
+
+.storage-table tbody tr + tr th,
+.storage-table tbody tr + tr td {
+  border-color: var(--color-border);
+}
+
+.storage-bar-fill {
+  background: var(--color-accent);
+}
+
+@media (max-width: 720px) {
+  .storage-totals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

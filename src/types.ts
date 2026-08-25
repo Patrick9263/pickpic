@@ -91,3 +91,27 @@ export interface ImageVariantSet {
 export type UploadStage = "preparing" | "uploading" | "optimizing";
 
 export type PhotoVariantSource = "original" | "final";
+
+export interface EventStorageRecord {
+  eventId: string;
+  title: string;
+  status: string;
+  photoCount: number;
+  finalCount: number;
+  variantCount: number;
+  proofBytes: number;
+  finalBytes: number;
+  variantBytes: number;
+  totalBytes: number;
+}
+
+export interface StorageUsageRecord {
+  photoCount: number;
+  finalCount: number;
+  variantCount: number;
+  proofBytes: number;
+  finalBytes: number;
+  variantBytes: number;
+  totalBytes: number;
+  events: EventStorageRecord[];
+}
