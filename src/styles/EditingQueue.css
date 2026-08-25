@@ -161,8 +161,38 @@
 }
 
 .queue-groups {
+  background: var(--color-background-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
   display: grid;
   gap: 28px;
+  max-height: min(720px, calc(100dvh - 220px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--color-border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.queue-groups::-webkit-scrollbar {
+  width: 9px;
+}
+
+.queue-groups::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.queue-groups::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+.queue-groups::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-subtle);
+  background-clip: padding-box;
 }
 
 .queue-group {
