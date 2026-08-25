@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3B7CFF"/>
+      <stop offset="100%" stop-color="#8A3FFF"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F1F1F5"/>
+    </linearGradient>
+    <clipPath id="photoWindow"><rect x="304" y="244" width="416" height="360" rx="10"/></clipPath>
+  </defs>
+
+  <!-- full-bleed square: iOS applies its own corner mask, so no rounding baked in -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <g transform="translate(512 512) rotate(-8) translate(-512 -512)">
+    <rect x="272" y="212" width="480" height="560" rx="28" fill="url(#card)"/>
+    <g clip-path="url(#photoWindow)">
+      <rect x="304" y="244" width="416" height="360" fill="#BFE0FF"/>
+      <circle cx="620" cy="304" r="34" fill="#FFFFFF"/>
+      <path d="M264 620 L452 392 L566 506 L648 424 L760 560 L760 620 Z" fill="#2A5FCC"/>
+    </g>
+    <!-- ring first, then fill: keeps the heart separated from the card at small sizes -->
+    <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+          fill="none" stroke="#FFFFFF" stroke-width="46" stroke-linejoin="round"/>
+    <path d="M700 790 C700 790 604 736 604 682 C604 646 636 622 668 622 C684 622 694 630 700 640 C706 630 716 622 732 622 C764 622 796 646 796 682 C796 736 700 790 700 790 Z"
+          fill="#FF4D6D"/>
+  </g>
+</svg>

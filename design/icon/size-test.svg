@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="760" height="700" viewBox="0 0 760 700">
+  <defs>
+    <clipPath id="m180"><rect x="60"  y="60"  width="180" height="180" rx="40"/></clipPath>
+    <clipPath id="m120"><rect x="320" y="90"  width="120" height="120" rx="27"/></clipPath>
+    <clipPath id="m87"><rect  x="540" y="107" width="87"  height="87"  rx="19"/></clipPath>
+    <clipPath id="m60"><rect  x="120" y="420" width="60"  height="60"  rx="13"/></clipPath>
+    <clipPath id="m40"><rect  x="360" y="430" width="40"  height="40"  rx="9"/></clipPath>
+    <clipPath id="m29"><rect  x="570" y="435" width="29"  height="29"  rx="6"/></clipPath>
+  </defs>
+
+  <rect width="760" height="700" fill="#F5F5F7"/>
+
+  <image xlink:href="icon-light.png" x="60"  y="60"  width="180" height="180" clip-path="url(#m180)"/>
+  <image xlink:href="icon-light.png" x="320" y="90"  width="120" height="120" clip-path="url(#m120)"/>
+  <image xlink:href="icon-light.png" x="540" y="107" width="87"  height="87"  clip-path="url(#m87)"/>
+  <image xlink:href="icon-light.png" x="120" y="420" width="60"  height="60"  clip-path="url(#m60)"/>
+  <image xlink:href="icon-light.png" x="360" y="430" width="40"  height="40"  clip-path="url(#m40)"/>
+  <image xlink:href="icon-light.png" x="570" y="435" width="29"  height="29"  clip-path="url(#m29)"/>
+
+  <g font-family="-apple-system, Helvetica Neue, sans-serif" font-size="15" fill="#6E6E73" text-anchor="middle">
+    <text x="150" y="280">180pt</text>
+    <text x="380" y="280">120pt</text>
+    <text x="583" y="280">87pt</text>
+    <text x="150" y="520">60pt</text>
+    <text x="380" y="520">40pt</text>
+    <text x="584" y="520">29pt</text>
+  </g>
+  <g font-family="-apple-system, Helvetica Neue, sans-serif" font-size="12" fill="#8E8E93" text-anchor="middle">
+    <text x="150" y="302">App Store</text>
+    <text x="380" y="302">Home @3x</text>
+    <text x="583" y="302">Settings @3x</text>
+    <text x="150" y="542">Home @1x</text>
+    <text x="380" y="542">Spotlight</text>
+    <text x="584" y="542">Settings @1x</text>
+  </g>
+</svg>
