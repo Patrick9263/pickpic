@@ -1,8 +1,11 @@
-# App icon concept
+# App icon
 
-Working files for a PickPic app icon. **Nothing here is wired into the build yet** —
-these are proposals for review, not assets the app consumes. The asset catalog at
-`ipad/PickPic/Assets.xcassets` is untouched.
+Source files for the PickPic app icon. **The `.svg` files here are the editable
+source**; the icon the app actually ships is the flattened PNGs in
+`ipad/PickPic/Assets.xcassets/AppIcon.appiconset/`.
+
+To change the icon, edit the SVG here, re-render, strip the alpha channel, and copy
+the result into the appiconset — see "Regenerating" below.
 
 ## Preview
 
@@ -51,9 +54,34 @@ The fourth panel in `variants-sheet.png` is a hand-mapped approximation of how i
 composite the grayscale source with a blue tint. The luminance _relationships_ in that
 panel are accurate; the exact hues depend on the tint the user picks.
 
-## If this moves forward
+## Regenerating
 
-Wiring it up means adding an `AppIcon` image set to `ipad/PickPic/Assets.xcassets` with
-the light/dark/tinted slots. That's inside the `PBXFileSystemSynchronizedRootGroup`
-covering `ipad/PickPic/`, so it does **not** need the four-entry `project.pbxproj` dance
-that new Swift sources under `PickPic.swiftpm/` require.
+The appiconset already has its three appearance slots wired up in `Contents.json`, so
+replacing the icon is just overwriting the three PNGs in place — no `Contents.json` or
+`project.pbxproj` change. The asset catalog lives inside the
+`PBXFileSystemSynchronizedRootGroup` covering `ipad/PickPic/`, so it does **not** need
+the four-entry `project.pbxproj` dance that new Swift sources under `PickPic.swiftpm/`
+require. Xcode does not need to be quit for this.
+
+```bash
+cd design/icon
+for f in icon-light icon-dark icon-tinted; do
+  qlmanage -t -s 1024 -o /tmp/out "$f.svg" && mv "/tmp/out/$f.svg.png" "$f.png"
+done
+cp icon-light.png icon-dark.png icon-tinted.png \
+  ../../ipad/PickPic/Assets.xcassets/AppIcon.appiconset/
+```
+
+**Then strip the alpha channel.** App icons must be fully opaque, and every PNG encoder
+reachable here — `qlmanage`, and `sips` even via a BMP round-trip — writes an alpha
+channel back in. The working approach is a CoreGraphics context created with
+`CGImageAlphaInfo.noneSkipLast`, driven by a throwaway Swift script (`swift Flatten.swift
+*.png`). Verify with `sips -g hasAlpha <file>`, which must report `no`.
+
+Confirm the result actually compiled in, rather than trusting a green build:
+
+```bash
+xcrun assetutil --info /path/to/PickPic.app/Assets.car | grep -iE '"Appearance"|AppIcon'
+```
+
+That should list `UIAppearanceDark` and `ISAppearanceTintable` alongside the default.
