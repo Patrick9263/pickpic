@@ -53,6 +53,39 @@ struct EventListView: View {
 
     var body: some View {
         List(selection: $selectedEventID) {
+            /*
+             * List selection has no deselect gesture, so without a row
+             * that clears it the All Events summary and its storage
+             * figures are unreachable the moment an event is tapped.
+             */
+            Section {
+                Button {
+                    selectedEventID = nil
+                } label: {
+                    HStack {
+                        Label(
+                            "All Events",
+                            systemImage:
+                                "square.grid.2x2"
+                        )
+
+                        Spacer()
+
+                        if selectedEventID == nil {
+                            Image(
+                                systemName: "checkmark"
+                            )
+                            .font(
+                                .footnote
+                                    .weight(.semibold)
+                            )
+                            .foregroundStyle(.tint)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
             if
                 let errorMessage,
                 !events.isEmpty
@@ -659,6 +692,342 @@ private struct EventOverviewMetric: View {
         .accessibilityElement(
             children: .combine
         )
+    }
+}
+
+/*
+ * The all-events counterpart to the web dashboard's storage panel, drawn
+ * from the same /api/admin/storage figures so the two faces agree. It
+ * loads itself rather than being fed by EventListViewModel, because
+ * nothing else on the screen depends on the numbers and a failure here
+ * must not disturb the event list.
+ */
+struct StorageUsagePanel: View {
+    @EnvironmentObject private var configuration:
+    APIConfigurationStore
+
+    @State private var storage: StorageUsageRecord?
+    @State private var errorMessage: String?
+    @State private var isLoading = false
+
+    private let columns = [
+        GridItem(.flexible()),
+        GridItem(.flexible()),
+        GridItem(.flexible())
+    ]
+
+    var body: some View {
+        Section {
+            content
+        } header: {
+            HStack {
+                Text("Cloudflare Storage")
+
+                Spacer()
+
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else if configuration.isConfigured {
+                    Button {
+                        Task { await load() }
+                    } label: {
+                        Label(
+                            "Refresh Storage",
+                            systemImage:
+                                "arrow.clockwise"
+                        )
+                        .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+        } footer: {
+            Text(
+                """
+                These sizes come from what the database recorded for each \
+                stored file, not from R2 itself, so they can drift if a \
+                delete ever half-failed.
+                """
+            )
+        }
+        .task {
+            /*
+             * Only the first appearance fetches. Returning to All Events
+             * after visiting an event keeps whatever was measured, so
+             * moving around the app does not re-run the aggregate.
+             */
+            guard storage == nil else {
+                return
+            }
+
+            await load()
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let storage {
+            totals(for: storage)
+
+            if storage.events.isEmpty {
+                Text(
+                    "Nothing is stored yet. Upload a shoot and it will appear here."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            } else {
+                ForEach(storage.events) { eventStorage in
+                    StorageEventRow(
+                        eventStorage: eventStorage,
+                        largestEventBytes:
+                            largestEventBytes(
+                                in: storage
+                            )
+                    )
+                }
+            }
+        } else if let errorMessage {
+            Label(
+                errorMessage,
+                systemImage:
+                    "exclamationmark.triangle"
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } else {
+            /*
+             * Also covers the moment before the first fetch starts, so
+             * the section always has a row and never collapses to a bare
+             * header while it is measuring.
+             */
+            Text("Measuring stored photos…")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func totals(
+        for storage: StorageUsageRecord
+    ) -> some View {
+        VStack(spacing: 2) {
+            Text(
+                StorageUsagePanel.formattedBytes(
+                    storage.totalBytes
+                )
+            )
+            .font(.largeTitle.bold())
+            .contentTransition(.numericText())
+
+            Text("stored in R2")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+
+        LazyVGrid(
+            columns: columns,
+            spacing: 16
+        ) {
+            StorageMetric(
+                title: "Proofs",
+                value: StorageUsagePanel.formattedBytes(
+                    storage.proofBytes
+                ),
+                detail: StorageUsagePanel.formattedCount(
+                    storage.photoCount,
+                    noun: "photo"
+                ),
+                systemImage: "photo"
+            )
+
+            StorageMetric(
+                title: "Finals",
+                value: StorageUsagePanel.formattedBytes(
+                    storage.finalBytes
+                ),
+                detail: StorageUsagePanel.formattedCount(
+                    storage.finalCount,
+                    noun: "edit"
+                ),
+                systemImage: "checkmark.seal.fill"
+            )
+
+            StorageMetric(
+                title: "Previews",
+                value: StorageUsagePanel.formattedBytes(
+                    storage.variantBytes
+                ),
+                detail: StorageUsagePanel.formattedCount(
+                    storage.variantCount,
+                    noun: "variant"
+                ),
+                systemImage:
+                    "square.stack.3d.down.right"
+            )
+        }
+        .padding(.vertical, 8)
+    }
+
+    /*
+     * Scaled against the largest event rather than the total, so the
+     * smaller shoots stay visible next to a dominant one.
+     */
+    private func largestEventBytes(
+        in storage: StorageUsageRecord
+    ) -> Int64 {
+        storage.events.reduce(0) { largest, eventStorage in
+            max(largest, eventStorage.totalBytes)
+        }
+    }
+
+    private func load() async {
+        guard configuration.isConfigured else {
+            errorMessage = """
+            Open Connection Settings to measure stored photos.
+            """
+
+            return
+        }
+
+        guard !isLoading else {
+            return
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let client = try configuration.makeClient()
+
+            storage = try await client.fetchStorageUsage()
+            errorMessage = nil
+        } catch {
+            /*
+             * A previous measurement is better than an empty panel, so a
+             * failed refresh leaves whatever was already shown in place.
+             */
+            if storage == nil {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    static func formattedBytes(
+        _ byteCount: Int64
+    ) -> String {
+        ByteCountFormatter.string(
+            fromByteCount: byteCount,
+            countStyle: .file
+        )
+    }
+
+    static func formattedCount(
+        _ value: Int,
+        noun: String
+    ) -> String {
+        "\(value) \(noun)\(value == 1 ? "" : "s")"
+    }
+}
+
+private struct StorageMetric: View {
+    let title: String
+    let value: String
+    let detail: String
+    let systemImage: String
+
+    var body: some View {
+        VStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.subheadline)
+                .foregroundStyle(.tint)
+
+            Text(value)
+                .font(.subheadline.bold())
+                .contentTransition(.numericText())
+
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(
+            children: .combine
+        )
+    }
+}
+
+private struct StorageEventRow: View {
+    let eventStorage: EventStorageRecord
+    let largestEventBytes: Int64
+
+    private var share: Double {
+        guard largestEventBytes > 0 else {
+            return 0
+        }
+
+        return Double(eventStorage.totalBytes)
+        / Double(largestEventBytes)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(eventStorage.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+
+                Spacer(minLength: 12)
+
+                Text(
+                    StorageUsagePanel.formattedBytes(
+                        eventStorage.totalBytes
+                    )
+                )
+                .font(
+                    .subheadline
+                        .monospacedDigit()
+                )
+            }
+
+            ProgressView(value: share)
+                .progressViewStyle(.linear)
+
+            Text(detailSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var detailSummary: String {
+        var parts = [
+            eventStorage.status.capitalized,
+            StorageUsagePanel.formattedCount(
+                eventStorage.photoCount,
+                noun: "proof"
+            )
+        ]
+
+        if eventStorage.finalCount > 0 {
+            parts.append(
+                StorageUsagePanel.formattedCount(
+                    eventStorage.finalCount,
+                    noun: "final"
+                )
+            )
+        }
+
+        return parts.joined(separator: " · ")
     }
 }
 
