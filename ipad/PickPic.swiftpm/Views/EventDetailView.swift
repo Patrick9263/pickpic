@@ -1349,12 +1349,31 @@ private struct EventDetailDashboard: View {
     let incompleteUploadCount: Int
     let isLoading: Bool
 
-    private let columns = [
-        GridItem(
-            .adaptive(minimum: 112),
-            spacing: 12
+    @Environment(\.horizontalSizeClass)
+    private var horizontalSizeClass
+
+    /*
+     * The column count is chosen from the size class rather than
+     * with `.adaptive`, because an adaptive grid inside a `List`
+     * row reflows its column count as the pane width changes,
+     * which changes the row height, which makes the list
+     * re-measure the row. Dragging a Split View divider feeds that
+     * cycle continuously and UIKit eventually kills the app with a
+     * recursive layout loop. A size class only flips at discrete
+     * breakpoints, so the row height cannot chase its own width.
+     */
+    private var columns: [GridItem] {
+        let columnCount =
+            horizontalSizeClass == .compact ? 2 : 4
+
+        return Array(
+            repeating: GridItem(
+                .flexible(),
+                spacing: 12
+            ),
+            count: columnCount
         )
-    ]
+    }
 
     var body: some View {
         LazyVGrid(
