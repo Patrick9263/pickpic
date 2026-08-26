@@ -150,7 +150,7 @@ Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex match
 
 ### Data model
 
-- **Events** carry a share token and status: `draft → uploading → ready → editing → completed → archived`.
+- **Events** carry a share token and status: `draft → ready → completed → archived`.
 - **Photos** belong to an event, carry `workflowStatus` (`idle → editing → final`), and dedupe by SHA-256 as above.
 - **Variants**: thumbnail/preview JPEGs are generated client-side ([src/imageVariants.ts](src/imageVariants.ts), canvas-based) for both the `original` and `final` source of each photo, uploaded separately (`uploadPhotoVariants`), and stored in R2 beside the full-resolution image. The `original|final` × `thumbnail|preview` matrix in [src/types.ts](src/types.ts) is essential context before touching upload or image-serving code.
 - **Hearts and comments** are scoped to a cookie/token visitor identity (no accounts) and only mutable through routes guarded by `requireOpenGallery`.

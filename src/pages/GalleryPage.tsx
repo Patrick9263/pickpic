@@ -1,8 +1,8 @@
 import { downloadZip } from "client-zip";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type {
-  EventStatus,
   GalleryPhotoRecord,
+  GalleryStatus,
   ViewerPhotoCommentRecord,
 } from "../types";
 import { fetchJson } from "../api";
@@ -15,7 +15,7 @@ import type {
 } from "../components/gallery/types";
 interface GalleryEvent {
   title: string;
-  status: EventStatus;
+  status: GalleryStatus;
   createdAt: string;
 }
 

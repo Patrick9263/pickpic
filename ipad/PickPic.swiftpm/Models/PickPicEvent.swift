@@ -3,51 +3,37 @@ import Foundation
 struct PickPicEvent: Identifiable, Hashable, Codable {
     enum Status: String, Codable, CaseIterable {
         case draft
-        case uploading
         case ready
-        case editing
         case completed
         case archived
-        
+
         var title: String {
             switch self {
             case .draft:
                 return "Draft"
-                
-            case .uploading:
-                return "Uploading"
-                
+
             case .ready:
                 return "Open"
-                
-            case .editing:
-                return "Editing"
-                
+
             case .completed:
                 return "Closed"
-                
+
             case .archived:
                 return "Archived"
             }
         }
-        
+
         var systemImage: String {
             switch self {
             case .draft:
                 return "pencil"
-                
-            case .uploading:
-                return "arrow.up.circle"
-                
+
             case .ready:
                 return "checkmark.circle"
-                
-            case .editing:
-                return "slider.horizontal.3"
-                
+
             case .completed:
                 return "checkmark.seal"
-                
+
             case .archived:
                 return "archivebox"
             }

@@ -474,14 +474,10 @@ private enum EventDashboardFilter:
         case .active:
             return unfinishedJobCount > 0
             || event.status == .draft
-            || event.status == .uploading
             || event.status == .ready
-            || event.status == .editing
 
         case .draft:
             return event.status == .draft
-            || event.status == .uploading
-            || event.status == .editing
 
         case .open:
             return event.status == .ready

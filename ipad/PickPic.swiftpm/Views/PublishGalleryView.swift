@@ -62,9 +62,7 @@ struct PublishGalleryView: View {
         }
 
         switch event.status {
-        case .draft,
-                .uploading,
-                .editing:
+        case .draft:
             return true
 
         case .ready,
@@ -192,9 +190,7 @@ struct PublishGalleryView: View {
     @ViewBuilder
     private var statusDescription: some View {
         switch event.status {
-        case .draft,
-                .uploading,
-                .editing:
+        case .draft:
             Text(
                 """
                 The gallery is private and cannot yet be \

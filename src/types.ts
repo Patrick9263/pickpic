@@ -1,6 +1,3 @@
-export type EventStatus =
-  "draft" | "uploading" | "ready" | "editing" | "completed" | "archived";
-
 export type GalleryStatus = "draft" | "ready" | "completed" | "archived";
 
 export type PhotoWorkflowStatus = "idle" | "editing" | "final";
@@ -9,7 +6,7 @@ export interface EventRecord {
   id: string;
   title: string;
   shareToken: string;
-  status: EventStatus;
+  status: GalleryStatus;
   createdAt: string;
   updatedAt: string;
 }
