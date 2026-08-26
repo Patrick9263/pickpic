@@ -5,8 +5,9 @@ struct ToEditSyncResult:
     Sendable
 {
     let likedPhotoCount: Int
-    let copiedPhotoCount: Int
+    let movedPhotoCount: Int
     let alreadyPresentCount: Int
+    let reclaimedPhotoCount: Int
     
     let syncedFilenames: Set<String>
     let missingFilenames: [String]
@@ -18,7 +19,8 @@ enum ToEditSyncError: LocalizedError {
     case sourceFolderUnavailable
     case invalidSourceFilename(String)
     case destinationIsDirectory(String)
-    
+    case verificationFailed(String)
+
     var errorDescription: String? {
         switch self {
         case .sourceFolderUnavailable:
@@ -26,17 +28,24 @@ enum ToEditSyncError: LocalizedError {
             PickPic could not access the saved event folder. \
             Select the folder again.
             """
-            
+
         case let .invalidSourceFilename(filename):
             return """
             The server returned an unsafe source filename: \
             \(filename).
             """
-            
+
         case let .destinationIsDirectory(filename):
             return """
             An item named \(filename) already exists in \
             To Edit, but it is not a file.
+            """
+
+        case let .verificationFailed(filename):
+            return """
+            PickPic copied \(filename) into To Edit, but the copy \
+            did not match the original byte-for-byte. The original \
+            was left in place; try syncing again.
             """
         }
     }
@@ -161,9 +170,114 @@ enum ToEditSyncService {
         return stagedURL
     }
 
+    /*
+     * Reclaims RAWs held in both the event folder and To Edit, left by
+     * the earlier behaviour of copying rather than moving.
+     *
+     * Driven by what is on disk rather than by which photos are liked,
+     * because a heart is cleared the moment the final upload lands. A
+     * photo that was liked, edited and delivered therefore has no
+     * hearts left to find it by, and a liked-photo pass would leave it
+     * duplicated forever — which is exactly what happened when this
+     * was first written as a branch inside the liked-photo loop.
+     *
+     * Deleting is safe only because the pair is proven identical
+     * first: an event-folder RAW byte-for-byte equal to the To Edit
+     * copy of the same name is redundant by definition. Anything that
+     * differs is left alone, since the To Edit copy is the one that
+     * gets edited. Failures are skipped rather than thrown — this is
+     * maintenance, and one unreadable file must not abort the sync.
+     */
+    private static func reclaimDuplicates(
+        eventFolderURL: URL,
+        toEditURL: URL
+    ) -> Int {
+        let fileManager = FileManager.default
+
+        guard
+            let editableURLs =
+                try? fileManager.contentsOfDirectory(
+                    at: toEditURL,
+                    includingPropertiesForKeys: [
+                        .isRegularFileKey
+                    ],
+                    options: [.skipsHiddenFiles]
+                )
+        else {
+            return 0
+        }
+
+        var reclaimedCount = 0
+
+        for editableURL in editableURLs {
+            guard
+                (
+                    try? editableURL.resourceValues(
+                        forKeys: [.isRegularFileKey]
+                    )
+                )?.isRegularFile == true
+            else {
+                continue
+            }
+
+            let sourceURL =
+            eventFolderURL.appendingPathComponent(
+                editableURL.lastPathComponent,
+                isDirectory: false
+            )
+
+            var sourceIsDirectory: ObjCBool = false
+
+            guard
+                fileManager.fileExists(
+                    atPath: sourceURL.path,
+                    isDirectory: &sourceIsDirectory
+                ),
+                !sourceIsDirectory.boolValue
+            else {
+                continue
+            }
+
+            guard
+                let sourceHash =
+                    try? HashingService.sha256Hex(
+                        for: sourceURL
+                    ),
+                let editableHash =
+                    try? HashingService.sha256Hex(
+                        for: editableURL
+                    ),
+                sourceHash == editableHash
+            else {
+                continue
+            }
+
+            if
+                (
+                    try? fileManager.removeItem(
+                        at: sourceURL
+                    )
+                ) != nil
+            {
+                reclaimedCount += 1
+            }
+        }
+
+        return reclaimedCount
+    }
+
+    /*
+     * `reclaimsExistingDuplicates` is opt-in because reclaiming hashes
+     * both copies of every duplicated RAW in an old folder. That is a
+     * one-time cost per file — once the source is gone the pair is
+     * never seen again — but it is not something to spend unasked on
+     * the activation sweep, which runs across every event folder the
+     * device remembers.
+     */
     static func sync(
         reference: EventFolderReference,
-        photos: [ServerPhotoRecord]
+        photos: [ServerPhotoRecord],
+        reclaimsExistingDuplicates: Bool = false
     ) throws -> ToEditSyncResult {
         let resolved = try FolderBookmarkService.resolve(
             reference.bookmarkData
@@ -222,7 +336,20 @@ enum ToEditSyncService {
                 == .orderedAscending
             }
         
-        var copiedPhotoCount = 0
+        /*
+         * Runs before the liked-photo pass so that by the time a photo
+         * is considered, a surviving event-folder RAW means it really
+         * has not been moved yet rather than that it was copied.
+         */
+        let reclaimedPhotoCount =
+        reclaimsExistingDuplicates
+        ? reclaimDuplicates(
+            eventFolderURL: eventFolderURL,
+            toEditURL: toEditURL
+        )
+        : 0
+
+        var movedPhotoCount = 0
         var alreadyPresentCount = 0
         var syncedFilenames: Set<String> = []
         var missingFilenames: [String] = []
@@ -249,34 +376,39 @@ enum ToEditSyncService {
                 filename,
                 isDirectory: false
             )
-            
-            var sourceIsDirectory: ObjCBool = false
-            
-            guard
-                FileManager.default.fileExists(
-                    atPath: sourceURL.path,
-                    isDirectory: &sourceIsDirectory
-                ),
-                !sourceIsDirectory.boolValue
-            else {
-                missingFilenames.append(filename)
-                continue
-            }
-            
+
             let destinationURL =
             toEditURL.appendingPathComponent(
                 filename,
                 isDirectory: false
             )
-            
+
+            var sourceIsDirectory: ObjCBool = false
+
+            let sourceExists =
+            FileManager.default.fileExists(
+                atPath: sourceURL.path,
+                isDirectory: &sourceIsDirectory
+            )
+            && !sourceIsDirectory.boolValue
+
             var destinationIsDirectory:
             ObjCBool = false
-            
-            if FileManager.default.fileExists(
+
+            let destinationExists =
+            FileManager.default.fileExists(
                 atPath: destinationURL.path,
                 isDirectory:
                     &destinationIsDirectory
-            ) {
+            )
+
+            /*
+             * The destination is checked before the source, because
+             * once a photo has been moved the source is *supposed* to
+             * be gone. Testing the source first would report every
+             * already-moved photo as a missing original forever.
+             */
+            if destinationExists {
                 guard
                     !destinationIsDirectory.boolValue
                 else {
@@ -285,25 +417,60 @@ enum ToEditSyncService {
                             filename
                         )
                 }
-                
+
                 alreadyPresentCount += 1
                 syncedFilenames.insert(filename)
                 continue
             }
-            
+
+            guard sourceExists else {
+                missingFilenames.append(filename)
+                continue
+            }
+
+            let sourceHash =
+            try HashingService.sha256Hex(
+                for: sourceURL
+            )
+
             try FileManager.default.copyItem(
                 at: sourceURL,
                 to: destinationURL
             )
-            
-            copiedPhotoCount += 1
+
+            let destinationHash =
+            try HashingService.sha256Hex(
+                for: destinationURL
+            )
+
+            guard sourceHash == destinationHash else {
+                try? FileManager.default.removeItem(
+                    at: destinationURL
+                )
+
+                throw ToEditSyncError
+                    .verificationFailed(filename)
+            }
+
+            /*
+             * Best-effort: the verified copy in To Edit is what makes
+             * the sync correct. A source that can't be removed (a
+             * read-only file provider, say) just means this file's
+             * storage isn't reclaimed yet, not that the sync failed.
+             */
+            try? FileManager.default.removeItem(
+                at: sourceURL
+            )
+
+            movedPhotoCount += 1
             syncedFilenames.insert(filename)
         }
-        
+
         return ToEditSyncResult(
             likedPhotoCount: likedPhotos.count,
-            copiedPhotoCount: copiedPhotoCount,
+            movedPhotoCount: movedPhotoCount,
             alreadyPresentCount: alreadyPresentCount,
+            reclaimedPhotoCount: reclaimedPhotoCount,
             syncedFilenames: syncedFilenames,
             missingFilenames: missingFilenames,
             syncedAt: Date()
@@ -325,7 +492,8 @@ enum RequestedPhotoSyncService {
     static func sync(
         eventID: String,
         reference: EventFolderReference,
-        using client: APIClient
+        using client: APIClient,
+        reclaimsExistingDuplicates: Bool = false
     ) async throws -> RequestedPhotoSyncResult? {
         guard activeEventIDs.insert(eventID).inserted else {
             return nil
@@ -346,7 +514,9 @@ enum RequestedPhotoSyncService {
         ) {
             try ToEditSyncService.sync(
                 reference: reference,
-                photos: currentPhotos
+                photos: currentPhotos,
+                reclaimsExistingDuplicates:
+                    reclaimsExistingDuplicates
             )
         }
         .value

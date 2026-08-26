@@ -107,11 +107,15 @@ struct LikedPhotosView: View {
                 }
             }
         }
+        /*
+         * Offered whenever a folder is available rather than only when
+         * something is liked. An event whose requests have all been
+         * edited and delivered has no hearts left to show, and those
+         * are exactly the folders most likely to be still holding
+         * reclaimable duplicates.
+         */
         .safeAreaInset(edge: .bottom) {
-            if
-                let folderReference,
-                !viewModel.likedPhotos.isEmpty
-            {
+            if let folderReference {
                 Button {
                     Task {
                         await syncRequestedPhotos(
@@ -306,8 +310,11 @@ struct LikedPhotosView: View {
 
             Text(
                 """
-                Requested RAW files are copied into To Edit. \
-                Originals are never moved or deleted.
+                Requested RAW files are moved into To Edit to save \
+                space. Each file is verified against the original \
+                before it's removed from the event folder. Sync Now \
+                also reclaims photos an earlier version left in both \
+                places.
                 """
             )
             .font(.caption)
@@ -403,14 +410,22 @@ struct LikedPhotosView: View {
             )
             
             LabeledContent(
-                "Copied",
-                value: "\(result.copiedPhotoCount)"
+                "Moved",
+                value: "\(result.movedPhotoCount)"
             )
             
             LabeledContent(
                 "Already in To Edit",
                 value: "\(result.alreadyPresentCount)"
             )
+
+            if result.reclaimedPhotoCount > 0 {
+                LabeledContent(
+                    "Duplicates Reclaimed",
+                    value:
+                        "\(result.reclaimedPhotoCount)"
+                )
+            }
             
             LabeledContent(
                 "Newly Marked Editing",
@@ -489,29 +504,54 @@ struct LikedPhotosView: View {
         let previousSyncDate =
         viewModel.syncResult?.syncedAt
 
+        /*
+         * Only this path reclaims. The refresh gestures and the
+         * on-appear task also sync, but they run without being asked
+         * for, so they move newly liked photos without touching
+         * folders that predate the move behaviour.
+         */
         await viewModel.sync(
             eventID: event.id,
             reference: reference,
-            using: configuration
+            using: configuration,
+            reclaimsExistingDuplicates: true
         )
 
         guard
             let result = viewModel.syncResult,
             result.syncedAt != previousSyncDate,
-            result.copiedPhotoCount > 0
+            result.movedPhotoCount > 0
+            || result.reclaimedPhotoCount > 0
         else {
             return
         }
 
-        let fileDescription =
-        result.copiedPhotoCount == 1
-        ? "RAW file"
-        : "RAW files"
+        func fileDescription(
+            _ count: Int
+        ) -> String {
+            count == 1
+            ? "RAW file"
+            : "RAW files"
+        }
+
+        var summaries: [String] = []
+
+        if result.movedPhotoCount > 0 {
+            summaries.append(
+                "moved \(result.movedPhotoCount) \(fileDescription(result.movedPhotoCount)) into To Edit"
+            )
+        }
+
+        if result.reclaimedPhotoCount > 0 {
+            summaries.append(
+                "reclaimed \(result.reclaimedPhotoCount) duplicate \(fileDescription(result.reclaimedPhotoCount))"
+            )
+        }
 
         feedback.show(
             title: "Liked photos synced",
             detail:
-                "\(event.title): copied \(result.copiedPhotoCount) \(fileDescription) into To Edit.",
+                "\(event.title): \(summaries.joined(separator: ", ")).",
             systemImage: "heart.circle.fill"
         )
     }
