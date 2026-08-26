@@ -108,7 +108,8 @@ final class LikedPhotosViewModel:
         eventID: String,
         reference: EventFolderReference,
         using configuration:
-        APIConfigurationStore
+        APIConfigurationStore,
+        reclaimsExistingDuplicates: Bool = false
     ) async {
         guard !isLoading, !isSyncing else {
             return
@@ -140,7 +141,9 @@ final class LikedPhotosViewModel:
                     .sync(
                         eventID: eventID,
                         reference: reference,
-                        using: client
+                        using: client,
+                        reclaimsExistingDuplicates:
+                            reclaimsExistingDuplicates
                     )
             else {
                 photos = try await client

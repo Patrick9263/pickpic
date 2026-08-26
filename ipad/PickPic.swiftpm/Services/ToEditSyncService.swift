@@ -7,6 +7,7 @@ struct ToEditSyncResult:
     let likedPhotoCount: Int
     let movedPhotoCount: Int
     let alreadyPresentCount: Int
+    let reclaimedPhotoCount: Int
     
     let syncedFilenames: Set<String>
     let missingFilenames: [String]
@@ -169,9 +170,18 @@ enum ToEditSyncService {
         return stagedURL
     }
 
+    /*
+     * `reclaimsExistingDuplicates` is opt-in because reclaiming walks
+     * folders that predate the move behaviour and hashes both copies of
+     * every liked RAW in them. That is a one-time cost per file — once
+     * the source is gone the branch is never taken again — but it is
+     * not something to spend unasked on the activation sweep, which
+     * runs across every event folder the device remembers.
+     */
     static func sync(
         reference: EventFolderReference,
-        photos: [ServerPhotoRecord]
+        photos: [ServerPhotoRecord],
+        reclaimsExistingDuplicates: Bool = false
     ) throws -> ToEditSyncResult {
         let resolved = try FolderBookmarkService.resolve(
             reference.bookmarkData
@@ -232,6 +242,7 @@ enum ToEditSyncService {
         
         var movedPhotoCount = 0
         var alreadyPresentCount = 0
+        var reclaimedPhotoCount = 0
         var syncedFilenames: Set<String> = []
         var missingFilenames: [String] = []
         
@@ -257,34 +268,39 @@ enum ToEditSyncService {
                 filename,
                 isDirectory: false
             )
-            
-            var sourceIsDirectory: ObjCBool = false
-            
-            guard
-                FileManager.default.fileExists(
-                    atPath: sourceURL.path,
-                    isDirectory: &sourceIsDirectory
-                ),
-                !sourceIsDirectory.boolValue
-            else {
-                missingFilenames.append(filename)
-                continue
-            }
-            
+
             let destinationURL =
             toEditURL.appendingPathComponent(
                 filename,
                 isDirectory: false
             )
-            
+
+            var sourceIsDirectory: ObjCBool = false
+
+            let sourceExists =
+            FileManager.default.fileExists(
+                atPath: sourceURL.path,
+                isDirectory: &sourceIsDirectory
+            )
+            && !sourceIsDirectory.boolValue
+
             var destinationIsDirectory:
             ObjCBool = false
-            
-            if FileManager.default.fileExists(
+
+            let destinationExists =
+            FileManager.default.fileExists(
                 atPath: destinationURL.path,
                 isDirectory:
                     &destinationIsDirectory
-            ) {
+            )
+
+            /*
+             * The destination is checked before the source, because
+             * once a photo has been moved the source is *supposed* to
+             * be gone. Testing the source first would report every
+             * already-moved photo as a missing original forever.
+             */
+            if destinationExists {
                 guard
                     !destinationIsDirectory.boolValue
                 else {
@@ -293,12 +309,57 @@ enum ToEditSyncService {
                             filename
                         )
                 }
-                
+
+                /*
+                 * A source still sitting beside a copy in To Edit is a
+                 * folder from before photos were moved rather than
+                 * copied, so it is paying for that RAW twice. Reclaim
+                 * it only on a sync the photographer asked for, and
+                 * only once the two files are proven identical.
+                 *
+                 * A mismatch leaves both alone. The To Edit copy is
+                 * the one that gets edited, so a source disagreeing
+                 * with it is not something to settle by deleting
+                 * either side.
+                 */
+                if
+                    sourceExists,
+                    reclaimsExistingDuplicates
+                {
+                    let existingSourceHash =
+                    try HashingService.sha256Hex(
+                        for: sourceURL
+                    )
+
+                    let existingDestinationHash =
+                    try HashingService.sha256Hex(
+                        for: destinationURL
+                    )
+
+                    if
+                        existingSourceHash
+                            == existingDestinationHash,
+                        (
+                            try? FileManager.default
+                                .removeItem(
+                                    at: sourceURL
+                                )
+                        ) != nil
+                    {
+                        reclaimedPhotoCount += 1
+                    }
+                }
+
                 alreadyPresentCount += 1
                 syncedFilenames.insert(filename)
                 continue
             }
-            
+
+            guard sourceExists else {
+                missingFilenames.append(filename)
+                continue
+            }
+
             let sourceHash =
             try HashingService.sha256Hex(
                 for: sourceURL
@@ -341,6 +402,7 @@ enum ToEditSyncService {
             likedPhotoCount: likedPhotos.count,
             movedPhotoCount: movedPhotoCount,
             alreadyPresentCount: alreadyPresentCount,
+            reclaimedPhotoCount: reclaimedPhotoCount,
             syncedFilenames: syncedFilenames,
             missingFilenames: missingFilenames,
             syncedAt: Date()
@@ -362,7 +424,8 @@ enum RequestedPhotoSyncService {
     static func sync(
         eventID: String,
         reference: EventFolderReference,
-        using client: APIClient
+        using client: APIClient,
+        reclaimsExistingDuplicates: Bool = false
     ) async throws -> RequestedPhotoSyncResult? {
         guard activeEventIDs.insert(eventID).inserted else {
             return nil
@@ -383,7 +446,9 @@ enum RequestedPhotoSyncService {
         ) {
             try ToEditSyncService.sync(
                 reference: reference,
-                photos: currentPhotos
+                photos: currentPhotos,
+                reclaimsExistingDuplicates:
+                    reclaimsExistingDuplicates
             )
         }
         .value

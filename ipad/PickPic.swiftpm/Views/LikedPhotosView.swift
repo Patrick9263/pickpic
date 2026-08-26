@@ -308,7 +308,9 @@ struct LikedPhotosView: View {
                 """
                 Requested RAW files are moved into To Edit to save \
                 space. Each file is verified against the original \
-                before it's removed from the event folder.
+                before it's removed from the event folder. Sync Now \
+                also reclaims photos an earlier version left in both \
+                places.
                 """
             )
             .font(.caption)
@@ -412,6 +414,14 @@ struct LikedPhotosView: View {
                 "Already in To Edit",
                 value: "\(result.alreadyPresentCount)"
             )
+
+            if result.reclaimedPhotoCount > 0 {
+                LabeledContent(
+                    "Duplicates Reclaimed",
+                    value:
+                        "\(result.reclaimedPhotoCount)"
+                )
+            }
             
             LabeledContent(
                 "Newly Marked Editing",
@@ -490,29 +500,54 @@ struct LikedPhotosView: View {
         let previousSyncDate =
         viewModel.syncResult?.syncedAt
 
+        /*
+         * Only this path reclaims. The refresh gestures and the
+         * on-appear task also sync, but they run without being asked
+         * for, so they move newly liked photos without touching
+         * folders that predate the move behaviour.
+         */
         await viewModel.sync(
             eventID: event.id,
             reference: reference,
-            using: configuration
+            using: configuration,
+            reclaimsExistingDuplicates: true
         )
 
         guard
             let result = viewModel.syncResult,
             result.syncedAt != previousSyncDate,
             result.movedPhotoCount > 0
+            || result.reclaimedPhotoCount > 0
         else {
             return
         }
 
-        let fileDescription =
-        result.movedPhotoCount == 1
-        ? "RAW file"
-        : "RAW files"
+        func fileDescription(
+            _ count: Int
+        ) -> String {
+            count == 1
+            ? "RAW file"
+            : "RAW files"
+        }
+
+        var summaries: [String] = []
+
+        if result.movedPhotoCount > 0 {
+            summaries.append(
+                "moved \(result.movedPhotoCount) \(fileDescription(result.movedPhotoCount)) into To Edit"
+            )
+        }
+
+        if result.reclaimedPhotoCount > 0 {
+            summaries.append(
+                "reclaimed \(result.reclaimedPhotoCount) duplicate \(fileDescription(result.reclaimedPhotoCount))"
+            )
+        }
 
         feedback.show(
             title: "Liked photos synced",
             detail:
-                "\(event.title): moved \(result.movedPhotoCount) \(fileDescription) into To Edit.",
+                "\(event.title): \(summaries.joined(separator: ", ")).",
             systemImage: "heart.circle.fill"
         )
     }
