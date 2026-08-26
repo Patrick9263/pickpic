@@ -24,9 +24,21 @@ struct EventListView: View {
 
     @State private var showingCreateEvent = false
     @State private var searchText = ""
-    @State private var selectedFilter:
+
+    /*
+     * Filter and sort persist across launches because they are the only
+     * way to organise the sidebar; a search term does not, since it is a
+     * momentary lookup rather than a chosen arrangement. An unrecognised
+     * stored value — a case renamed in a later build — falls back to the
+     * default rather than leaving the sidebar in a state with no picker
+     * entry selected.
+     */
+    @AppStorage("eventSidebar.filter")
+    private var selectedFilter:
     EventDashboardFilter = .all
-    @State private var selectedSort:
+
+    @AppStorage("eventSidebar.sort")
+    private var selectedSort:
     EventDashboardSort = .updated
 
     private var visibleEvents: [PickPicEvent] {
@@ -269,12 +281,20 @@ struct EventListView: View {
                         }
                     }
                 } label: {
+                    /*
+                     * A persisted filter can be days old by the time the
+                     * app is next opened, so the control fills in when
+                     * one is hiding events. Without that the sidebar just
+                     * looks short.
+                     */
                     Label(
                         selectedFilter == .all
                         ? "Filter and Sort"
                         : selectedFilter.title,
                         systemImage:
-                            "line.3.horizontal.decrease.circle"
+                            selectedFilter == .all
+                        ? "line.3.horizontal.decrease.circle"
+                        : "line.3.horizontal.decrease.circle.fill"
                     )
                 }
             }
