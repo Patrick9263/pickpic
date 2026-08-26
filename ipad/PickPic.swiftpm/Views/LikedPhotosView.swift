@@ -107,11 +107,15 @@ struct LikedPhotosView: View {
                 }
             }
         }
+        /*
+         * Offered whenever a folder is available rather than only when
+         * something is liked. An event whose requests have all been
+         * edited and delivered has no hearts left to show, and those
+         * are exactly the folders most likely to be still holding
+         * reclaimable duplicates.
+         */
         .safeAreaInset(edge: .bottom) {
-            if
-                let folderReference,
-                !viewModel.likedPhotos.isEmpty
-            {
+            if let folderReference {
                 Button {
                     Task {
                         await syncRequestedPhotos(

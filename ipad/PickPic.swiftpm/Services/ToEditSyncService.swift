@@ -171,12 +171,108 @@ enum ToEditSyncService {
     }
 
     /*
-     * `reclaimsExistingDuplicates` is opt-in because reclaiming walks
-     * folders that predate the move behaviour and hashes both copies of
-     * every liked RAW in them. That is a one-time cost per file — once
-     * the source is gone the branch is never taken again — but it is
-     * not something to spend unasked on the activation sweep, which
-     * runs across every event folder the device remembers.
+     * Reclaims RAWs held in both the event folder and To Edit, left by
+     * the earlier behaviour of copying rather than moving.
+     *
+     * Driven by what is on disk rather than by which photos are liked,
+     * because a heart is cleared the moment the final upload lands. A
+     * photo that was liked, edited and delivered therefore has no
+     * hearts left to find it by, and a liked-photo pass would leave it
+     * duplicated forever — which is exactly what happened when this
+     * was first written as a branch inside the liked-photo loop.
+     *
+     * Deleting is safe only because the pair is proven identical
+     * first: an event-folder RAW byte-for-byte equal to the To Edit
+     * copy of the same name is redundant by definition. Anything that
+     * differs is left alone, since the To Edit copy is the one that
+     * gets edited. Failures are skipped rather than thrown — this is
+     * maintenance, and one unreadable file must not abort the sync.
+     */
+    private static func reclaimDuplicates(
+        eventFolderURL: URL,
+        toEditURL: URL
+    ) -> Int {
+        let fileManager = FileManager.default
+
+        guard
+            let editableURLs =
+                try? fileManager.contentsOfDirectory(
+                    at: toEditURL,
+                    includingPropertiesForKeys: [
+                        .isRegularFileKey
+                    ],
+                    options: [.skipsHiddenFiles]
+                )
+        else {
+            return 0
+        }
+
+        var reclaimedCount = 0
+
+        for editableURL in editableURLs {
+            guard
+                (
+                    try? editableURL.resourceValues(
+                        forKeys: [.isRegularFileKey]
+                    )
+                )?.isRegularFile == true
+            else {
+                continue
+            }
+
+            let sourceURL =
+            eventFolderURL.appendingPathComponent(
+                editableURL.lastPathComponent,
+                isDirectory: false
+            )
+
+            var sourceIsDirectory: ObjCBool = false
+
+            guard
+                fileManager.fileExists(
+                    atPath: sourceURL.path,
+                    isDirectory: &sourceIsDirectory
+                ),
+                !sourceIsDirectory.boolValue
+            else {
+                continue
+            }
+
+            guard
+                let sourceHash =
+                    try? HashingService.sha256Hex(
+                        for: sourceURL
+                    ),
+                let editableHash =
+                    try? HashingService.sha256Hex(
+                        for: editableURL
+                    ),
+                sourceHash == editableHash
+            else {
+                continue
+            }
+
+            if
+                (
+                    try? fileManager.removeItem(
+                        at: sourceURL
+                    )
+                ) != nil
+            {
+                reclaimedCount += 1
+            }
+        }
+
+        return reclaimedCount
+    }
+
+    /*
+     * `reclaimsExistingDuplicates` is opt-in because reclaiming hashes
+     * both copies of every duplicated RAW in an old folder. That is a
+     * one-time cost per file — once the source is gone the pair is
+     * never seen again — but it is not something to spend unasked on
+     * the activation sweep, which runs across every event folder the
+     * device remembers.
      */
     static func sync(
         reference: EventFolderReference,
@@ -240,9 +336,21 @@ enum ToEditSyncService {
                 == .orderedAscending
             }
         
+        /*
+         * Runs before the liked-photo pass so that by the time a photo
+         * is considered, a surviving event-folder RAW means it really
+         * has not been moved yet rather than that it was copied.
+         */
+        let reclaimedPhotoCount =
+        reclaimsExistingDuplicates
+        ? reclaimDuplicates(
+            eventFolderURL: eventFolderURL,
+            toEditURL: toEditURL
+        )
+        : 0
+
         var movedPhotoCount = 0
         var alreadyPresentCount = 0
-        var reclaimedPhotoCount = 0
         var syncedFilenames: Set<String> = []
         var missingFilenames: [String] = []
         
@@ -308,46 +416,6 @@ enum ToEditSyncService {
                         .destinationIsDirectory(
                             filename
                         )
-                }
-
-                /*
-                 * A source still sitting beside a copy in To Edit is a
-                 * folder from before photos were moved rather than
-                 * copied, so it is paying for that RAW twice. Reclaim
-                 * it only on a sync the photographer asked for, and
-                 * only once the two files are proven identical.
-                 *
-                 * A mismatch leaves both alone. The To Edit copy is
-                 * the one that gets edited, so a source disagreeing
-                 * with it is not something to settle by deleting
-                 * either side.
-                 */
-                if
-                    sourceExists,
-                    reclaimsExistingDuplicates
-                {
-                    let existingSourceHash =
-                    try HashingService.sha256Hex(
-                        for: sourceURL
-                    )
-
-                    let existingDestinationHash =
-                    try HashingService.sha256Hex(
-                        for: destinationURL
-                    )
-
-                    if
-                        existingSourceHash
-                            == existingDestinationHash,
-                        (
-                            try? FileManager.default
-                                .removeItem(
-                                    at: sourceURL
-                                )
-                        ) != nil
-                    {
-                        reclaimedPhotoCount += 1
-                    }
                 }
 
                 alreadyPresentCount += 1
