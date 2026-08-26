@@ -241,36 +241,22 @@ struct EventDetailView: View {
     private var displayedGalleryStatus:
     PickPicEvent.Status
     {
-        switch event.status {
-        case .ready,
-                .completed,
-                .archived:
-            return event.status
-            
-        case .draft,
-                .uploading,
-                .editing:
-            return .draft
-        }
+        event.status
     }
-    
+
     private var galleryStatusTitle: String {
         switch displayedGalleryStatus {
         case .draft:
             return "Draft"
-            
+
         case .ready:
             return "Open"
-            
+
         case .completed:
             return "Closed"
-            
+
         case .archived:
             return "Archived"
-            
-        case .uploading,
-                .editing:
-            return "Draft"
         }
     }
     
@@ -1190,20 +1176,14 @@ struct EventDetailView: View {
             
         case .archived:
             return "Archived"
-            
-        case .uploading,
-                .editing:
-            return "Draft"
         }
     }
-    
+
     private func gallerySystemImage(
         for status: PickPicEvent.Status
     ) -> String {
         switch status {
-        case .draft,
-                .uploading,
-                .editing:
+        case .draft:
             return "pencil"
             
         case .ready:
