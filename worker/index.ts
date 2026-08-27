@@ -1,5 +1,14 @@
 import { requireAdminAccess, type AccessEnvironment } from "./access.ts";
+import {
+  resolveAccountDatabase,
+  resolveAccountForPrincipal,
+} from "./accounts.ts";
 import { scheduleUploadStartedNotification } from "./telegram.ts";
+import {
+  createAccountScope,
+  type AccountScope,
+  type TenantEnv,
+} from "./tenancy.ts";
 
 interface CreateEventBody {
   title?: unknown;
@@ -437,12 +446,13 @@ function getSourceSha256(request: Request): string | null {
  * remains the authoritative check.
  */
 async function findDuplicatePhoto(
-  env: Env,
+  scope: AccountScope,
   eventId: string,
   sourceSha256: string,
 ): Promise<DuplicatePhotoRow | null> {
-  return env.DB.prepare(
-    `
+  return scope.database
+    .prepare(
+      `
       SELECT
         id,
         CASE
@@ -458,7 +468,7 @@ async function findDuplicatePhoto(
         )
       LIMIT 1
     `,
-  )
+    )
     .bind(sourceSha256, eventId, sourceSha256, sourceSha256)
     .first<DuplicatePhotoRow>();
 }
@@ -476,10 +486,10 @@ async function findDuplicatePhoto(
  */
 async function preflightPhotos(
   request: Request,
-  env: Env,
+  scope: AccountScope,
   eventId: string,
 ): Promise<Response> {
-  if (!(await eventExists(eventId, env))) {
+  if (!(await eventExists(scope, eventId))) {
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
@@ -532,8 +542,9 @@ async function preflightPhotos(
 
     const placeholders = chunk.map(() => "?").join(", ");
 
-    const result = await env.DB.prepare(
-      `
+    const result = await scope.database
+      .prepare(
+        `
         SELECT
           id,
           original_filename AS filename,
@@ -544,7 +555,7 @@ async function preflightPhotos(
           event_id = ?
           AND original_filename IN (${placeholders})
       `,
-    )
+      )
       .bind(eventId, ...chunk)
       .all<PreflightMatchRow>();
 
@@ -640,13 +651,14 @@ function toPhotoRecord(
 }
 
 async function openDraftEventForUpload(
-  env: Env,
+  scope: AccountScope,
   eventId: string,
 ): Promise<void> {
   const updatedAt = new Date().toISOString();
 
-  await env.DB.prepare(
-    `
+  await scope.database
+    .prepare(
+      `
       UPDATE events
       SET
         status = 'ready',
@@ -655,31 +667,38 @@ async function openDraftEventForUpload(
         id = ?
         AND status = 'draft'
     `,
-  )
+    )
     .bind(updatedAt, eventId)
     .run();
 }
 
-async function eventExists(eventId: string, env: Env): Promise<boolean> {
-  const event = await env.DB.prepare(
-    `
+async function eventExists(
+  scope: AccountScope,
+  eventId: string,
+): Promise<boolean> {
+  const event = await scope
+    .prepare(
+      `
       SELECT id
       FROM events
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(eventId)
+      eventId,
+    )
     .first<{ id: string }>();
 
   return event !== null;
 }
 
 async function findEventById(
+  scope: AccountScope,
   eventId: string,
-  env: Env,
 ): Promise<EventRecord | null> {
-  return env.DB.prepare(
-    `
+  return scope
+    .prepare(
+      `
       SELECT
         id,
         title,
@@ -688,10 +707,12 @@ async function findEventById(
         created_at AS createdAt,
         updated_at AS updatedAt
       FROM events
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(eventId)
+      eventId,
+    )
     .first<EventRecord>();
 }
 
@@ -706,7 +727,7 @@ function isGalleryStatus(value: unknown): value is GalleryStatus {
 
 async function setEventStatus(
   request: Request,
-  env: Env,
+  scope: AccountScope,
   eventId: string,
 ): Promise<Response> {
   let body: SetEventStatusBody;
@@ -731,8 +752,9 @@ async function setEventStatus(
     );
   }
 
-  const existingEvent = await env.DB.prepare(
-    `
+  const existingEvent = await scope
+    .prepare(
+      `
       SELECT
         id,
         title,
@@ -741,10 +763,12 @@ async function setEventStatus(
         created_at AS createdAt,
         updated_at AS updatedAt
       FROM events
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(eventId)
+      eventId,
+    )
     .first<EventStatusRow>();
 
   if (!existingEvent) {
@@ -753,15 +777,16 @@ async function setEventStatus(
 
   const updatedAt = new Date().toISOString();
 
-  await env.DB.prepare(
-    `
+  await scope.database
+    .prepare(
+      `
       UPDATE events
       SET
         status = ?,
         updated_at = ?
       WHERE id = ?
     `,
-  )
+    )
     .bind(body.status, updatedAt, eventId)
     .run();
 
@@ -805,7 +830,10 @@ async function requireOpenGallery(
   return null;
 }
 
-async function createEvent(request: Request, env: Env): Promise<Response> {
+async function createEvent(
+  request: Request,
+  scope: AccountScope,
+): Promise<Response> {
   let body: CreateEventBody;
 
   try {
@@ -842,7 +870,7 @@ async function createEvent(request: Request, env: Env): Promise<Response> {
 
     requestedId = body.id.toLowerCase();
 
-    const existing = await findEventById(requestedId, env);
+    const existing = await findEventById(scope, requestedId);
 
     if (existing) {
       return jsonResponse({ event: existing }, 200);
@@ -861,20 +889,20 @@ async function createEvent(request: Request, env: Env): Promise<Response> {
   };
 
   try {
-    await env.DB.prepare(
-      `
+    await scope
+      .prepare(
+        `
         INSERT INTO events (
           id,
           title,
           share_token,
           status,
           created_at,
-          updated_at
+          updated_at,
+          account_id
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, :accountId)
       `,
-    )
-      .bind(
         event.id,
         event.title,
         event.shareToken,
@@ -890,7 +918,7 @@ async function createEvent(request: Request, env: Env): Promise<Response> {
      * idempotent instead of surfacing a primary-key error.
      */
     if (requestedId) {
-      const existing = await findEventById(requestedId, env);
+      const existing = await findEventById(scope, requestedId);
 
       if (existing) {
         return jsonResponse({ event: existing }, 200);
@@ -905,7 +933,7 @@ async function createEvent(request: Request, env: Env): Promise<Response> {
 
 async function updateEvent(
   request: Request,
-  env: Env,
+  scope: AccountScope,
   eventId: string,
 ): Promise<Response> {
   let body: UpdateEventBody;
@@ -941,8 +969,9 @@ async function updateEvent(
     );
   }
 
-  const existingEvent = await env.DB.prepare(
-    `
+  const existingEvent = await scope
+    .prepare(
+      `
       SELECT
         id,
         title,
@@ -951,10 +980,12 @@ async function updateEvent(
         created_at AS createdAt,
         updated_at AS updatedAt
       FROM events
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(eventId)
+      eventId,
+    )
     .first<EventRecord>();
 
   if (!existingEvent) {
@@ -969,15 +1000,16 @@ async function updateEvent(
 
   const updatedAt = new Date().toISOString();
 
-  await env.DB.prepare(
-    `
+  await scope.database
+    .prepare(
+      `
       UPDATE events
       SET
         title = ?,
         updated_at = ?
       WHERE id = ?
     `,
-  )
+    )
     .bind(title, updatedAt, eventId)
     .run();
 
@@ -996,23 +1028,25 @@ async function updateEvent(
  * exactly the same set, so the query lives in one place.
  */
 async function collectEventStorageKeys(
-  env: Env,
+  scope: AccountScope,
   eventId: string,
 ): Promise<{ storageKeys: string[]; photoCount: number }> {
-  const photoResult = await env.DB.prepare(
-    `
+  const photoResult = await scope.database
+    .prepare(
+      `
       SELECT
         storage_key AS storageKey,
         final_storage_key AS finalStorageKey
       FROM photos
       WHERE event_id = ?
     `,
-  )
+    )
     .bind(eventId)
     .all<StoredPhotoRow>();
 
-  const variantResult = await env.DB.prepare(
-    `
+  const variantResult = await scope.database
+    .prepare(
+      `
         SELECT
           v.storage_key AS storageKey
         FROM photo_variants v
@@ -1020,7 +1054,7 @@ async function collectEventStorageKeys(
           ON p.id = v.photo_id
         WHERE p.event_id = ?
       `,
-  )
+    )
     .bind(eventId)
     .all<StoredVariantRow>();
 
@@ -1043,22 +1077,29 @@ async function collectEventStorageKeys(
   };
 }
 
-async function deleteEvent(env: Env, eventId: string): Promise<Response> {
-  const event = await env.DB.prepare(
-    `
+async function deleteEvent(
+  env: TenantEnv,
+  scope: AccountScope,
+  eventId: string,
+): Promise<Response> {
+  const event = await scope
+    .prepare(
+      `
       SELECT id
       FROM events
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(eventId)
+      eventId,
+    )
     .first<{ id: string }>();
 
   if (!event) {
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const { storageKeys } = await collectEventStorageKeys(env, eventId);
+  const { storageKeys } = await collectEventStorageKeys(scope, eventId);
 
   try {
     for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
@@ -1077,12 +1118,13 @@ async function deleteEvent(env: Env, eventId: string): Promise<Response> {
   }
 
   try {
-    await env.DB.prepare(
-      `
+    await scope.database
+      .prepare(
+        `
         DELETE FROM events
         WHERE id = ?
       `,
-    )
+      )
       .bind(eventId)
       .run();
   } catch (error) {
@@ -1112,15 +1154,22 @@ async function deleteEvent(env: Env, eventId: string): Promise<Response> {
  * hearts, comments, and variant rows follow the photos through their
  * ON DELETE CASCADE foreign keys, so one delete covers them.
  */
-async function clearEventPhotos(env: Env, eventId: string): Promise<Response> {
-  const event = await env.DB.prepare(
-    `
+async function clearEventPhotos(
+  env: TenantEnv,
+  scope: AccountScope,
+  eventId: string,
+): Promise<Response> {
+  const event = await scope
+    .prepare(
+      `
       SELECT id
       FROM events
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(eventId)
+      eventId,
+    )
     .first<{ id: string }>();
 
   if (!event) {
@@ -1128,7 +1177,7 @@ async function clearEventPhotos(env: Env, eventId: string): Promise<Response> {
   }
 
   const { storageKeys, photoCount } = await collectEventStorageKeys(
-    env,
+    scope,
     eventId,
   );
 
@@ -1155,12 +1204,13 @@ async function clearEventPhotos(env: Env, eventId: string): Promise<Response> {
   }
 
   try {
-    await env.DB.prepare(
-      `
+    await scope.database
+      .prepare(
+        `
         DELETE FROM photos
         WHERE event_id = ?
       `,
-    )
+      )
       .bind(eventId)
       .run();
   } catch (error) {
@@ -1181,9 +1231,10 @@ async function clearEventPhotos(env: Env, eventId: string): Promise<Response> {
   });
 }
 
-async function listEvents(env: Env): Promise<Response> {
-  const result = await env.DB.prepare(
-    `
+async function listEvents(scope: AccountScope): Promise<Response> {
+  const result = await scope
+    .prepare(
+      `
       SELECT
         id,
         title,
@@ -1192,9 +1243,11 @@ async function listEvents(env: Env): Promise<Response> {
         created_at AS createdAt,
         updated_at AS updatedAt
       FROM events
+      WHERE account_id = :accountId
       ORDER BY created_at DESC
     `,
-  ).all<EventRecord>();
+    )
+    .all<EventRecord>();
 
   return jsonResponse({
     events: result.results,
@@ -1208,9 +1261,10 @@ async function listEvents(env: Env): Promise<Response> {
  * The tradeoff is that it reports the database's belief: if a delete
  * ever half-failed, the bucket holds more than this reports.
  */
-async function getStorageUsage(env: Env): Promise<Response> {
-  const eventResult = await env.DB.prepare(
-    `
+async function getStorageUsage(scope: AccountScope): Promise<Response> {
+  const eventResult = await scope
+    .prepare(
+      `
       SELECT
         e.id AS eventId,
         e.title AS title,
@@ -1222,12 +1276,15 @@ async function getStorageUsage(env: Env): Promise<Response> {
       FROM events e
       LEFT JOIN photos p
         ON p.event_id = e.id
+      WHERE e.account_id = :accountId
       GROUP BY e.id
     `,
-  ).all<EventStorageRow>();
+    )
+    .all<EventStorageRow>();
 
-  const variantResult = await env.DB.prepare(
-    `
+  const variantResult = await scope
+    .prepare(
+      `
       SELECT
         p.event_id AS eventId,
         COUNT(v.storage_key) AS variantCount,
@@ -1235,9 +1292,11 @@ async function getStorageUsage(env: Env): Promise<Response> {
       FROM photo_variants v
       INNER JOIN photos p
         ON p.id = v.photo_id
+      WHERE p.account_id = :accountId
       GROUP BY p.event_id
     `,
-  ).all<EventVariantStorageRow>();
+    )
+    .all<EventVariantStorageRow>();
 
   const variantsByEvent = new Map(
     variantResult.results.map((variantRow) => [variantRow.eventId, variantRow]),
@@ -1298,11 +1357,12 @@ async function getStorageUsage(env: Env): Promise<Response> {
 
 async function createPhoto(
   request: Request,
-  env: Env,
+  env: TenantEnv,
+  scope: AccountScope,
   eventId: string,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  if (!(await eventExists(eventId, env))) {
+  if (!(await eventExists(scope, eventId))) {
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
@@ -1361,11 +1421,11 @@ async function createPhoto(
     return jsonResponse({ error: "The JPEG must be 25 MB or smaller." }, 413);
   }
 
-  const duplicatePhoto = await findDuplicatePhoto(env, eventId, sourceSha256);
+  const duplicatePhoto = await findDuplicatePhoto(scope, eventId, sourceSha256);
 
   if (duplicatePhoto) {
-    await openDraftEventForUpload(env, eventId);
-    scheduleUploadStartedNotification(env, ctx, eventId);
+    await openDraftEventForUpload(scope, eventId);
+    scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
 
     return jsonResponse({
       duplicate: true,
@@ -1416,8 +1476,9 @@ async function createPhoto(
   const createdAt = new Date().toISOString();
 
   try {
-    await env.DB.prepare(
-      `
+    await scope
+      .prepare(
+        `
         INSERT INTO photos (
           id,
           event_id,
@@ -1430,12 +1491,11 @@ async function createPhoto(
           captured_at,
           latitude,
           longitude,
-          created_at
+          created_at,
+          account_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, :accountId)
       `,
-    )
-      .bind(
         photoId,
         eventId,
         originalFilename,
@@ -1458,14 +1518,14 @@ async function createPhoto(
      * initial duplicate check.
      */
     const duplicateAfterInsert = await findDuplicatePhoto(
-      env,
+      scope,
       eventId,
       sourceSha256,
     );
 
     if (duplicateAfterInsert) {
-      await openDraftEventForUpload(env, eventId);
-      scheduleUploadStartedNotification(env, ctx, eventId);
+      await openDraftEventForUpload(scope, eventId);
+      scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
 
       return jsonResponse({
         duplicate: true,
@@ -1482,8 +1542,8 @@ async function createPhoto(
     );
   }
 
-  await openDraftEventForUpload(env, eventId);
-  scheduleUploadStartedNotification(env, ctx, eventId);
+  await openDraftEventForUpload(scope, eventId);
+  scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
 
   const photo: PhotoRecord = {
     id: photoId,
@@ -1512,13 +1572,17 @@ async function createPhoto(
   );
 }
 
-async function listPhotos(env: Env, eventId: string): Promise<Response> {
-  if (!(await eventExists(eventId, env))) {
+async function listPhotos(
+  scope: AccountScope,
+  eventId: string,
+): Promise<Response> {
+  if (!(await eventExists(scope, eventId))) {
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const result = await env.DB.prepare(
-    `
+  const result = await scope.database
+    .prepare(
+      `
       SELECT
         p.id,
         p.event_id AS eventId,
@@ -1558,12 +1622,15 @@ async function listPhotos(env: Env, eventId: string): Promise<Response> {
         COALESCE(p.captured_at, p.created_at) DESC,
         p.created_at DESC
   `,
-  )
+    )
     .bind(eventId)
     .all<PhotoRow>();
 
-  const commentsByPhoto = await getCommentsByPhoto(env, eventId);
-  const variantsByPhoto = await getPhotoVariantsByEvent(env, eventId);
+  const commentsByPhoto = await getCommentsByPhoto(scope.database, eventId);
+  const variantsByPhoto = await getPhotoVariantsByEvent(
+    scope.database,
+    eventId,
+  );
   return jsonResponse({
     photos: result.results.map((row) =>
       toPhotoRecord(
@@ -1593,31 +1660,39 @@ async function getPhotoImage(env: Env, photoId: string): Promise<Response> {
   return getStoredJpeg(env, photo.storageKey);
 }
 
-async function deletePhoto(env: Env, photoId: string): Promise<Response> {
-  const photo = await env.DB.prepare(
-    `
+async function deletePhoto(
+  env: TenantEnv,
+  scope: AccountScope,
+  photoId: string,
+): Promise<Response> {
+  const photo = await scope
+    .prepare(
+      `
       SELECT
         storage_key AS storageKey,
         final_storage_key AS finalStorageKey
       FROM photos
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(photoId)
+      photoId,
+    )
     .first<StoredPhotoRow>();
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
-  const variantResult = await env.DB.prepare(
-    `
+  const variantResult = await scope.database
+    .prepare(
+      `
         SELECT
           storage_key AS storageKey
         FROM photo_variants
         WHERE photo_id = ?
       `,
-  )
+    )
     .bind(photoId)
     .all<StoredVariantRow>();
 
@@ -1639,12 +1714,13 @@ async function deletePhoto(env: Env, photoId: string): Promise<Response> {
   }
 
   try {
-    await env.DB.prepare(
-      `
+    await scope.database
+      .prepare(
+        `
       DELETE FROM photos
       WHERE id = ?
     `,
-    )
+      )
       .bind(photoId)
       .run();
   } catch {
@@ -1734,8 +1810,8 @@ async function getPublicGallery(
     .bind(event.id)
     .all<PhotoRow>();
 
-  const commentsByPhoto = await getCommentsByPhoto(env, event.id);
-  const variantsByPhoto = await getPhotoVariantsByEvent(env, event.id);
+  const commentsByPhoto = await getCommentsByPhoto(env.DB, event.id);
+  const variantsByPhoto = await getPhotoVariantsByEvent(env.DB, event.id);
   const visitorToken = getVisitorToken(request);
   const heartedPhotoIds = new Set<string>();
 
@@ -1818,14 +1894,18 @@ async function findGalleryPhoto(
     .first<GalleryPhotoRow>();
 }
 
-async function getHeartCount(env: Env, photoId: string): Promise<number> {
-  const result = await env.DB.prepare(
-    `
+async function getHeartCount(
+  database: D1Database,
+  photoId: string,
+): Promise<number> {
+  const result = await database
+    .prepare(
+      `
       SELECT COUNT(*) AS heartCount
       FROM hearts
       WHERE photo_id = ?
     `,
-  )
+    )
     .bind(photoId)
     .first<HeartCountRow>();
 
@@ -1907,7 +1987,7 @@ async function addHeart(
 
   return jsonResponse({
     hearted: true,
-    heartCount: await getHeartCount(env, photoId),
+    heartCount: await getHeartCount(env.DB, photoId),
   });
 }
 
@@ -1956,31 +2036,38 @@ async function removeHeart(
 
   return jsonResponse({
     hearted: false,
-    heartCount: await getHeartCount(env, photoId),
+    heartCount: await getHeartCount(env.DB, photoId),
   });
 }
 
-async function clearPhotoHearts(env: Env, photoId: string): Promise<Response> {
-  const photo = await env.DB.prepare(
-    `
+async function clearPhotoHearts(
+  scope: AccountScope,
+  photoId: string,
+): Promise<Response> {
+  const photo = await scope
+    .prepare(
+      `
       SELECT id
       FROM photos
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(photoId)
+      photoId,
+    )
     .first<{ id: string }>();
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
-  await env.DB.prepare(
-    `
+  await scope.database
+    .prepare(
+      `
       DELETE FROM hearts
       WHERE photo_id = ?
     `,
-  )
+    )
     .bind(photoId)
     .run();
 
@@ -2032,11 +2119,12 @@ async function upsertGalleryVisitor(
 }
 
 async function getCommentsByPhoto(
-  env: Env,
+  database: D1Database,
   eventId: string,
 ): Promise<Map<string, CommentRow[]>> {
-  const result = await env.DB.prepare(
-    `
+  const result = await database
+    .prepare(
+      `
       SELECT
         c.id,
         c.photo_id AS photoId,
@@ -2054,7 +2142,7 @@ async function getCommentsByPhoto(
       WHERE p.event_id = ?
       ORDER BY c.created_at ASC
     `,
-  )
+    )
     .bind(eventId)
     .all<CommentRow>();
 
@@ -2337,7 +2425,7 @@ function isPhotoWorkflowStatus(value: unknown): value is PhotoWorkflowStatus {
 
 async function setPhotoWorkflowStatus(
   request: Request,
-  env: Env,
+  scope: AccountScope,
   photoId: string,
 ): Promise<Response> {
   let body: SetPhotoWorkflowBody;
@@ -2362,17 +2450,20 @@ async function setPhotoWorkflowStatus(
     );
   }
 
-  const photo = await env.DB.prepare(
-    `
+  const photo = await scope
+    .prepare(
+      `
       SELECT
         id,
         workflow_status AS workflowStatus,
         final_storage_key AS finalStorageKey
       FROM photos
-      WHERE id = ?
-  `,
-  )
-    .bind(photoId)
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
     .first<PhotoWorkflowRow>();
 
   if (!photo) {
@@ -2393,30 +2484,35 @@ async function setPhotoWorkflowStatus(
      * A final photo fulfills its current edit requests.
      * Future hearts then represent a new revision request.
      */
-    await env.DB.batch([
-      env.DB.prepare(
-        `
+    await scope.database.batch([
+      scope.database
+        .prepare(
+          `
           UPDATE photos
           SET workflow_status = ?
           WHERE id = ?
         `,
-      ).bind(body.status, photoId),
+        )
+        .bind(body.status, photoId),
 
-      env.DB.prepare(
-        `
+      scope.database
+        .prepare(
+          `
           DELETE FROM hearts
           WHERE photo_id = ?
         `,
-      ).bind(photoId),
+        )
+        .bind(photoId),
     ]);
   } else {
-    await env.DB.prepare(
-      `
+    await scope.database
+      .prepare(
+        `
         UPDATE photos
         SET workflow_status = ?
         WHERE id = ?
       `,
-    )
+      )
       .bind(body.status, photoId)
       .run();
   }
@@ -2424,7 +2520,10 @@ async function setPhotoWorkflowStatus(
   return jsonResponse({
     photoId,
     workflowStatus: body.status,
-    heartCount: body.status === "final" ? 0 : await getHeartCount(env, photoId),
+    heartCount:
+      body.status === "final"
+        ? 0
+        : await getHeartCount(scope.database, photoId),
   });
 }
 
@@ -2471,11 +2570,12 @@ function toImageVariantRecord(row: PhotoVariantRow): ImageVariantRecord {
 }
 
 async function getPhotoVariantsByEvent(
-  env: Env,
+  database: D1Database,
   eventId: string,
 ): Promise<Map<string, PhotoVariantsBySource>> {
-  const result = await env.DB.prepare(
-    `
+  const result = await database
+    .prepare(
+      `
       SELECT
         v.photo_id AS photoId,
         v.source_kind AS sourceKind,
@@ -2491,7 +2591,7 @@ async function getPhotoVariantsByEvent(
         ON p.id = v.photo_id
       WHERE p.event_id = ?
     `,
-  )
+    )
     .bind(eventId)
     .all<PhotoVariantRow>();
 
@@ -2548,34 +2648,39 @@ async function getFinalPhotoImage(
 
 async function uploadFinalPhoto(
   request: Request,
-  env: Env,
+  env: TenantEnv,
+  scope: AccountScope,
   photoId: string,
 ): Promise<Response> {
-  const photo = await env.DB.prepare(
-    `
+  const photo = await scope
+    .prepare(
+      `
       SELECT
         event_id AS eventId,
         final_storage_key AS finalStorageKey
       FROM photos
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(photoId)
+      photoId,
+    )
     .first<FinalPhotoUploadRow>();
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
-  const oldFinalVariants = await env.DB.prepare(
-    `
+  const oldFinalVariants = await scope.database
+    .prepare(
+      `
       SELECT storage_key AS storageKey
       FROM photo_variants
       WHERE
         photo_id = ?
         AND source_kind = 'final'
     `,
-  )
+    )
     .bind(photoId)
     .all<StoredVariantRow>();
 
@@ -2665,9 +2770,10 @@ async function uploadFinalPhoto(
   const uploadedAt = new Date().toISOString();
 
   try {
-    await env.DB.batch([
-      env.DB.prepare(
-        `
+    await scope.database.batch([
+      scope.database
+        .prepare(
+          `
           UPDATE photos
           SET
             final_storage_key = ?,
@@ -2679,31 +2785,36 @@ async function uploadFinalPhoto(
             workflow_status = 'final'
           WHERE id = ?
         `,
-      ).bind(
-        newStorageKey,
-        originalFilename,
-        "image/jpeg",
-        storedObject.size,
-        uploadedAt,
-        finalSha256,
-        photoId,
-      ),
+        )
+        .bind(
+          newStorageKey,
+          originalFilename,
+          "image/jpeg",
+          storedObject.size,
+          uploadedAt,
+          finalSha256,
+          photoId,
+        ),
 
-      env.DB.prepare(
-        `
+      scope.database
+        .prepare(
+          `
           DELETE FROM hearts
           WHERE photo_id = ?
         `,
-      ).bind(photoId),
+        )
+        .bind(photoId),
 
-      env.DB.prepare(
-        `
+      scope.database
+        .prepare(
+          `
         DELETE FROM photo_variants
         WHERE
           photo_id = ?
           AND source_kind = 'final'
         `,
-      ).bind(photoId),
+        )
+        .bind(photoId),
     ]);
   } catch {
     await env.pickpic_photos.delete(newStorageKey);
@@ -2767,20 +2878,24 @@ function getFormInteger(formData: FormData, key: string): number | null {
 
 async function uploadPhotoVariants(
   request: Request,
-  env: Env,
+  env: TenantEnv,
+  scope: AccountScope,
   photoId: string,
   sourceKind: PhotoVariantSource,
 ): Promise<Response> {
-  const photo = await env.DB.prepare(
-    `
+  const photo = await scope
+    .prepare(
+      `
       SELECT
         event_id AS eventId,
         final_storage_key AS finalStorageKey
       FROM photos
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(photoId)
+      photoId,
+    )
     .first<VariantPhotoRow>();
 
   if (!photo) {
@@ -2857,15 +2972,16 @@ async function uploadPhotoVariants(
     );
   }
 
-  const oldVariants = await env.DB.prepare(
-    `
+  const oldVariants = await scope.database
+    .prepare(
+      `
       SELECT storage_key AS storageKey
       FROM photo_variants
       WHERE
         photo_id = ?
         AND source_kind = ?
     `,
-  )
+    )
     .bind(photoId, sourceKind)
     .all<StoredVariantRow>();
 
@@ -2933,9 +3049,10 @@ async function uploadPhotoVariants(
   const createdAt = new Date().toISOString();
 
   try {
-    await env.DB.batch([
-      env.DB.prepare(
-        `
+    await scope.database.batch([
+      scope.database
+        .prepare(
+          `
           INSERT INTO photo_variants (
             photo_id,
             source_kind,
@@ -2961,18 +3078,20 @@ async function uploadPhotoVariants(
             height = excluded.height,
             created_at = excluded.created_at
         `,
-      ).bind(
-        photoId,
-        sourceKind,
-        thumbnailStorageKey,
-        thumbnailObject.size,
-        thumbnailWidth,
-        thumbnailHeight,
-        createdAt,
-      ),
+        )
+        .bind(
+          photoId,
+          sourceKind,
+          thumbnailStorageKey,
+          thumbnailObject.size,
+          thumbnailWidth,
+          thumbnailHeight,
+          createdAt,
+        ),
 
-      env.DB.prepare(
-        `
+      scope.database
+        .prepare(
+          `
           INSERT INTO photo_variants (
             photo_id,
             source_kind,
@@ -2998,15 +3117,16 @@ async function uploadPhotoVariants(
             height = excluded.height,
             created_at = excluded.created_at
         `,
-      ).bind(
-        photoId,
-        sourceKind,
-        previewStorageKey,
-        previewObject.size,
-        previewWidth,
-        previewHeight,
-        createdAt,
-      ),
+        )
+        .bind(
+          photoId,
+          sourceKind,
+          previewStorageKey,
+          previewObject.size,
+          previewWidth,
+          previewHeight,
+          createdAt,
+        ),
     ]);
   } catch {
     await env.pickpic_photos.delete([thumbnailStorageKey, previewStorageKey]);
@@ -3097,107 +3217,218 @@ async function getPhotoVariantImage(
   return getStoredJpeg(env, variant.storageKey);
 }
 
+/*
+ * Every /api/admin/* route, hoisted out of fetch so that `scope` can be a
+ * non-nullable parameter rather than something each of the seventeen route
+ * blocks has to re-check.
+ *
+ * Returning null means no admin route matched, which lets fetch fall through to
+ * the same generic /api/ 404 it used before. Admin paths and public paths are
+ * disjoint prefixes (/api/admin/ against /api/photos/ and /api/galleries/), so
+ * evaluating this group first cannot shadow a public route.
+ */
+async function handleAdminRequest(
+  request: Request,
+  url: URL,
+  env: TenantEnv,
+  ctx: ExecutionContext,
+  scope: AccountScope,
+): Promise<Response | null> {
+  if (url.pathname === "/api/admin/events") {
+    if (request.method === "POST") {
+      return createEvent(request, scope);
+    }
+
+    if (request.method === "GET") {
+      return listEvents(scope);
+    }
+
+    return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  if (url.pathname === "/api/admin/storage") {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getStorageUsage(scope);
+  }
+
+  const adminEventMatch = url.pathname.match(/^\/api\/admin\/events\/([^/]+)$/);
+
+  if (adminEventMatch) {
+    const eventId = decodeURIComponent(adminEventMatch[1]);
+
+    if (request.method === "PUT") {
+      return updateEvent(request, scope, eventId);
+    }
+
+    if (request.method === "DELETE") {
+      return deleteEvent(env, scope, eventId);
+    }
+
+    return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  const adminEventStatusMatch = url.pathname.match(
+    /^\/api\/admin\/events\/([^/]+)\/status$/,
+  );
+
+  if (adminEventStatusMatch) {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const eventId = decodeURIComponent(adminEventStatusMatch[1]);
+
+    return setEventStatus(request, scope, eventId);
+  }
+
+  const eventPhotosPreflightMatch = url.pathname.match(
+    /^\/api\/admin\/events\/([^/]+)\/photos\/preflight$/,
+  );
+
+  if (eventPhotosPreflightMatch) {
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const eventId = decodeURIComponent(eventPhotosPreflightMatch[1]);
+
+    return preflightPhotos(request, scope, eventId);
+  }
+
+  const eventPhotosMatch = url.pathname.match(
+    /^\/api\/admin\/events\/([^/]+)\/photos$/,
+  );
+
+  if (eventPhotosMatch) {
+    const eventId = decodeURIComponent(eventPhotosMatch[1]);
+
+    if (request.method === "POST") {
+      return createPhoto(request, env, scope, eventId, ctx);
+    }
+
+    if (request.method === "GET") {
+      return listPhotos(scope, eventId);
+    }
+
+    if (request.method === "DELETE") {
+      return clearEventPhotos(env, scope, eventId);
+    }
+
+    return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  const photoFinalMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/final$/,
+  );
+
+  if (photoFinalMatch) {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = decodeURIComponent(photoFinalMatch[1]);
+
+    return uploadFinalPhoto(request, env, scope, photoId);
+  }
+
+  const photoMatch = url.pathname.match(/^\/api\/admin\/photos\/([^/]+)$/);
+
+  if (photoMatch) {
+    if (request.method !== "DELETE") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = decodeURIComponent(photoMatch[1]);
+
+    return deletePhoto(env, scope, photoId);
+  }
+
+  const photoHeartsMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/hearts$/,
+  );
+
+  if (photoHeartsMatch) {
+    if (request.method !== "DELETE") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = decodeURIComponent(photoHeartsMatch[1]);
+
+    return clearPhotoHearts(scope, photoId);
+  }
+
+  const photoWorkflowMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/workflow$/,
+  );
+
+  if (photoWorkflowMatch) {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = decodeURIComponent(photoWorkflowMatch[1]);
+
+    return setPhotoWorkflowStatus(request, scope, photoId);
+  }
+
+  const adminVariantUploadMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/variants\/(original|final)$/,
+  );
+
+  if (adminVariantUploadMatch) {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return uploadPhotoVariants(
+      request,
+      env,
+      scope,
+      decodeURIComponent(adminVariantUploadMatch[1]),
+      adminVariantUploadMatch[2] as PhotoVariantSource,
+    );
+  }
+
+  return null;
+}
+
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/admin/")) {
-      const accessResponse = await requireAdminAccess(
+      const access = await requireAdminAccess(
         request,
         env as Env & AccessEnvironment,
       );
 
-      if (accessResponse) {
-        return accessResponse;
-      }
-    }
-
-    if (url.pathname === "/api/admin/events") {
-      if (request.method === "POST") {
-        return createEvent(request, env);
+      if (!access.ok) {
+        return access.response;
       }
 
-      if (request.method === "GET") {
-        return listEvents(env);
+      const account = await resolveAccountForPrincipal(
+        env.DB,
+        access.principal,
+      );
+
+      if (!account || account.status !== "active") {
+        return jsonResponse({ error: "This account is not available." }, 403);
       }
 
-      return jsonResponse({ error: "Method not allowed." }, 405);
-    }
+      const adminResponse = await handleAdminRequest(
+        request,
+        url,
+        env,
+        ctx,
+        createAccountScope(account, resolveAccountDatabase(env, account)),
+      );
 
-    if (url.pathname === "/api/admin/storage") {
-      if (request.method !== "GET") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
+      if (adminResponse) {
+        return adminResponse;
       }
-
-      return getStorageUsage(env);
-    }
-
-    const adminEventMatch = url.pathname.match(
-      /^\/api\/admin\/events\/([^/]+)$/,
-    );
-
-    if (adminEventMatch) {
-      const eventId = decodeURIComponent(adminEventMatch[1]);
-
-      if (request.method === "PUT") {
-        return updateEvent(request, env, eventId);
-      }
-
-      if (request.method === "DELETE") {
-        return deleteEvent(env, eventId);
-      }
-
-      return jsonResponse({ error: "Method not allowed." }, 405);
-    }
-
-    const adminEventStatusMatch = url.pathname.match(
-      /^\/api\/admin\/events\/([^/]+)\/status$/,
-    );
-
-    if (adminEventStatusMatch) {
-      if (request.method !== "PUT") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const eventId = decodeURIComponent(adminEventStatusMatch[1]);
-
-      return setEventStatus(request, env, eventId);
-    }
-
-    const eventPhotosPreflightMatch = url.pathname.match(
-      /^\/api\/admin\/events\/([^/]+)\/photos\/preflight$/,
-    );
-
-    if (eventPhotosPreflightMatch) {
-      if (request.method !== "POST") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const eventId = decodeURIComponent(eventPhotosPreflightMatch[1]);
-
-      return preflightPhotos(request, env, eventId);
-    }
-
-    const eventPhotosMatch = url.pathname.match(
-      /^\/api\/admin\/events\/([^/]+)\/photos$/,
-    );
-
-    if (eventPhotosMatch) {
-      const eventId = decodeURIComponent(eventPhotosMatch[1]);
-
-      if (request.method === "POST") {
-        return createPhoto(request, env, eventId, ctx);
-      }
-
-      if (request.method === "GET") {
-        return listPhotos(env, eventId);
-      }
-
-      if (request.method === "DELETE") {
-        return clearEventPhotos(env, eventId);
-      }
-
-      return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
     const photoImageMatch = url.pathname.match(
@@ -3226,32 +3457,6 @@ export default {
       const photoId = decodeURIComponent(photoFinalImageMatch[1]);
 
       return getFinalPhotoImage(env, photoId);
-    }
-
-    const photoFinalMatch = url.pathname.match(
-      /^\/api\/admin\/photos\/([^/]+)\/final$/,
-    );
-
-    if (photoFinalMatch) {
-      if (request.method !== "PUT") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const photoId = decodeURIComponent(photoFinalMatch[1]);
-
-      return uploadFinalPhoto(request, env, photoId);
-    }
-
-    const photoMatch = url.pathname.match(/^\/api\/admin\/photos\/([^/]+)$/);
-
-    if (photoMatch) {
-      if (request.method !== "DELETE") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const photoId = decodeURIComponent(photoMatch[1]);
-
-      return deletePhoto(env, photoId);
     }
 
     const galleryHeartMatch = url.pathname.match(
@@ -3285,20 +3490,6 @@ export default {
       if (galleryGuard) {
         return galleryGuard;
       }
-    }
-
-    const photoHeartsMatch = url.pathname.match(
-      /^\/api\/admin\/photos\/([^/]+)\/hearts$/,
-    );
-
-    if (photoHeartsMatch) {
-      if (request.method !== "DELETE") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const photoId = decodeURIComponent(photoHeartsMatch[1]);
-
-      return clearPhotoHearts(env, photoId);
     }
 
     const galleryCommentMatch = url.pathname.match(
@@ -3348,37 +3539,6 @@ export default {
       const shareToken = decodeURIComponent(publicGalleryMatch[1]);
 
       return getPublicGallery(request, env, shareToken);
-    }
-
-    const photoWorkflowMatch = url.pathname.match(
-      /^\/api\/admin\/photos\/([^/]+)\/workflow$/,
-    );
-
-    if (photoWorkflowMatch) {
-      if (request.method !== "PUT") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const photoId = decodeURIComponent(photoWorkflowMatch[1]);
-
-      return setPhotoWorkflowStatus(request, env, photoId);
-    }
-
-    const adminVariantUploadMatch = url.pathname.match(
-      /^\/api\/admin\/photos\/([^/]+)\/variants\/(original|final)$/,
-    );
-
-    if (adminVariantUploadMatch) {
-      if (request.method !== "PUT") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      return uploadPhotoVariants(
-        request,
-        env,
-        decodeURIComponent(adminVariantUploadMatch[1]),
-        adminVariantUploadMatch[2] as PhotoVariantSource,
-      );
     }
 
     const publicVariantMatch = url.pathname.match(
