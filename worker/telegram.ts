@@ -1,4 +1,11 @@
-type TelegramEnvironment = Env & {
+import type { TenantEnv } from "./tenancy.ts";
+
+/*
+ * Only the two secrets -- the database handle is passed separately so this
+ * module works against whichever database owns the event, rather than always
+ * reaching for the primary binding.
+ */
+type TelegramEnvironment = TenantEnv & {
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_CHAT_ID?: string;
 };
@@ -78,14 +85,15 @@ async function sendTelegramMessage(
 }
 
 async function notifyUploadStarted(
-  env: TelegramEnvironment,
+  database: D1Database,
   eventId: string,
   botToken: string,
   chatId: string,
 ): Promise<void> {
   try {
-    const event = await env.DB.prepare(
-      `
+    const event = await database
+      .prepare(
+        `
         SELECT
           e.title,
           e.share_token AS shareToken,
@@ -97,7 +105,7 @@ async function notifyUploadStarted(
           AND n.notification_type = ?
         WHERE e.id = ?
       `,
-    )
+      )
       .bind(UPLOAD_STARTED_NOTIFICATION, eventId)
       .first<TelegramEventRow>();
 
@@ -122,8 +130,9 @@ async function notifyUploadStarted(
       return;
     }
 
-    await env.DB.prepare(
-      `
+    await database
+      .prepare(
+        `
         INSERT INTO event_notifications (
           event_id,
           notification_type,
@@ -136,12 +145,13 @@ async function notifyUploadStarted(
         ON CONFLICT(event_id, notification_type)
         DO NOTHING
       `,
-    )
+      )
       .bind(eventId, UPLOAD_STARTED_NOTIFICATION, now, now)
       .run();
 
-    const claimResult = await env.DB.prepare(
-      `
+    const claimResult = await database
+      .prepare(
+        `
         UPDATE event_notifications
         SET
           status = 'sending',
@@ -163,7 +173,7 @@ async function notifyUploadStarted(
             )
           )
       `,
-    )
+      )
       .bind(now, now, eventId, UPLOAD_STARTED_NOTIFICATION, staleBefore)
       .run();
 
@@ -191,8 +201,9 @@ async function notifyUploadStarted(
         await sendTelegramMessage(botToken, chatId, message);
 
         const sentAt = new Date().toISOString();
-        await env.DB.prepare(
-          `
+        await database
+          .prepare(
+            `
             UPDATE event_notifications
             SET
               status = 'sent',
@@ -204,7 +215,7 @@ async function notifyUploadStarted(
               AND notification_type = ?
               AND status = 'sending'
           `,
-        )
+          )
           .bind(sentAt, sentAt, eventId, UPLOAD_STARTED_NOTIFICATION)
           .run();
 
@@ -215,8 +226,9 @@ async function notifyUploadStarted(
     }
 
     const failedAt = new Date().toISOString();
-    await env.DB.prepare(
-      `
+    await database
+      .prepare(
+        `
         UPDATE event_notifications
         SET
           status = 'failed',
@@ -227,7 +239,7 @@ async function notifyUploadStarted(
           AND notification_type = ?
           AND status = 'sending'
       `,
-    )
+      )
       .bind(lastError, failedAt, eventId, UPLOAD_STARTED_NOTIFICATION)
       .run();
 
@@ -241,7 +253,8 @@ async function notifyUploadStarted(
 }
 
 export function scheduleUploadStartedNotification(
-  env: Env,
+  database: D1Database,
+  env: TenantEnv,
   ctx: ExecutionContext,
   eventId: string,
 ): void {
@@ -258,5 +271,5 @@ export function scheduleUploadStartedNotification(
     return;
   }
 
-  ctx.waitUntil(notifyUploadStarted(telegramEnv, eventId, botToken, chatId));
+  ctx.waitUntil(notifyUploadStarted(database, eventId, botToken, chatId));
 }
