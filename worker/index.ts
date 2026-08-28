@@ -10,6 +10,12 @@ import {
   type TenantEnv,
 } from "./tenancy.ts";
 
+const ADMIN_PHOTO_IMAGE_BASE = "/api/admin/photos";
+
+function galleryPhotoImageBase(shareToken: string): string {
+  return `/api/galleries/${encodeURIComponent(shareToken)}/photos`;
+}
+
 interface CreateEventBody {
   title?: unknown;
   id?: unknown;
@@ -157,6 +163,8 @@ interface PublicGalleryResponse {
 interface GalleryPhotoRow {
   photoId: string;
   eventId: string;
+  storageKey: string;
+  finalStorageKey: string | null;
 }
 
 interface VisitorRow {
@@ -610,8 +618,15 @@ function createEmptyPhotoVariants(): PhotoVariantsBySource {
   };
 }
 
+/*
+ * imageBasePath is `/api/admin/photos` for the dashboard or
+ * `/api/galleries/{shareToken}/photos` for a public gallery -- the two
+ * callers of this function, which is why it's threaded through here rather
+ * than hardcoded.
+ */
 function toPhotoRecord(
   row: PhotoRow,
+  imageBasePath: string,
   comments: PhotoCommentRecord[] = [],
   photoVariants: PhotoVariantsBySource = createEmptyPhotoVariants(),
 ): PhotoRecord {
@@ -632,7 +647,7 @@ function toPhotoRecord(
   return {
     ...basePhoto,
     heartCount: Number(basePhoto.heartCount ?? 0),
-    imageUrl: `/api/photos/${encodeURIComponent(row.id)}/image`,
+    imageUrl: `${imageBasePath}/${encodeURIComponent(row.id)}/image`,
     variants: photoVariants.original,
     finalPhoto: hasFinalPhoto
       ? {
@@ -641,7 +656,7 @@ function toPhotoRecord(
           byteSize: Number(finalByteSize),
           uploadedAt: finalUploadedAt,
           imageUrl:
-            `/api/photos/${encodeURIComponent(row.id)}/final-image` +
+            `${imageBasePath}/${encodeURIComponent(row.id)}/final-image` +
             `?v=${encodeURIComponent(finalUploadedAt)}`,
           variants: photoVariants.final,
         }
@@ -1552,7 +1567,7 @@ async function createPhoto(
     contentType: "image/jpeg",
     byteSize: storedObject.size,
     createdAt,
-    imageUrl: `/api/photos/${encodeURIComponent(photoId)}/image`,
+    imageUrl: `${ADMIN_PHOTO_IMAGE_BASE}/${encodeURIComponent(photoId)}/image`,
     heartCount: 0,
     workflowStatus: "idle",
     finalPhoto: null,
@@ -1630,11 +1645,13 @@ async function listPhotos(
   const variantsByPhoto = await getPhotoVariantsByEvent(
     scope.database,
     eventId,
+    ADMIN_PHOTO_IMAGE_BASE,
   );
   return jsonResponse({
     photos: result.results.map((row) =>
       toPhotoRecord(
         row,
+        ADMIN_PHOTO_IMAGE_BASE,
         (commentsByPhoto.get(row.id) ?? []).map(toPhotoCommentRecord),
         variantsByPhoto.get(row.id) ?? createEmptyPhotoVariants(),
       ),
@@ -1642,16 +1659,37 @@ async function listPhotos(
   });
 }
 
-async function getPhotoImage(env: Env, photoId: string): Promise<Response> {
-  const photo = await env.DB.prepare(
-    `
+async function getAdminPhotoImage(
+  env: TenantEnv,
+  scope: AccountScope,
+  photoId: string,
+): Promise<Response> {
+  const photo = await scope
+    .prepare(
+      `
       SELECT storage_key AS storageKey
       FROM photos
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(photoId)
+      photoId,
+    )
     .first<{ storageKey: string }>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  return getStoredJpeg(env, photo.storageKey);
+}
+
+async function getGalleryPhotoImage(
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const photo = await findPhotoInShare(env, shareToken, photoId);
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
@@ -1810,8 +1848,13 @@ async function getPublicGallery(
     .bind(event.id)
     .all<PhotoRow>();
 
+  const imageBasePath = galleryPhotoImageBase(shareToken);
   const commentsByPhoto = await getCommentsByPhoto(env.DB, event.id);
-  const variantsByPhoto = await getPhotoVariantsByEvent(env.DB, event.id);
+  const variantsByPhoto = await getPhotoVariantsByEvent(
+    env.DB,
+    event.id,
+    imageBasePath,
+  );
   const visitorToken = getVisitorToken(request);
   const heartedPhotoIds = new Set<string>();
 
@@ -1845,6 +1888,7 @@ async function getPublicGallery(
       const commentRows = commentsByPhoto.get(row.id) ?? [];
       const photo = toPhotoRecord(
         row,
+        imageBasePath,
         commentRows.map(toPhotoCommentRecord),
         variantsByPhoto.get(row.id) ?? createEmptyPhotoVariants(),
       );
@@ -1872,7 +1916,13 @@ async function getPublicGallery(
   return jsonResponse(response);
 }
 
-async function findGalleryPhoto(
+/*
+ * The single choke point for "does this photo belong to this share token's
+ * event". Every public photo lookup -- hearts, comments, and the three image
+ * routes below -- goes through here, which is also where a future per-client
+ * share (a subset of an event's photos) gets its narrowing check added.
+ */
+async function findPhotoInShare(
   env: Env,
   shareToken: string,
   photoId: string,
@@ -1881,7 +1931,9 @@ async function findGalleryPhoto(
     `
       SELECT
         p.id AS photoId,
-        p.event_id AS eventId
+        p.event_id AS eventId,
+        p.storage_key AS storageKey,
+        p.final_storage_key AS finalStorageKey
       FROM photos p
       INNER JOIN events e
         ON e.id = p.event_id
@@ -1948,7 +2000,7 @@ async function addHeart(
     );
   }
 
-  const galleryPhoto = await findGalleryPhoto(env, shareToken, photoId);
+  const galleryPhoto = await findPhotoInShare(env, shareToken, photoId);
 
   if (!galleryPhoto) {
     return jsonResponse({ error: "Photo not found." }, 404);
@@ -2003,7 +2055,7 @@ async function removeHeart(
     return jsonResponse({ error: "A valid visitor token is required." }, 400);
   }
 
-  const galleryPhoto = await findGalleryPhoto(env, shareToken, photoId);
+  const galleryPhoto = await findPhotoInShare(env, shareToken, photoId);
 
   if (!galleryPhoto) {
     return jsonResponse({ error: "Photo not found." }, 404);
@@ -2201,7 +2253,7 @@ async function addComment(
     );
   }
 
-  const galleryPhoto = await findGalleryPhoto(env, shareToken, photoId);
+  const galleryPhoto = await findPhotoInShare(env, shareToken, photoId);
 
   if (!galleryPhoto) {
     return jsonResponse({ error: "Photo not found." }, 404);
@@ -2527,7 +2579,10 @@ async function setPhotoWorkflowStatus(
   });
 }
 
-async function getStoredJpeg(env: Env, storageKey: string): Promise<Response> {
+async function getStoredJpeg(
+  env: TenantEnv,
+  storageKey: string,
+): Promise<Response> {
   const object = await env.pickpic_photos.get(storageKey);
 
   if (!object) {
@@ -2554,10 +2609,13 @@ async function getStoredJpeg(env: Env, storageKey: string): Promise<Response> {
   });
 }
 
-function toImageVariantRecord(row: PhotoVariantRow): ImageVariantRecord {
+function toImageVariantRecord(
+  row: PhotoVariantRow,
+  imageBasePath: string,
+): ImageVariantRecord {
   return {
     imageUrl:
-      `/api/photos/${encodeURIComponent(
+      `${imageBasePath}/${encodeURIComponent(
         row.photoId,
       )}/variants/${row.sourceKind}/${row.variantKind}` +
       `?v=${encodeURIComponent(row.createdAt)}`,
@@ -2572,6 +2630,7 @@ function toImageVariantRecord(row: PhotoVariantRow): ImageVariantRecord {
 async function getPhotoVariantsByEvent(
   database: D1Database,
   eventId: string,
+  imageBasePath: string,
 ): Promise<Map<string, PhotoVariantsBySource>> {
   const result = await database
     .prepare(
@@ -2603,7 +2662,7 @@ async function getPhotoVariantsByEvent(
 
     const sourceVariants = photoVariants[row.sourceKind];
 
-    const variant = toImageVariantRecord(row);
+    const variant = toImageVariantRecord(row, imageBasePath);
 
     if (row.variantKind === "thumbnail") {
       sourceVariants.thumbnail = variant;
@@ -2617,20 +2676,45 @@ async function getPhotoVariantsByEvent(
   return variantsByPhoto;
 }
 
-async function getFinalPhotoImage(
-  env: Env,
+async function getAdminFinalPhotoImage(
+  env: TenantEnv,
+  scope: AccountScope,
   photoId: string,
 ): Promise<Response> {
-  const photo = await env.DB.prepare(
-    `
+  const photo = await scope
+    .prepare(
+      `
       SELECT
         final_storage_key AS finalStorageKey
       FROM photos
-      WHERE id = ?
+      WHERE
+        id = ?
+        AND account_id = :accountId
     `,
-  )
-    .bind(photoId)
+      photoId,
+    )
     .first<FinalPhotoKeyRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  if (!photo.finalStorageKey) {
+    return jsonResponse(
+      { error: "This photo does not have a final image yet." },
+      404,
+    );
+  }
+
+  return getStoredJpeg(env, photo.finalStorageKey);
+}
+
+async function getGalleryFinalPhotoImage(
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const photo = await findPhotoInShare(env, shareToken, photoId);
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
@@ -2847,7 +2931,7 @@ async function uploadFinalPhoto(
     byteSize: storedObject.size,
     uploadedAt,
     imageUrl:
-      `/api/photos/${encodeURIComponent(photoId)}/final-image` +
+      `${ADMIN_PHOTO_IMAGE_BASE}/${encodeURIComponent(photoId)}/final-image` +
       `?v=${encodeURIComponent(uploadedAt)}`,
     variants: createEmptyVariantSet(),
   };
@@ -3155,7 +3239,7 @@ async function uploadPhotoVariants(
   const variants: ImageVariantSet = {
     thumbnail: {
       imageUrl:
-        `/api/photos/${encodeURIComponent(
+        `${ADMIN_PHOTO_IMAGE_BASE}/${encodeURIComponent(
           photoId,
         )}/variants/${sourceKind}/thumbnail` +
         `?v=${encodeURIComponent(createdAt)}`,
@@ -3167,7 +3251,7 @@ async function uploadPhotoVariants(
     },
     preview: {
       imageUrl:
-        `/api/photos/${encodeURIComponent(
+        `${ADMIN_PHOTO_IMAGE_BASE}/${encodeURIComponent(
           photoId,
         )}/variants/${sourceKind}/preview` +
         `?v=${encodeURIComponent(createdAt)}`,
@@ -3186,14 +3270,15 @@ async function uploadPhotoVariants(
   });
 }
 
-async function getPhotoVariantImage(
-  env: Env,
+async function getVariantStorageKey(
+  database: D1Database,
   photoId: string,
   sourceKind: PhotoVariantSource,
   variantKind: PhotoVariantKind,
-): Promise<Response> {
-  const variant = await env.DB.prepare(
-    `
+): Promise<string | null> {
+  const variant = await database
+    .prepare(
+      `
       SELECT storage_key AS storageKey
       FROM photo_variants
       WHERE
@@ -3201,20 +3286,82 @@ async function getPhotoVariantImage(
         AND source_kind = ?
         AND variant_kind = ?
     `,
-  )
+    )
     .bind(photoId, sourceKind, variantKind)
     .first<StoredVariantRow>();
 
-  if (!variant) {
+  return variant?.storageKey ?? null;
+}
+
+async function getAdminPhotoVariantImage(
+  env: TenantEnv,
+  scope: AccountScope,
+  photoId: string,
+  sourceKind: PhotoVariantSource,
+  variantKind: PhotoVariantKind,
+): Promise<Response> {
+  const photo = await scope
+    .prepare(
+      `
+      SELECT id
+      FROM photos
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<{ id: string }>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const storageKey = await getVariantStorageKey(
+    scope.database,
+    photoId,
+    sourceKind,
+    variantKind,
+  );
+
+  if (!storageKey) {
     return jsonResponse(
-      {
-        error: "The requested image variant was not found.",
-      },
+      { error: "The requested image variant was not found." },
       404,
     );
   }
 
-  return getStoredJpeg(env, variant.storageKey);
+  return getStoredJpeg(env, storageKey);
+}
+
+async function getGalleryPhotoVariantImage(
+  env: Env,
+  shareToken: string,
+  photoId: string,
+  sourceKind: PhotoVariantSource,
+  variantKind: PhotoVariantKind,
+): Promise<Response> {
+  const photo = await findPhotoInShare(env, shareToken, photoId);
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const storageKey = await getVariantStorageKey(
+    env.DB,
+    photoId,
+    sourceKind,
+    variantKind,
+  );
+
+  if (!storageKey) {
+    return jsonResponse(
+      { error: "The requested image variant was not found." },
+      404,
+    );
+  }
+
+  return getStoredJpeg(env, storageKey);
 }
 
 /*
@@ -3334,6 +3481,56 @@ async function handleAdminRequest(
     return uploadFinalPhoto(request, env, scope, photoId);
   }
 
+  const adminPhotoImageMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/image$/,
+  );
+
+  if (adminPhotoImageMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getAdminPhotoImage(
+      env,
+      scope,
+      decodeURIComponent(adminPhotoImageMatch[1]),
+    );
+  }
+
+  const adminPhotoFinalImageMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/final-image$/,
+  );
+
+  if (adminPhotoFinalImageMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getAdminFinalPhotoImage(
+      env,
+      scope,
+      decodeURIComponent(adminPhotoFinalImageMatch[1]),
+    );
+  }
+
+  const adminPhotoVariantImageMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/variants\/(original|final)\/(thumbnail|preview)$/,
+  );
+
+  if (adminPhotoVariantImageMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getAdminPhotoVariantImage(
+      env,
+      scope,
+      decodeURIComponent(adminPhotoVariantImageMatch[1]),
+      adminPhotoVariantImageMatch[2] as PhotoVariantSource,
+      adminPhotoVariantImageMatch[3] as PhotoVariantKind,
+    );
+  }
+
   const photoMatch = url.pathname.match(/^\/api\/admin\/photos\/([^/]+)$/);
 
   if (photoMatch) {
@@ -3431,32 +3628,54 @@ export default {
       }
     }
 
-    const photoImageMatch = url.pathname.match(
-      /^\/api\/photos\/([^/]+)\/image$/,
+    const galleryPhotoImageMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/image$/,
     );
 
-    if (photoImageMatch) {
+    if (galleryPhotoImageMatch) {
       if (request.method !== "GET") {
         return jsonResponse({ error: "Method not allowed." }, 405);
       }
 
-      const photoId = decodeURIComponent(photoImageMatch[1]);
-
-      return getPhotoImage(env, photoId);
+      return getGalleryPhotoImage(
+        env,
+        decodeURIComponent(galleryPhotoImageMatch[1]),
+        decodeURIComponent(galleryPhotoImageMatch[2]),
+      );
     }
 
-    const photoFinalImageMatch = url.pathname.match(
-      /^\/api\/photos\/([^/]+)\/final-image$/,
+    const galleryPhotoFinalImageMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/final-image$/,
     );
 
-    if (photoFinalImageMatch) {
+    if (galleryPhotoFinalImageMatch) {
       if (request.method !== "GET") {
         return jsonResponse({ error: "Method not allowed." }, 405);
       }
 
-      const photoId = decodeURIComponent(photoFinalImageMatch[1]);
+      return getGalleryFinalPhotoImage(
+        env,
+        decodeURIComponent(galleryPhotoFinalImageMatch[1]),
+        decodeURIComponent(galleryPhotoFinalImageMatch[2]),
+      );
+    }
 
-      return getFinalPhotoImage(env, photoId);
+    const galleryPhotoVariantImageMatch = url.pathname.match(
+      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/variants\/(original|final)\/(thumbnail|preview)$/,
+    );
+
+    if (galleryPhotoVariantImageMatch) {
+      if (request.method !== "GET") {
+        return jsonResponse({ error: "Method not allowed." }, 405);
+      }
+
+      return getGalleryPhotoVariantImage(
+        env,
+        decodeURIComponent(galleryPhotoVariantImageMatch[1]),
+        decodeURIComponent(galleryPhotoVariantImageMatch[2]),
+        galleryPhotoVariantImageMatch[3] as PhotoVariantSource,
+        galleryPhotoVariantImageMatch[4] as PhotoVariantKind,
+      );
     }
 
     const galleryHeartMatch = url.pathname.match(
@@ -3539,23 +3758,6 @@ export default {
       const shareToken = decodeURIComponent(publicGalleryMatch[1]);
 
       return getPublicGallery(request, env, shareToken);
-    }
-
-    const publicVariantMatch = url.pathname.match(
-      /^\/api\/photos\/([^/]+)\/variants\/(original|final)\/(thumbnail|preview)$/,
-    );
-
-    if (publicVariantMatch) {
-      if (request.method !== "GET") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      return getPhotoVariantImage(
-        env,
-        decodeURIComponent(publicVariantMatch[1]),
-        publicVariantMatch[2] as PhotoVariantSource,
-        publicVariantMatch[3] as PhotoVariantKind,
-      );
     }
 
     if (url.pathname.startsWith("/api/")) {
