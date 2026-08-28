@@ -151,7 +151,9 @@ Access protection on the admin worker and the custom domains are load-bearing �
 
 `AdminPrincipal` is a discriminated union (`kind: "access" | "session"`), and `resolveAccountForPrincipal` switches on it: an Access principal resolves to the bootstrap account, a session principal to the account its `account_users` row names. Adding a third variant without handling it there is a compile error, which is the point.
 
-Session cookies and magic-link tokens live in `auth_sessions` / `auth_login_tokens` (migration 0015); only SHA-256 hashes are stored. Because cookies are sent automatically where the Access header pair never was, every non-GET under `/api/admin/*` and `/api/auth/*` also requires a matching `Origin` header — testing those with `curl` needs `-H "Origin: <base>"` or it's a 403.
+Session cookies and magic-link tokens live in `auth_sessions` / `auth_login_tokens` (migration 0015); only SHA-256 hashes are stored. The `/api/auth/*` routes exist **only where `AUTH_MODE` is `session`** and 404 everywhere else, so the public gallery origin carries no email-sending endpoint and a magic link can only ever be built from the origin that will honour it.
+
+Because cookies are sent automatically where the Access header pair never was, every non-GET under `/api/admin/*` and `/api/auth/*` also requires a matching `Origin` header — testing those with `curl` needs `-H "Origin: <base>"` or it's a 403.
 
 Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex matches, each delegating to a dedicated async handler defined in the same 3000-line file. Add endpoints in that style; don't introduce a router library.
 

@@ -198,9 +198,20 @@ async function touchSessionQuietly(
  * Every /api/auth/* route. Returns null when nothing matched so fetch can fall
  * through to its generic /api/ 404, matching how handleAdminRequest behaves.
  *
- * These routes are served in both auth modes. On admin.pickpic.photos they sit
- * behind Cloudflare Access and are simply unused; the guard that matters is that
- * a magic link only ever grants what the account_users row it resolved allows.
+ * These routes exist only where AUTH_MODE is 'session'. A deployment that
+ * authenticates through Cloudflare Access has no use for them, and serving them
+ * anyway would mean two things worth avoiding:
+ *
+ *   * pickpic.photos, the public gallery origin, would carry an unauthenticated
+ *     endpoint that sends email to any address already in account_users. The
+ *     live-token cap bounds it, but the right bound is not offering it at all.
+ *
+ *   * the emailed link is built from the origin the request arrived on, so a
+ *     link requested through the wrong host would point at the wrong host.
+ *     Redeeming it there would set a __Host- cookie scoped to that host, which
+ *     grants nothing -- the public worker has no Access configuration and
+ *     refuses /api/admin/* regardless -- but it is a dead end a real person
+ *     could walk into.
  */
 export async function handleAuthRequest(
   request: Request,
@@ -209,6 +220,10 @@ export async function handleAuthRequest(
   environment: AuthEnvironment,
 ): Promise<Response | null> {
   if (!url.pathname.startsWith("/api/auth/")) {
+    return null;
+  }
+
+  if (resolveAuthMode(environment) !== "session") {
     return null;
   }
 
