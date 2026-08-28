@@ -45,14 +45,18 @@ export function resolveAccountDatabase(
 }
 
 /*
- * Maps a verified Access principal to the account whose rows it may touch.
+ * Maps a verified principal to the account whose rows it may touch.
  *
- * Cloudflare Access currently admits exactly one operator plus the iPad service
- * token, and account_users is deliberately empty, so every verified principal
- * resolves to the bootstrap account. Adopting real user authentication replaces
- * the WHERE clause below with a join through account_users on
- * (auth_provider, auth_subject) -- which is exactly the shape of that table's
- * unique index -- and nothing else in the worker changes.
+ * A session principal already knows its account: resolving the session joined
+ * account_users, so the answer came from that user's own row. There is no
+ * fallback for this branch by design -- defaulting a session to the bootstrap
+ * account would hand a stranger the operator's photos.
+ *
+ * An Access principal has no account_users row to join to. Cloudflare Access
+ * admits exactly one operator plus the iPad service token, and their identifiers
+ * are Cloudflare configuration that deliberately does not live in this
+ * repository, so that branch still resolves to the bootstrap account. It stops
+ * doing so when the iPad moves off service tokens (roadmap step 6).
  *
  * This is a real SELECT rather than a hardcoded object so that having run the
  * migration is a hard precondition of serving admin traffic, and so database_id
@@ -62,7 +66,8 @@ export async function resolveAccountForPrincipal(
   database: D1Database,
   principal: AdminPrincipal,
 ): Promise<AccountRecord | null> {
-  void principal;
+  const accountId =
+    principal.kind === "session" ? principal.accountId : BOOTSTRAP_ACCOUNT_ID;
 
   return database
     .prepare(
@@ -76,6 +81,6 @@ export async function resolveAccountForPrincipal(
         WHERE id = ?
       `,
     )
-    .bind(BOOTSTRAP_ACCOUNT_ID)
+    .bind(accountId)
     .first<AccountRecord>();
 }

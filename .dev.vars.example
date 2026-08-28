@@ -1,0 +1,31 @@
+# Copy to .dev.vars (git-ignored) to configure `npm run dev`.
+#
+# Note that `npx wrangler dev` serves the last `npm run build` output rather than
+# live sources, so use `npm run dev` when testing worker changes.
+#
+# This file is read once at startup. Editing it while the dev server is running
+# changes nothing until the server is restarted -- which looks exactly like the
+# code ignoring the setting.
+
+# Which guard stands in front of /api/admin/*.
+#
+#   access  -- Cloudflare Access, as on admin.pickpic.photos. This is also the
+#              default when AUTH_MODE is unset, and on localhost it is a no-op,
+#              so admin routes are simply open.
+#   session -- one of our own session cookies, as app.pickpic.photos will use.
+#              Set this to exercise the magic-link sign-in flow locally.
+#
+# Any other value is refused outright: a typo must fail closed.
+AUTH_MODE=session
+
+# Transactional sender for magic-link emails. Leave unset in development and the
+# link is printed to the worker console instead of being emailed -- a fallback
+# that only ever applies to a request that arrived on localhost.
+#
+# In production this is a secret (`wrangler secret put RESEND_API_KEY`), never a
+# var in wrangler.jsonc.
+# RESEND_API_KEY=re_...
+
+# Must be an address on a domain verified with Resend, or every send is
+# rejected. Defaults to "PickPic <login@pickpic.photos>".
+# MAGIC_LINK_FROM=PickPic <login@pickpic.photos>

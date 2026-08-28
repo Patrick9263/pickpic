@@ -1,4 +1,8 @@
-import { requireAdminAccess, type AccessEnvironment } from "./access.ts";
+import {
+  handleAuthRequest,
+  requireAdminPrincipal,
+  type AuthEnvironment,
+} from "./auth.ts";
 import {
   resolveAccountDatabase,
   resolveAccountForPrincipal,
@@ -3596,10 +3600,27 @@ export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url);
 
+    /*
+     * Ahead of the admin block because these are the routes that mint the
+     * credential the admin block checks, so they cannot themselves require one.
+     */
+    const authResponse = await handleAuthRequest(
+      request,
+      url,
+      env.DB,
+      env as Env & AuthEnvironment,
+    );
+
+    if (authResponse) {
+      return authResponse;
+    }
+
     if (url.pathname.startsWith("/api/admin/")) {
-      const access = await requireAdminAccess(
+      const access = await requireAdminPrincipal(
         request,
-        env as Env & AccessEnvironment,
+        env.DB,
+        env as Env & AuthEnvironment,
+        ctx,
       );
 
       if (!access.ok) {
