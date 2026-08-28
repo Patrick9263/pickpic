@@ -28,6 +28,8 @@ npm run cf-typegen         # regenerate worker-configuration.d.ts from wrangler.
 
 There is **no test suite**. `npm run check` is the only automated gate.
 
+Use `npm run dev` when testing worker changes, not `npx wrangler dev` — the latter serves the last `npm run build` output from `dist/`, so edits appear to have no effect and stack traces point at `dist/pickpic/index.js`. `npm run dev` also reads `.dev.vars` (git-ignored; see `.dev.vars.example`), which is how `AUTH_MODE` and the magic-link sender are set locally.
+
 Prettier 3 reads `.gitignore` (there is no `.prettierignore`), so anything ignored by the repo is also skipped by `format:check` — but it does **not** read a global gitignore. If `npm run check` starts failing on a local-only file that git seems to ignore, that's why: add the path to the repo's `.gitignore` rather than reformatting the file or "fixing" unrelated source.
 
 The iPad app builds through **`ipad/PickPic.xcodeproj`** (scheme `PickPic`, one target), not through the `.swiftpm` package, even though the sources live under `ipad/PickPic.swiftpm/`. Patrick normally builds to a physical iPad from Xcode. To verify compilation from the CLI without code signing:
@@ -136,9 +138,22 @@ Nothing may depend on GPS being present. **Filename and capture time are the rel
 | default env | `pickpic`       | `pickpic.photos`       | public            |
 | `admin` env | `pickpic-admin` | `admin.pickpic.photos` | Cloudflare Access |
 
-Both run identical code. `/api/admin/*` is gated in `fetch` by `requireAdminAccess` ([worker/access.ts](worker/access.ts)), which verifies the `Cf-Access-Jwt-Assertion` header against Access's JWKS and is a deliberate no-op on localhost. **The iPad app authenticates as a service token**, sending `CF-Access-Client-Id` / `CF-Access-Client-Secret` on every admin request (see `APIClient.makeAdminJSONRequest`); Access validates those at the edge and injects the JWT the worker checks.
+Both run identical code. `/api/admin/*` is gated in `fetch` by `requireAdminPrincipal` ([worker/auth.ts](worker/auth.ts)), which dispatches on the `AUTH_MODE` var:
+
+- `access` (the default when unset, and what both current deployments use) → `requireAdminAccess` ([worker/access.ts](worker/access.ts)), which verifies the `Cf-Access-Jwt-Assertion` header against Access's JWKS and is a deliberate no-op on localhost.
+- `session` → one of our own `__Host-pickpic_session` cookies, for the coming `app.pickpic.photos`, which has no Access in front of it.
+
+Anything else fails closed. It's a var rather than a hostname test because the same bundle serves every origin.
+
+**The iPad app authenticates as a service token**, sending `CF-Access-Client-Id` / `CF-Access-Client-Secret` on every admin request (see `APIClient.makeAdminJSONRequest`); Access validates those at the edge and injects the JWT the worker checks. It never sees a cookie.
 
 Access protection on the admin worker and the custom domains are load-bearing — don't casually change either.
+
+`AdminPrincipal` is a discriminated union (`kind: "access" | "session"`), and `resolveAccountForPrincipal` switches on it: an Access principal resolves to the bootstrap account, a session principal to the account its `account_users` row names. Adding a third variant without handling it there is a compile error, which is the point.
+
+Session cookies and magic-link tokens live in `auth_sessions` / `auth_login_tokens` (migration 0015); only SHA-256 hashes are stored. The `/api/auth/*` routes exist **only where `AUTH_MODE` is `session`** and 404 everywhere else, so the public gallery origin carries no email-sending endpoint and a magic link can only ever be built from the origin that will honour it.
+
+Because cookies are sent automatically where the Access header pair never was, every non-GET under `/api/admin/*` and `/api/auth/*` also requires a matching `Origin` header — testing those with `curl` needs `-H "Origin: <base>"` or it's a 403.
 
 Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex matches, each delegating to a dedicated async handler defined in the same 3000-line file. Add endpoints in that style; don't introduce a router library.
 

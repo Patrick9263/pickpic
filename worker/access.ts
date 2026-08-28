@@ -6,30 +6,65 @@ export interface AccessEnvironment {
 }
 
 /*
- * The verified identity behind an admin request.
- *
  * provider/subject together are the natural key of account_users
- * (auth_provider, auth_subject), which is how a principal will be mapped to an
- * account once real user authentication exists.
+ * (auth_provider, auth_subject).
  */
-export interface AdminPrincipal {
+interface PrincipalIdentity {
+  provider: string;
+
+  subject: string;
+
+  email: string | null;
+}
+
+/*
+ * A request that Cloudflare Access vouched for: the operator's SSO identity on
+ * admin.pickpic.photos, or the iPad's service token.
+ *
+ * account_users holds no row for either -- their identifiers are Cloudflare
+ * configuration and deliberately absent from this repository -- so this variant
+ * carries no account and resolves to the bootstrap account. See
+ * resolveAccountForPrincipal.
+ */
+export interface AccessPrincipal extends PrincipalIdentity {
+  kind: "access";
+
   /*
    * 'cloudflare_access' for an SSO identity, or
    * 'cloudflare_access_service_token' for a machine identity such as the iPad.
    */
-  provider: string;
-
-  /*
-   * The Access JWT 'sub' for an SSO identity, or 'common_name' -- the service
-   * token's client id -- for a service token.
-   */
-  subject: string;
-
-  email: string | null;
+  provider: "cloudflare_access" | "cloudflare_access_service_token";
 
   /** True on localhost, where Access does not run at all. */
   isLocalDevelopment: boolean;
 }
+
+/*
+ * A request carrying one of our own session cookies. Resolving the session
+ * already joined account_users, so the account is known here and must be used --
+ * falling back to the bootstrap account for a session would hand a stranger the
+ * operator's photos.
+ */
+export interface SessionPrincipal extends PrincipalIdentity {
+  kind: "session";
+
+  accountId: string;
+
+  accountUserId: string;
+
+  sessionId: string;
+
+  role: string;
+}
+
+/*
+ * The verified identity behind an admin request.
+ *
+ * A discriminated union rather than one interface with an optional accountId,
+ * so that a handler which forgets to distinguish the two is a compile error
+ * instead of a silent fall-through into the bootstrap account's data.
+ */
+export type AdminPrincipal = AccessPrincipal | SessionPrincipal;
 
 /*
  * A discriminated union rather than `Response | AdminPrincipal`, so a caller
@@ -42,7 +77,12 @@ let cachedTeamDomain: string | null = null;
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
-function isLocalRequest(request: Request): boolean {
+/*
+ * Localhost is the one origin no Cloudflare product sits in front of, so it is
+ * both where Access is skipped and the only place a magic link may be printed to
+ * the console instead of emailed.
+ */
+export function isLocalRequest(request: Request): boolean {
   const hostname = new URL(request.url).hostname;
 
   return (
@@ -50,7 +90,7 @@ function isLocalRequest(request: Request): boolean {
   );
 }
 
-function forbidden(error: string): AdminAccessResult {
+export function forbidden(error: string): AdminAccessResult {
   return {
     ok: false,
     response: Response.json(
@@ -89,6 +129,7 @@ export async function requireAdminAccess(
     return {
       ok: true,
       principal: {
+        kind: "access",
         provider: "cloudflare_access",
         subject: "local-development",
         email: null,
@@ -128,15 +169,17 @@ export async function requireAdminAccess(
     const commonName =
       typeof payload.common_name === "string" ? payload.common_name.trim() : "";
 
-    const principal: AdminPrincipal =
+    const principal: AccessPrincipal =
       commonName.length > 0
         ? {
+            kind: "access",
             provider: "cloudflare_access_service_token",
             subject: commonName,
             email: null,
             isLocalDevelopment: false,
           }
         : {
+            kind: "access",
             provider: "cloudflare_access",
             subject: typeof payload.sub === "string" ? payload.sub.trim() : "",
             email: typeof payload.email === "string" ? payload.email : null,
