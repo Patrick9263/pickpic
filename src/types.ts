@@ -102,6 +102,22 @@ export interface EventStorageRecord {
   totalBytes: number;
 }
 
+export interface SessionAccount {
+  id: string;
+  name: string;
+}
+
+export interface SessionUser {
+  id: string;
+  email: string;
+  role: string;
+}
+
+export interface SessionResponse {
+  account: SessionAccount;
+  user: SessionUser;
+}
+
 export interface StorageUsageRecord {
   photoCount: number;
   finalCount: number;

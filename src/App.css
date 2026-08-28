@@ -32,6 +32,17 @@
   padding: 7px 11px;
 }
 
+.header-account {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.header-account span {
+  color: #625f58;
+  font-size: 0.875rem;
+}
+
 .dashboard {
   display: grid;
   gap: 32px;
@@ -113,6 +124,11 @@
 .form-row {
   display: flex;
   gap: 10px;
+}
+
+.sign-in-form {
+  align-self: flex-start;
+  margin-top: 24px;
 }
 
 input {
@@ -724,6 +740,7 @@ button:disabled {
 }
 
 .environment-badge,
+.header-account span,
 .hero-description,
 .section-description,
 .created-date,

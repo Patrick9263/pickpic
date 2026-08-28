@@ -4,6 +4,7 @@ import {
   useState,
   type ChangeEvent,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import EditingQueue from "../components/EditingQueue";
 import type {
@@ -180,7 +181,11 @@ async function uploadImageVariants(
   return response.variants;
 }
 
-function DashboardPage() {
+interface DashboardPageProps {
+  headerExtra?: ReactNode;
+}
+
+function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [photosByEvent, setPhotosByEvent] = useState<
     Record<string, PhotoRecord[]>
@@ -1160,6 +1165,8 @@ function DashboardPage() {
         {import.meta.env.DEV && (
           <span className="environment-badge">Local development</span>
         )}
+
+        {headerExtra}
       </header>
 
       <main className="dashboard">
