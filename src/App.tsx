@@ -1,11 +1,18 @@
 import "./App.css";
 
+import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
+import SignInPage from "./pages/SignInPage";
 
 const ADMIN_APP_ORIGIN = (
   import.meta.env.VITE_ADMIN_APP_ORIGIN || window.location.origin
 ).replace(/\/+$/, "");
+
+// No window.location.origin fallback here, unlike the origin vars above: this
+// value only comes from .env.production, so on a bare `npm run dev` it must
+// stay unset rather than making every localhost path match the app shell.
+const APP_ORIGIN = import.meta.env.VITE_APP_ORIGIN || null;
 
 function HomePage() {
   return (
@@ -49,8 +56,16 @@ function App() {
     return <GalleryPage shareToken={decodeURIComponent(galleryMatch[1])} />;
   }
 
+  if (/^\/sign-in\/?$/.test(pathname)) {
+    return <SignInPage />;
+  }
+
   if (/^\/admin\/?$/.test(pathname)) {
     return <DashboardPage />;
+  }
+
+  if (window.location.origin === APP_ORIGIN && pathname === "/") {
+    return <AppPage />;
   }
 
   if (pathname === "/") {

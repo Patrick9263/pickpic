@@ -79,3 +79,6 @@ jobs:
 
       - name: Deploy admin site
         run: npm run deploy:admin
+
+      - name: Deploy app site
+        run: npm run deploy:app
