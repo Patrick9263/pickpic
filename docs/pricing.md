@@ -45,15 +45,25 @@ commodity storage that will always be cheaper.
 
 ## Tiers
 
-|                  | Free / Beta      | Solo $15/mo | Studio $39/mo |
-| ---------------- | ---------------- | ----------- | ------------- |
-| Active galleries | 1                | 3           | unlimited     |
-| Photos per event | ~100             | unlimited   | unlimited     |
-| Included storage | 2 GB, a hard cap | 250 GB      | 1 TB          |
-| Over the cap     | uploads blocked  | $0.50/GB-mo | $0.50/GB-mo   |
-| Retention        | 30 days          | 1 year      | indefinite    |
-| Account users    | 1                | 1           | multiple      |
-| iPad RAW app     | not included     | included    | included      |
+|                    | Free / Beta      | Solo $15/mo   | Studio $39/mo   |
+| ------------------ | ---------------- | ------------- | --------------- |
+| Active galleries   | 1                | 3             | unlimited       |
+| Included storage   | 2 GB, a hard cap | 250 GB        | 1 TB            |
+| Roughly, in photos | 200-500          | 25,000-60,000 | 100,000-250,000 |
+| Over the cap       | uploads blocked  | $0.50/GB-mo   | $0.50/GB-mo     |
+| Retention          | 30 days          | 1 year        | indefinite      |
+| Account users      | 1                | 1             | multiple        |
+| iPad RAW app       | not included     | included      | included        |
+
+Storage is the limit that is actually enforced; there is no separate cap on the
+number of photos. The photo figures are an illustration, and they are a range
+rather than a number because per-photo size varies by a factor of two or three
+depending on the path a photo took. Proofs converted by the iPad app land near
+4 MB because the app controls the conversion. JPEGs uploaded through the website
+are whatever the photographer exported, and a full-size export can be 10 MB or
+more. Both numbers should be shown together in the interface, so that a
+photographer can see the ceiling in the unit they actually think in without being
+surprised when their own files fall at one end of the range.
 
 Multiple users per account needs no schema work: `account_users.role` already
 exists and 0013 deliberately left it without a CHECK constraint so a second role
@@ -71,14 +81,15 @@ uncollectable. The free ceiling must therefore **refuse the upload** with a clea
 "upgrade or delete a gallery" message. It must never produce a surprise bill and
 never silently drop photos.
 
-2 GB is roughly three times what the 100-photo limit actually produces, so no
-legitimate free user will reach it.
+2 GB is enough for a real shoot to be proofed end to end, which is the point of
+the tier, while staying far below anything worth abusing.
 
 The stronger protection is structural rather than numeric: free carries 30-day
-retention, so free storage never accumulates. Steady-state cost is the number of
-active free users multiplied by roughly 0.6 GB, not a figure that grows forever.
-Ten thousand simultaneously saturated free accounts would be about 20 TB, or
-roughly $300 a month, and reality will be far below that.
+retention, so free storage never accumulates. Cost is bounded by the number of
+free accounts currently holding a gallery, not by how many have ever signed up.
+Ten thousand of them sitting exactly at the 2 GB ceiling would be 20 TB, or
+roughly $300 a month, and that is the ceiling rather than the expectation --
+most free galleries will be a fraction of the cap and will expire in a month.
 
 Free doubles as the beta tier. The beta terms should say plainly that limits
 tighten at general availability, so that tightening them later reads as expected
@@ -97,7 +108,7 @@ about $15 against $39.
 In the interface, retention should be the limit users see and think about. The
 gigabyte meter belongs in the background.
 
-## The single event pass
+## The per-event pass
 
 Roughly $9, sold as a credit rather than as an immediately-starting window.
 
@@ -121,8 +132,8 @@ single $9 payment buys perpetual storage rent. Purging at day 180 fixes the
 liability at roughly $0.23 of storage per pass, which is a number the business
 can plan around.
 
-A +90-day extension at around $4 should exist, but the real purpose of expiry is
-conversion. A photographer looking at galleries about to purge is the easiest
+90 additional days, at around $4, should be purchasable, but the real purpose of
+expiry is conversion. A photographer looking at galleries about to purge is the easiest
 subscription sale available.
 
 Deleting is defensible here in a way it would not be for a general storage
@@ -161,7 +172,7 @@ removed them deliberately.
 
 Notifications are a prerequisite of the lifecycle above, not a feature alongside
 it. A gallery cannot be purged on day 180 without its owner having been warned,
-so the event pass cannot ship until a delivery channel exists.
+so the per-event pass cannot ship until a delivery channel exists.
 
 Users choose email, in-app, or both, per notification type.
 
