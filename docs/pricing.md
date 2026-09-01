@@ -45,25 +45,24 @@ commodity storage that will always be cheaper.
 
 ## Tiers
 
-|                    | Free / Beta      | Solo $15/mo   | Studio $39/mo   |
-| ------------------ | ---------------- | ------------- | --------------- |
-| Active galleries   | 1                | 3             | unlimited       |
-| Included storage   | 2 GB, a hard cap | 250 GB        | 1 TB            |
-| Roughly, in photos | 200-500          | 25,000-60,000 | 100,000-250,000 |
-| Over the cap       | uploads blocked  | $0.50/GB-mo   | $0.50/GB-mo     |
-| Retention          | 30 days          | 1 year        | indefinite      |
-| Account users      | 1                | 1             | multiple        |
-| iPad RAW app       | not included     | included      | included        |
+|                  | Free / Beta      | Solo $15/mo | Studio $39/mo |
+| ---------------- | ---------------- | ----------- | ------------- |
+| Active galleries | 1                | 3           | unlimited     |
+| Included storage | 2 GB, a hard cap | 250 GB      | 1 TB          |
+| Over the cap     | uploads blocked  | $0.50/GB-mo | $0.50/GB-mo   |
+| Retention        | 30 days          | 1 year      | indefinite    |
+| Account users    | 1                | 1           | multiple      |
+| iPad RAW app     | not included     | included    | included      |
 
-Storage is the limit that is actually enforced; there is no separate cap on the
-number of photos. The photo figures are an illustration, and they are a range
-rather than a number because per-photo size varies by a factor of two or three
-depending on the path a photo took. Proofs converted by the iPad app land near
-4 MB because the app controls the conversion. JPEGs uploaded through the website
-are whatever the photographer exported, and a full-size export can be 10 MB or
-more. Both numbers should be shown together in the interface, so that a
-photographer can see the ceiling in the unit they actually think in without being
-surprised when their own files fall at one end of the range.
+Storage is the only limit enforced on volume. There is no separate cap on the
+number of photos, and none should be added: a second limit would bind
+unpredictably, since per-photo size varies by a factor of two or three depending
+on how the photo arrived. A proof converted by the iPad app lands near 4 MB
+because the app controls the conversion, while a full-size JPEG exported and
+uploaded through the website can be 10 MB or more. Quoting a photo count
+alongside the cap was considered and rejected for the same reason -- any number
+honest enough to cover both paths is too wide to be useful, and a tighter one
+would be wrong for half of the photographers reading it.
 
 Multiple users per account needs no schema work: `account_users.role` already
 exists and 0013 deliberately left it without a CHECK constraint so a second role
