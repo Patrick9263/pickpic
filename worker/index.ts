@@ -3598,193 +3598,201 @@ async function handleAdminRequest(
 
 export default {
   async fetch(request, env, ctx): Promise<Response> {
-    const url = new URL(request.url);
-
-    /*
-     * Ahead of the admin block because these are the routes that mint the
-     * credential the admin block checks, so they cannot themselves require one.
-     */
-    const authResponse = await handleAuthRequest(
-      request,
-      url,
-      env.DB,
-      env as Env & AuthEnvironment,
-    );
-
-    if (authResponse) {
-      return authResponse;
+    try {
+      return await routeRequest(request, env, ctx);
+    } catch (error) {
+      console.error("Unhandled error while routing request:", error);
+      return jsonResponse({ error: "Internal server error." }, 500);
     }
-
-    if (url.pathname.startsWith("/api/admin/")) {
-      const access = await requireAdminPrincipal(
-        request,
-        env.DB,
-        env as Env & AuthEnvironment,
-        ctx,
-      );
-
-      if (!access.ok) {
-        return access.response;
-      }
-
-      const account = await resolveAccountForPrincipal(
-        env.DB,
-        access.principal,
-      );
-
-      if (!account || account.status !== "active") {
-        return jsonResponse({ error: "This account is not available." }, 403);
-      }
-
-      const adminResponse = await handleAdminRequest(
-        request,
-        url,
-        env,
-        ctx,
-        createAccountScope(account, resolveAccountDatabase(env, account)),
-      );
-
-      if (adminResponse) {
-        return adminResponse;
-      }
-    }
-
-    const galleryPhotoImageMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/image$/,
-    );
-
-    if (galleryPhotoImageMatch) {
-      if (request.method !== "GET") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      return getGalleryPhotoImage(
-        env,
-        decodeURIComponent(galleryPhotoImageMatch[1]),
-        decodeURIComponent(galleryPhotoImageMatch[2]),
-      );
-    }
-
-    const galleryPhotoFinalImageMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/final-image$/,
-    );
-
-    if (galleryPhotoFinalImageMatch) {
-      if (request.method !== "GET") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      return getGalleryFinalPhotoImage(
-        env,
-        decodeURIComponent(galleryPhotoFinalImageMatch[1]),
-        decodeURIComponent(galleryPhotoFinalImageMatch[2]),
-      );
-    }
-
-    const galleryPhotoVariantImageMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/variants\/(original|final)\/(thumbnail|preview)$/,
-    );
-
-    if (galleryPhotoVariantImageMatch) {
-      if (request.method !== "GET") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      return getGalleryPhotoVariantImage(
-        env,
-        decodeURIComponent(galleryPhotoVariantImageMatch[1]),
-        decodeURIComponent(galleryPhotoVariantImageMatch[2]),
-        galleryPhotoVariantImageMatch[3] as PhotoVariantSource,
-        galleryPhotoVariantImageMatch[4] as PhotoVariantKind,
-      );
-    }
-
-    const galleryHeartMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/heart$/,
-    );
-
-    if (galleryHeartMatch) {
-      const shareToken = decodeURIComponent(galleryHeartMatch[1]);
-      const photoId = decodeURIComponent(galleryHeartMatch[2]);
-
-      if (request.method === "PUT") {
-        return addHeart(request, env, shareToken, photoId);
-      }
-
-      if (request.method === "DELETE") {
-        return removeHeart(request, env, shareToken, photoId);
-      }
-
-      return jsonResponse({ error: "Method not allowed." }, 405);
-    }
-
-    const galleryMutationMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|comments(?:\/[^/]+)?)$/,
-    );
-
-    if (galleryMutationMatch && request.method !== "GET") {
-      const shareToken = decodeURIComponent(galleryMutationMatch[1]);
-
-      const galleryGuard = await requireOpenGallery(env, shareToken);
-
-      if (galleryGuard) {
-        return galleryGuard;
-      }
-    }
-
-    const galleryCommentMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/comments\/([^/]+)$/,
-    );
-
-    if (galleryCommentMatch) {
-      const shareToken = decodeURIComponent(galleryCommentMatch[1]);
-      const photoId = decodeURIComponent(galleryCommentMatch[2]);
-      const commentId = decodeURIComponent(galleryCommentMatch[3]);
-
-      if (request.method === "PUT") {
-        return updateComment(request, env, shareToken, photoId, commentId);
-      }
-
-      if (request.method === "DELETE") {
-        return deleteComment(request, env, shareToken, photoId, commentId);
-      }
-
-      return jsonResponse({ error: "Method not allowed." }, 405);
-    }
-
-    const galleryCommentsMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/comments$/,
-    );
-
-    if (galleryCommentsMatch) {
-      if (request.method !== "POST") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const shareToken = decodeURIComponent(galleryCommentsMatch[1]);
-      const photoId = decodeURIComponent(galleryCommentsMatch[2]);
-
-      return addComment(request, env, shareToken, photoId);
-    }
-
-    const publicGalleryMatch = url.pathname.match(
-      /^\/api\/galleries\/([^/]+)$/,
-    );
-
-    if (publicGalleryMatch) {
-      if (request.method !== "GET") {
-        return jsonResponse({ error: "Method not allowed." }, 405);
-      }
-
-      const shareToken = decodeURIComponent(publicGalleryMatch[1]);
-
-      return getPublicGallery(request, env, shareToken);
-    }
-
-    if (url.pathname.startsWith("/api/")) {
-      return jsonResponse({ error: "API route not found." }, 404);
-    }
-
-    return new Response(null, { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
+
+async function routeRequest(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const url = new URL(request.url);
+
+  /*
+   * Ahead of the admin block because these are the routes that mint the
+   * credential the admin block checks, so they cannot themselves require one.
+   */
+  const authResponse = await handleAuthRequest(
+    request,
+    url,
+    env.DB,
+    env as Env & AuthEnvironment,
+  );
+
+  if (authResponse) {
+    return authResponse;
+  }
+
+  if (url.pathname.startsWith("/api/admin/")) {
+    const access = await requireAdminPrincipal(
+      request,
+      env.DB,
+      env as Env & AuthEnvironment,
+      ctx,
+    );
+
+    if (!access.ok) {
+      return access.response;
+    }
+
+    const account = await resolveAccountForPrincipal(env.DB, access.principal);
+
+    if (!account || account.status !== "active") {
+      return jsonResponse({ error: "This account is not available." }, 403);
+    }
+
+    const adminResponse = await handleAdminRequest(
+      request,
+      url,
+      env,
+      ctx,
+      createAccountScope(account, resolveAccountDatabase(env, account)),
+    );
+
+    if (adminResponse) {
+      return adminResponse;
+    }
+  }
+
+  const galleryPhotoImageMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/image$/,
+  );
+
+  if (galleryPhotoImageMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getGalleryPhotoImage(
+      env,
+      decodeURIComponent(galleryPhotoImageMatch[1]),
+      decodeURIComponent(galleryPhotoImageMatch[2]),
+    );
+  }
+
+  const galleryPhotoFinalImageMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/final-image$/,
+  );
+
+  if (galleryPhotoFinalImageMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getGalleryFinalPhotoImage(
+      env,
+      decodeURIComponent(galleryPhotoFinalImageMatch[1]),
+      decodeURIComponent(galleryPhotoFinalImageMatch[2]),
+    );
+  }
+
+  const galleryPhotoVariantImageMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/variants\/(original|final)\/(thumbnail|preview)$/,
+  );
+
+  if (galleryPhotoVariantImageMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getGalleryPhotoVariantImage(
+      env,
+      decodeURIComponent(galleryPhotoVariantImageMatch[1]),
+      decodeURIComponent(galleryPhotoVariantImageMatch[2]),
+      galleryPhotoVariantImageMatch[3] as PhotoVariantSource,
+      galleryPhotoVariantImageMatch[4] as PhotoVariantKind,
+    );
+  }
+
+  const galleryHeartMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/heart$/,
+  );
+
+  if (galleryHeartMatch) {
+    const shareToken = decodeURIComponent(galleryHeartMatch[1]);
+    const photoId = decodeURIComponent(galleryHeartMatch[2]);
+
+    if (request.method === "PUT") {
+      return addHeart(request, env, shareToken, photoId);
+    }
+
+    if (request.method === "DELETE") {
+      return removeHeart(request, env, shareToken, photoId);
+    }
+
+    return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  const galleryMutationMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|comments(?:\/[^/]+)?)$/,
+  );
+
+  if (galleryMutationMatch && request.method !== "GET") {
+    const shareToken = decodeURIComponent(galleryMutationMatch[1]);
+
+    const galleryGuard = await requireOpenGallery(env, shareToken);
+
+    if (galleryGuard) {
+      return galleryGuard;
+    }
+  }
+
+  const galleryCommentMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/comments\/([^/]+)$/,
+  );
+
+  if (galleryCommentMatch) {
+    const shareToken = decodeURIComponent(galleryCommentMatch[1]);
+    const photoId = decodeURIComponent(galleryCommentMatch[2]);
+    const commentId = decodeURIComponent(galleryCommentMatch[3]);
+
+    if (request.method === "PUT") {
+      return updateComment(request, env, shareToken, photoId, commentId);
+    }
+
+    if (request.method === "DELETE") {
+      return deleteComment(request, env, shareToken, photoId, commentId);
+    }
+
+    return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  const galleryCommentsMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/comments$/,
+  );
+
+  if (galleryCommentsMatch) {
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const shareToken = decodeURIComponent(galleryCommentsMatch[1]);
+    const photoId = decodeURIComponent(galleryCommentsMatch[2]);
+
+    return addComment(request, env, shareToken, photoId);
+  }
+
+  const publicGalleryMatch = url.pathname.match(/^\/api\/galleries\/([^/]+)$/);
+
+  if (publicGalleryMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const shareToken = decodeURIComponent(publicGalleryMatch[1]);
+
+    return getPublicGallery(request, env, shareToken);
+  }
+
+  if (url.pathname.startsWith("/api/")) {
+    return jsonResponse({ error: "API route not found." }, 404);
+  }
+
+  return new Response(null, { status: 404 });
+}
