@@ -174,6 +174,29 @@ button:disabled {
   opacity: 0.5;
 }
 
+/*
+ * The sign-up form stacks four .form-row blocks where every other form has one,
+ * and .create-form label carries no top margin. Scoped to the new class on
+ * purpose: .form-row, .create-form and .sign-in-form are shared with the
+ * dashboard's create-event panel.
+ *
+ * The explicit width is load-bearing rather than cosmetic. .create-form and
+ * .sign-in-form both set align-self, which makes the form shrink to fit its
+ * content, and every other form using them puts an input and a button in one
+ * .form-row so that content is already wide. Here each row holds a single
+ * input, so the form collapsed to one input's intrinsic ~205px and the
+ * `flex: 1` on input had nothing to fill.
+ */
+.sign-up-form {
+  max-width: 420px;
+  width: 100%;
+}
+
+.sign-up-form .form-row + label,
+.sign-up-form .character-count + label {
+  margin-top: 18px;
+}
+
 .character-count {
   color: #8a867e;
   display: block;

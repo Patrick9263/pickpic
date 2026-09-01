@@ -21,8 +21,10 @@ npm run lint             # oxlint (native binding; macOS-capable here)
 npm run format           # prettier --write .
 npm run build             # tsc -b && vite build
 npm run build:admin       # same build with CLOUDFLARE_ENV=admin
+npm run build:app         # same build with CLOUDFLARE_ENV=app
 npm run deploy             # build + wrangler deploy (public worker)
 npm run deploy:admin       # build:admin + wrangler deploy (admin worker)
+npm run deploy:app         # build:app + wrangler deploy (app worker)
 npm run cf-typegen         # regenerate worker-configuration.d.ts from wrangler.jsonc bindings
 ```
 
@@ -129,16 +131,17 @@ Nothing may depend on GPS being present. **Filename and capture time are the rel
 
 ## Architecture
 
-### One Worker codebase, two deployments
+### One Worker codebase, three deployments
 
-[worker/index.ts](worker/index.ts) is a single Cloudflare Worker deployed under two `wrangler.jsonc` targets sharing one D1 database (`pickpic-db`, binding `DB`) and one R2 bucket (`pickpic-photos`, binding `pickpic_photos`):
+[worker/index.ts](worker/index.ts) is a single Cloudflare Worker deployed under three `wrangler.jsonc` targets sharing one D1 database (`pickpic-db`, binding `DB`) and one R2 bucket (`pickpic-photos`, binding `pickpic_photos`):
 
 | Deployment  | Worker          | Domain                 | Auth              |
 | ----------- | --------------- | ---------------------- | ----------------- |
 | default env | `pickpic`       | `pickpic.photos`       | public            |
 | `admin` env | `pickpic-admin` | `admin.pickpic.photos` | Cloudflare Access |
+| `app` env   | `pickpic-app`   | `app.pickpic.photos`   | session cookie    |
 
-Both run identical code. `/api/admin/*` is gated in `fetch` by `requireAdminPrincipal` ([worker/auth.ts](worker/auth.ts)), which dispatches on the `AUTH_MODE` var:
+All three run identical code. `/api/admin/*` is gated in `fetch` by `requireAdminPrincipal` ([worker/auth.ts](worker/auth.ts)), which dispatches on the `AUTH_MODE` var:
 
 - `access` (the default when unset, and what both current deployments use) → `requireAdminAccess` ([worker/access.ts](worker/access.ts)), which verifies the `Cf-Access-Jwt-Assertion` header against Access's JWKS and is a deliberate no-op on localhost.
 - `session` → one of our own `__Host-pickpic_session` cookies, for the coming `app.pickpic.photos`, which has no Access in front of it.
@@ -152,6 +155,8 @@ Access protection on the admin worker and the custom domains are load-bearing �
 `AdminPrincipal` is a discriminated union (`kind: "access" | "session"`), and `resolveAccountForPrincipal` switches on it: an Access principal resolves to the bootstrap account, a session principal to the account its `account_users` row names. Adding a third variant without handling it there is a compile error, which is the point.
 
 Session cookies and magic-link tokens live in `auth_sessions` / `auth_login_tokens` (migration 0015); only SHA-256 hashes are stored. The `/api/auth/*` routes exist **only where `AUTH_MODE` is `session`** and 404 everywhere else, so the public gallery origin carries no email-sending endpoint and a magic link can only ever be built from the origin that will honour it.
+
+Signing up is `POST /api/auth/signup` plus `/api/auth/signup/consume`, gated on a single shared `SIGNUP_INVITE_CODE` secret — unset means both answer 503, which is the intended state everywhere except `app.pickpic.photos`. Neither writes an `accounts` or `account_users` row: the intended email and studio name sit in `auth_signup_tokens` (migration 0016) until the emailed link is clicked, because `account_users` is unique on `(auth_provider, auth_subject)` and a row written before the address is proven would let anyone holding the code claim someone else's email permanently.
 
 Because cookies are sent automatically where the Access header pair never was, every non-GET under `/api/admin/*` and `/api/auth/*` also requires a matching `Origin` header — testing those with `curl` needs `-H "Origin: <base>"` or it's a 403.
 
@@ -187,10 +192,10 @@ The app polls for newly-hearted photos and copies matching RAW files into a loca
 
 ### CI/CD
 
-[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. Pushes to `main` additionally deploy both workers (`npm run deploy`, then `npm run deploy:admin`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
+[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. Pushes to `main` additionally deploy all three workers (`npm run deploy`, then `npm run deploy:admin`, then `npm run deploy:app`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
 
 ## Conventions
 
 - Keep changes PR-sized; avoid unrelated refactors. Inspect current `main` before proposing anything.
-- **Never commit secrets** — Cloudflare Access service tokens, Telegram bot tokens or chat IDs, deployment credentials. Runtime secrets live in Cloudflare.
+- **Never commit secrets** — Cloudflare Access service tokens, Telegram bot tokens or chat IDs, the `SIGNUP_INVITE_CODE`, deployment credentials. Runtime secrets live in Cloudflare.
 - Don't casually revert: the mobile Liked-filter lightbox behaviour, the large ZIP download fix, backward compatibility for older queue data, custom domains, or Access protection on the admin worker.

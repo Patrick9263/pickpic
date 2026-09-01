@@ -4,6 +4,7 @@ import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
 import SignInPage from "./pages/SignInPage";
+import SignUpPage from "./pages/SignUpPage";
 
 const ADMIN_APP_ORIGIN = (
   import.meta.env.VITE_ADMIN_APP_ORIGIN || window.location.origin
@@ -58,6 +59,10 @@ function App() {
 
   if (/^\/sign-in\/?$/.test(pathname)) {
     return <SignInPage />;
+  }
+
+  if (/^\/sign-up\/?$/.test(pathname)) {
+    return <SignUpPage />;
   }
 
   if (/^\/admin\/?$/.test(pathname)) {

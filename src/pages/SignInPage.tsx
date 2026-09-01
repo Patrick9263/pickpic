@@ -122,6 +122,15 @@ function SignInPage() {
         </form>
       )}
 
+      {/* A plain link, not a click handler: App.tsx reads
+          window.location.pathname once at render and has no history listener,
+          so a pushState navigation would change the URL and render nothing. */}
+      {!isConsuming && (
+        <p>
+          New to PickPic? <a href="/sign-up">Create an account</a>.
+        </p>
+      )}
+
       {error && (
         <div className="error-message" role="alert">
           <span>{error}</span>
