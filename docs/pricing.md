@@ -52,7 +52,7 @@ commodity storage that will always be cheaper.
 | Over the cap     | uploads blocked  | $0.50/GB-mo | $0.50/GB-mo   |
 | Retention        | 30 days          | 1 year      | indefinite    |
 | Account users    | 1                | 1           | multiple      |
-| iPad RAW app     | not included     | included    | included      |
+| iPad RAW app     | included         | included    | included      |
 
 Storage is the only limit enforced on volume. There is no separate cap on the
 number of photos, and none should be added: a second limit would bind
@@ -68,9 +68,19 @@ Multiple users per account needs no schema work: `account_users.role` already
 exists and 0013 deliberately left it without a CHECK constraint so a second role
 can be added freely.
 
-The iPad app is the paid tier's differentiator. Durable RAW ingest with an
-on-device queue that survives suspension is the part of PickPic that is hard to
-copy, and giving it away spends the advantage.
+The iPad app is included at every tier, free included. It is the part of PickPic
+that is hard to copy -- durable RAW ingest with an on-device queue that survives
+suspension -- which is an argument for showing it to everyone rather than for
+withholding it. A free tier that offers only web JPEG upload demonstrates the
+commodity half of the product, so a photographer would evaluate PickPic on
+exactly the terms where it looks ordinary. Beta testers in particular are there
+to exercise the RAW pipeline, and cannot do that behind a paywall.
+
+It also costs nothing per user to include: the conversion runs on the
+photographer's own iPad. The limits that drive an upgrade are the ones already in
+the table -- how many galleries can be live at once, and how long they stay up --
+and those are better levers, because they bind on the photographer's actual
+volume of work rather than on which device they happened to use.
 
 ### The free tier blocks; the paid tiers meter
 
