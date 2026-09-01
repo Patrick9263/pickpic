@@ -14,11 +14,49 @@ const DEFAULT_FROM = "PickPic <login@pickpic.photos>";
 
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
+/*
+ * Which of the two links this message carries. Both are a single-use URL that
+ * signs the recipient in; they differ only in whether an account exists on the
+ * other side of it.
+ */
+export type AuthEmailKind = "sign-in" | "sign-up";
+
 export interface MagicLinkEmail {
+  kind: AuthEmailKind;
   to: string;
   url: string;
   expiresInMinutes: number;
 }
+
+/*
+ * The only thing the two emails do not share. Keying a Record on the union
+ * rather than branching inside each renderer makes adding a third kind -- Sign
+ * in with Apple, an address change -- a compile error until its copy is
+ * written, instead of a silent fall-through to the sign-in wording.
+ *
+ * Nothing here interpolates caller-supplied text, and nothing may start to. The
+ * studio name a signup collects is attacker-controlled, renderHtml does not
+ * escape, and this mail goes out from the domain every customer's sign-in
+ * deliverability depends on.
+ */
+const COPY: Record<
+  AuthEmailKind,
+  { subject: string; lead: string; cta: string; ignore: string }
+> = {
+  "sign-in": {
+    subject: "Your PickPic sign-in link",
+    lead: "Sign in to PickPic:",
+    cta: "Open PickPic",
+    ignore: "If you did not ask to sign in, you can ignore this email.",
+  },
+  "sign-up": {
+    subject: "Confirm your PickPic account",
+    lead: "Finish creating your PickPic account:",
+    cta: "Create my account",
+    ignore:
+      "If you did not ask to create an account, you can ignore this email -- nothing has been created yet.",
+  },
+};
 
 /*
  * Sends the link, or prints it, and throws if it can do neither.
@@ -41,7 +79,7 @@ export async function sendMagicLinkEmail(
       throw new Error("RESEND_API_KEY is not configured.");
     }
 
-    console.log(`[auth] magic link for ${email.to}: ${email.url}`);
+    console.log(`[auth] ${email.kind} link for ${email.to}: ${email.url}`);
 
     return;
   }
@@ -55,7 +93,7 @@ export async function sendMagicLinkEmail(
     body: JSON.stringify({
       from: environment.MAGIC_LINK_FROM?.trim() || DEFAULT_FROM,
       to: [email.to],
-      subject: "Your PickPic sign-in link",
+      subject: COPY[email.kind].subject,
       text: renderText(email),
       html: renderHtml(email),
     }),
@@ -68,22 +106,29 @@ export async function sendMagicLinkEmail(
      * in a response that must stay identical for known and unknown addresses.
      */
     console.error(
-      `Resend rejected a magic-link email with status ${response.status}:`,
+      `Resend rejected a ${email.kind} email with status ${response.status}:`,
       await response.text(),
     );
 
-    throw new Error("The sign-in email could not be sent.");
+    /*
+     * Generic on purpose. Every caller substitutes its own user-facing string,
+     * and those strings have to match across callers -- see the sendFailureMessage
+     * parameter in worker/auth.ts -- so nothing should ever surface this one.
+     */
+    throw new Error("The email could not be sent.");
   }
 }
 
 function renderText(email: MagicLinkEmail): string {
+  const copy = COPY[email.kind];
+
   return [
-    "Sign in to PickPic:",
+    copy.lead,
     "",
     email.url,
     "",
     `This link works once and expires in ${email.expiresInMinutes} minutes.`,
-    "If you did not ask to sign in, you can ignore this email.",
+    copy.ignore,
   ].join("\n");
 }
 
@@ -92,12 +137,14 @@ function renderHtml(email: MagicLinkEmail): string {
    * The href is a URL this worker just built from its own origin and a
    * base64url token, so it contains no character that needs escaping here.
    */
+  const copy = COPY[email.kind];
+
   return [
     '<div style="font-family: system-ui, sans-serif; font-size: 16px; line-height: 1.5;">',
-    "<p>Sign in to PickPic:</p>",
-    `<p><a href="${email.url}">Open PickPic</a></p>`,
+    `<p>${copy.lead}</p>`,
+    `<p><a href="${email.url}">${copy.cta}</a></p>`,
     `<p>This link works once and expires in ${email.expiresInMinutes} minutes.</p>`,
-    "<p>If you did not ask to sign in, you can ignore this email.</p>",
+    `<p>${copy.ignore}</p>`,
     "</div>",
   ].join("");
 }

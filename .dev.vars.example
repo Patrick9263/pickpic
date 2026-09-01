@@ -29,3 +29,21 @@ AUTH_MODE=session
 # Must be an address on a domain verified with Resend, or every send is
 # rejected. Defaults to "PickPic <login@pickpic.photos>".
 # MAGIC_LINK_FROM=PickPic <login@pickpic.photos>
+
+# The single shared code /api/auth/signup requires, and the whole of its access
+# control. Signing up is the one unauthenticated way to create an account, and
+# there is no billing yet, so an open form would let a stranger fill the R2
+# bucket at our expense.
+#
+# Unset switches signup off entirely rather than opening it: both endpoints
+# answer 503 and no account can be created. That is the intended state for every
+# deployment except app.pickpic.photos, which is why this is a secret rather than
+# a var in wrangler.jsonc -- `wrangler secret put SIGNUP_INVITE_CODE --env app`.
+#
+# Rotating it is the entire revocation story: changing the value invalidates
+# every code handed out before and every confirmation link still in flight.
+#
+# Set rather than commented out, unlike RESEND_API_KEY, because there is no
+# console fallback here -- leaving it unset means signup cannot be exercised
+# locally at all.
+SIGNUP_INVITE_CODE=local-dev-invite

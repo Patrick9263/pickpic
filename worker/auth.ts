@@ -39,10 +39,32 @@ export type AuthMode = "access" | "session";
 export type AuthEnvironment = AccessEnvironment &
   EmailEnvironment & {
     AUTH_MODE?: string;
+
+    /*
+     * The single shared code /api/auth/signup requires, and the whole of its
+     * access control. A secret rather than a var in wrangler.jsonc, for the same
+     * reason RESEND_API_KEY is one.
+     *
+     * Unset switches signup off entirely rather than opening it: creating an
+     * account is the one unauthenticated way to start consuming R2, and there is
+     * no billing yet to bound what a stranger could store. Rotating the value is
+     * the entire revocation story.
+     */
+    SIGNUP_INVITE_CODE?: string;
   };
 
 /** How long an emailed link stays redeemable. */
 const LOGIN_TOKEN_TTL_MINUTES = 15;
+
+/*
+ * Longer than a sign-in link because a signup arrives cold -- reading an
+ * onboarding email, finding the code that came with it, possibly moving to
+ * another device -- where a sign-in link is requested by somebody already at the
+ * keyboard. The token is 256 bits and single-use either way, so the extra
+ * minutes only widen the window for an attacker who can already read the inbox,
+ * and that attacker has won regardless.
+ */
+const SIGNUP_TOKEN_TTL_MINUTES = 30;
 
 /*
  * A cap on live tokens per user, not a time-window counter: it is the number of
@@ -51,13 +73,45 @@ const LOGIN_TOKEN_TTL_MINUTES = 15;
  */
 const MAX_LIVE_LOGIN_TOKENS = 5;
 
+/*
+ * The same idea keyed on the address, since a signup has no account_user to key
+ * on yet. Lower than MAX_LIVE_LOGIN_TOKENS because signing up is a once-ever
+ * action and signing in is not.
+ */
+const MAX_LIVE_SIGNUP_TOKENS_PER_EMAIL = 3;
+
+/*
+ * The cap that matters when it matters: a per-address cap does nothing against a
+ * leaked invite code sprayed at ten thousand distinct addresses. A limit shared
+ * across tenants would be indefensible on /api/auth/magic-link -- one noisy
+ * account would lock everyone else out -- but signing up happens a handful of
+ * times ever, so twenty simultaneously outstanding invitations means either an
+ * extraordinary day or a leaked code, and pausing is the right answer to both.
+ * It also bounds how much mail a leaked code can send from the domain every
+ * existing customer's sign-in links depend on.
+ */
+const MAX_LIVE_SIGNUP_TOKENS = 20;
+
 const MAX_EMAIL_LENGTH = 254;
+
+/** Bounds what a caller can make us hash before the code is even compared. */
+const MAX_INVITE_CODE_LENGTH = 200;
+
+/** Copied from the CHECK on accounts.name, which is where this value lands. */
+const MAX_ACCOUNT_NAME_LENGTH = 120;
 
 interface MagicLinkRequestBody {
   email?: unknown;
 }
 
-interface ConsumeMagicLinkBody {
+interface SignupRequestBody {
+  email?: unknown;
+  accountName?: unknown;
+  inviteCode?: unknown;
+}
+
+/** Both consume endpoints take the same one-field body. */
+interface ConsumeTokenBody {
   token?: unknown;
 }
 
@@ -68,9 +122,27 @@ interface AccountUserRow {
   role: string;
 }
 
+/*
+ * Deliberately carries the account status rather than filtering on it, so signup
+ * can tell "no account" from "an account that is not active" and answer each
+ * without minting a token that is guaranteed to fail later.
+ */
+interface AccountUserStatusRow {
+  id: string;
+  accountStatus: string;
+}
+
 interface LoginTokenRow {
   id: string;
   accountUserId: string;
+  expiresAt: string;
+  consumedAt: string | null;
+}
+
+interface SignupTokenRow {
+  id: string;
+  email: string;
+  accountName: string;
   expiresAt: string;
   consumedAt: string | null;
 }
@@ -114,6 +186,47 @@ export function resolveAuthMode(environment: AuthEnvironment): AuthMode | null {
   console.error(`AUTH_MODE is set to an unknown value: ${mode}`);
 
   return null;
+}
+
+/*
+ * Null means signup is switched off for this deployment, which is the intended
+ * state everywhere except app.pickpic.photos. Whitespace-only counts as unset,
+ * matching how resolveAuthMode and RESEND_API_KEY treat a blank value.
+ */
+function resolveSignupInviteCode(environment: AuthEnvironment): string | null {
+  const code = environment.SIGNUP_INVITE_CODE?.trim();
+
+  return code ? code : null;
+}
+
+/*
+ * Compares digests rather than the codes themselves, which makes the comparison
+ * independent of both the value and the length of the secret: two SHA-256 hex
+ * digests are always 64 characters.
+ *
+ * session.ts argues the opposite for token lookups, and both positions are
+ * right. A 256-bit random token is not guessable one byte at a time whatever it
+ * leaks about timing; a code a human chose and will type into a form is a
+ * different kind of secret, and four lines here means nobody has to have the
+ * argument again.
+ */
+async function matchesInviteCode(
+  supplied: string,
+  configured: string,
+): Promise<boolean> {
+  const [suppliedHash, configuredHash] = await Promise.all([
+    hashAuthToken(supplied),
+    hashAuthToken(configured),
+  ]);
+
+  let difference = 0;
+
+  for (let index = 0; index < suppliedHash.length; index += 1) {
+    difference |=
+      suppliedHash.charCodeAt(index) ^ configuredHash.charCodeAt(index);
+  }
+
+  return difference === 0;
 }
 
 /*
@@ -250,6 +363,44 @@ export async function handleAuthRequest(
     return consumeMagicLink(request, database);
   }
 
+  /*
+   * Both signup routes share one block, breaking this function's flat
+   * one-if-per-route shape on purpose: the gate below is the safety-relevant
+   * part of the feature and it should be impossible to add a third signup route
+   * that forgets it.
+   *
+   * An unset code answers 503 rather than falling through to the generic /api/
+   * 404. The SPA serves /sign-up from static assets whatever the worker is
+   * configured for, so a real person can reach that form on a misconfigured
+   * deployment, and "Request failed with status 404." is a worse thing to show
+   * them than an honest "not available". It still fails closed in the only sense
+   * that matters: no account, no token, no email. Covering the consume route too
+   * means rotating the code kills every confirmation link still in flight, which
+   * is what rotation is for.
+   */
+  if (
+    url.pathname === "/api/auth/signup" ||
+    url.pathname === "/api/auth/signup/consume"
+  ) {
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const inviteCode = resolveSignupInviteCode(environment);
+
+    if (inviteCode === null) {
+      console.error(
+        "SIGNUP_INVITE_CODE is not configured; signup is disabled.",
+      );
+
+      return jsonResponse({ error: "Signup is not available right now." }, 503);
+    }
+
+    return url.pathname === "/api/auth/signup"
+      ? requestSignup(request, url, database, environment, inviteCode)
+      : consumeSignup(request, database);
+  }
+
   if (url.pathname === "/api/auth/session") {
     if (request.method === "GET") {
       return getSession(request, database);
@@ -294,10 +445,11 @@ function normalizeEmail(value: unknown): string | null {
  * an account. Reporting "no such account" here would turn this endpoint into a
  * way to test which of a photographer's clients are PickPic customers.
  *
- * There is deliberately no sign-up path: an address only receives a link if
- * account_users already holds a row for it. Creating accounts is the next
- * roadmap step, and folding it in here would mean anyone who can reach the
- * endpoint can create one.
+ * This endpoint still cannot create anything: an address only receives a link if
+ * account_users already holds a row for it. Signing up lives at
+ * /api/auth/signup, behind SIGNUP_INVITE_CODE, and the two share the token
+ * machinery below through issueSignInLink -- signup mails a sign-in link when
+ * the address turns out to be an existing customer.
  */
 async function requestMagicLink(
   request: Request,
@@ -319,8 +471,6 @@ async function requestMagicLink(
     return jsonResponse({ error: "Enter a valid email address." }, 400);
   }
 
-  const accepted = jsonResponse({ ok: true });
-
   const accountUser = await database
     .prepare(
       `
@@ -340,8 +490,42 @@ async function requestMagicLink(
     .first<AccountUserRow>();
 
   if (!accountUser) {
-    return accepted;
+    return jsonResponse({ ok: true });
   }
+
+  return issueSignInLink(
+    request,
+    url,
+    database,
+    environment,
+    accountUser.id,
+    email,
+    "The sign-in email could not be sent. Try again.",
+  );
+}
+
+/*
+ * Mints and mails one sign-in link for an account_user that is already known to
+ * exist. Shared by /api/auth/magic-link and by signup's already-a-customer
+ * branch, so the token cap, the lifetime, the insert-before-send ordering and
+ * the rollback are identical across both by construction rather than by review.
+ *
+ * sendFailureMessage is a parameter for a reason that is easy to miss: if the
+ * two callers reported a provider outage differently, the wording of a 502 would
+ * tell the caller which branch ran -- that is, whether the address is a
+ * customer. Every other answer these endpoints give is already identical, and
+ * this is the one that would have leaked.
+ */
+async function issueSignInLink(
+  request: Request,
+  url: URL,
+  database: D1Database,
+  environment: AuthEnvironment,
+  accountUserId: string,
+  email: string,
+  sendFailureMessage: string,
+): Promise<Response> {
+  const accepted = jsonResponse({ ok: true });
 
   const now = new Date();
 
@@ -355,7 +539,7 @@ async function requestMagicLink(
           AND expires_at > ?
       `,
     )
-    .bind(accountUser.id, now.toISOString())
+    .bind(accountUserId, now.toISOString())
     .first<LiveTokenCountRow>();
 
   if ((liveTokens?.liveTokens ?? 0) >= MAX_LIVE_LOGIN_TOKENS) {
@@ -386,7 +570,7 @@ async function requestMagicLink(
     )
     .bind(
       tokenId,
-      accountUser.id,
+      accountUserId,
       await hashAuthToken(token),
       now.toISOString(),
       new Date(
@@ -415,6 +599,7 @@ async function requestMagicLink(
     await sendMagicLinkEmail(
       environment,
       {
+        kind: "sign-in",
         to: email,
         url: link.toString(),
         expiresInMinutes: LOGIN_TOKEN_TTL_MINUTES,
@@ -442,10 +627,7 @@ async function requestMagicLink(
 
     console.error("Failed to send a magic-link email:", error);
 
-    return jsonResponse(
-      { error: "The sign-in email could not be sent. Try again." },
-      502,
-    );
+    return jsonResponse({ error: sendFailureMessage }, 502);
   }
 
   return accepted;
@@ -461,10 +643,10 @@ async function consumeMagicLink(
   request: Request,
   database: D1Database,
 ): Promise<Response> {
-  let body: ConsumeMagicLinkBody;
+  let body: ConsumeTokenBody;
 
   try {
-    body = (await request.json()) as ConsumeMagicLinkBody;
+    body = (await request.json()) as ConsumeTokenBody;
   } catch {
     return jsonResponse({ error: "This sign-in link is not valid." }, 400);
   }
@@ -563,6 +745,556 @@ async function deleteConsumedLoginTokens(
     )
     .bind(accountUserId, new Date().toISOString())
     .run();
+}
+
+/*
+ * The half of signing up that creates nothing.
+ *
+ * No accounts or account_users row is written here. The address, the studio
+ * name and nothing else go into auth_signup_tokens, and only clicking the
+ * emailed link turns that into an account. account_users is unique on
+ * (auth_provider, auth_subject), so a row written before the address is proven
+ * would let anyone holding the invite code claim somebody else's email
+ * permanently, and undoing that would mean a delete path through two tables
+ * every foreign key reaches ON DELETE RESTRICT. There is no such path, by
+ * design, and this ordering is why none is needed.
+ */
+async function requestSignup(
+  request: Request,
+  url: URL,
+  database: D1Database,
+  environment: AuthEnvironment,
+  inviteCode: string,
+): Promise<Response> {
+  let body: SignupRequestBody;
+
+  try {
+    body = (await request.json()) as SignupRequestBody;
+  } catch {
+    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  }
+
+  /*
+   * Checked before the address and the name, so a caller without the code
+   * learns nothing at all -- not even whether an address is well formed -- and
+   * can never cause a write or a send. It is also the right order for a real
+   * person: fix the gate before anything else is worth mentioning.
+   *
+   * Saying plainly that the code is wrong is safe, unlike naming an unknown
+   * address. The code belongs to nobody and identifies nobody; concealing it
+   * would strand a typo at "check your email" forever to protect nothing.
+   */
+  const suppliedCode =
+    typeof body.inviteCode === "string" ? body.inviteCode.trim() : "";
+
+  if (
+    suppliedCode.length === 0 ||
+    suppliedCode.length > MAX_INVITE_CODE_LENGTH ||
+    !(await matchesInviteCode(suppliedCode, inviteCode))
+  ) {
+    return jsonResponse({ error: "That invite code is not valid." }, 403);
+  }
+
+  const email = normalizeEmail(body.email);
+
+  if (!email) {
+    return jsonResponse({ error: "Enter a valid email address." }, 400);
+  }
+
+  const accountName =
+    typeof body.accountName === "string" ? body.accountName.trim() : "";
+
+  if (
+    accountName.length === 0 ||
+    accountName.length > MAX_ACCOUNT_NAME_LENGTH
+  ) {
+    return jsonResponse(
+      {
+        error: `The studio name must be between 1 and ${MAX_ACCOUNT_NAME_LENGTH} characters.`,
+      },
+      400,
+    );
+  }
+
+  const accepted = jsonResponse({ ok: true });
+
+  /*
+   * Without the status = 'active' filter requestMagicLink uses, so that a
+   * disabled account is a case of its own instead of falling into the "no
+   * account" branch and being handed a signup token that is guaranteed to fail
+   * half an hour later.
+   */
+  const existing = await database
+    .prepare(
+      `
+        SELECT
+          u.id AS id,
+          a.status AS accountStatus
+        FROM account_users u
+        JOIN accounts a ON a.id = u.account_id
+        WHERE u.auth_provider = 'email'
+          AND u.auth_subject = ?
+      `,
+    )
+    .bind(email)
+    .first<AccountUserStatusRow>();
+
+  if (existing) {
+    if (existing.accountStatus !== "active") {
+      return accepted;
+    }
+
+    /*
+     * A customer who reached for the wrong form. Mailing a sign-in link gets
+     * them where they were going; the alternative -- answering {ok:true} and
+     * sending nothing -- leaves an honest person waiting on an email that will
+     * never arrive, to protect a fact the identical response body already
+     * protects. It cannot be turned into an attack either: the recipient is the
+     * account's own address, and the link is byte for byte what
+     * /api/auth/magic-link already mails that address unauthenticated.
+     *
+     * accountName is dropped here and must stay dropped. Letting a signup
+     * rename an existing studio because somebody holding the invite code typed
+     * that address into the form would be a real bug.
+     */
+    return issueSignInLink(
+      request,
+      url,
+      database,
+      environment,
+      existing.id,
+      email,
+      "The confirmation email could not be sent. Try again.",
+    );
+  }
+
+  const now = new Date();
+
+  const nowIso = now.toISOString();
+
+  /*
+   * Address-scoped, so it can never become an unbounded delete, and run before
+   * the counts so a previous attempt that has since expired does not go on
+   * occupying one of this address's slots.
+   */
+  await database
+    .prepare(
+      `
+        DELETE FROM auth_signup_tokens
+        WHERE email = ?
+          AND (consumed_at IS NOT NULL OR expires_at <= ?)
+      `,
+    )
+    .bind(email, nowIso)
+    .run();
+
+  const liveForEmail = await database
+    .prepare(
+      `
+        SELECT COUNT(*) AS liveTokens
+        FROM auth_signup_tokens
+        WHERE email = ?
+          AND consumed_at IS NULL
+          AND expires_at > ?
+      `,
+    )
+    .bind(email, nowIso)
+    .first<LiveTokenCountRow>();
+
+  if ((liveForEmail?.liveTokens ?? 0) >= MAX_LIVE_SIGNUP_TOKENS_PER_EMAIL) {
+    // Silently, and with the same body as a success, for the reason the
+    // login-token cap gives: being told you are throttled is being told the
+    // request would otherwise have done something.
+    return accepted;
+  }
+
+  const liveOverall = await database
+    .prepare(
+      `
+        SELECT COUNT(*) AS liveTokens
+        FROM auth_signup_tokens
+        WHERE consumed_at IS NULL
+          AND expires_at > ?
+      `,
+    )
+    .bind(nowIso)
+    .first<LiveTokenCountRow>();
+
+  if ((liveOverall?.liveTokens ?? 0) >= MAX_LIVE_SIGNUP_TOKENS) {
+    /*
+     * Logged, unlike the per-address cap. A routine per-user rate limit is
+     * noise; twenty outstanding invitations at once is either a remarkable day
+     * or a leaked code, and both are worth seeing in observability.
+     */
+    console.warn(
+      "The global live signup-token cap was reached; signup is paused.",
+    );
+
+    return accepted;
+  }
+
+  const token = generateAuthToken();
+
+  const tokenId = crypto.randomUUID();
+
+  await database
+    .prepare(
+      `
+        INSERT INTO auth_signup_tokens (
+          id,
+          email,
+          account_name,
+          token_hash,
+          created_at,
+          expires_at,
+          consumed_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, NULL)
+      `,
+    )
+    .bind(
+      tokenId,
+      email,
+      accountName,
+      await hashAuthToken(token),
+      nowIso,
+      new Date(
+        now.getTime() + SIGNUP_TOKEN_TTL_MINUTES * 60 * 1000,
+      ).toISOString(),
+    )
+    .run();
+
+  /*
+   * Lands on /sign-up rather than /sign-in for the same reason the sign-in link
+   * lands on a page at all: mail scanners GET every URL in a message, so the
+   * page redeems with a POST. Which page it is matters too -- this one is in the
+   * act of creating an account, and its copy and its errors say so.
+   */
+  const link = new URL("/sign-up", url.origin);
+
+  link.searchParams.set("token", token);
+
+  try {
+    await sendMagicLinkEmail(
+      environment,
+      {
+        kind: "sign-up",
+        to: email,
+        url: link.toString(),
+        expiresInMinutes: SIGNUP_TOKEN_TTL_MINUTES,
+      },
+      isLocalRequest(request),
+    );
+  } catch (error) {
+    /*
+     * The same rollback issueSignInLink performs, for the same reason: the row
+     * goes in first so a send can never deliver a token the database does not
+     * know about, and comes back out on failure so a provider outage does not
+     * spend a slot on a link nobody received -- here one of the global twenty as
+     * well as one of this address's three.
+     */
+    await database
+      .prepare(
+        `
+          DELETE FROM auth_signup_tokens
+          WHERE id = ?
+        `,
+      )
+      .bind(tokenId)
+      .run();
+
+    console.error("Failed to send a signup email:", error);
+
+    return jsonResponse(
+      { error: "The confirmation email could not be sent. Try again." },
+      502,
+    );
+  }
+
+  return accepted;
+}
+
+/*
+ * The half that creates. Everything up to here was disposable; this is where an
+ * account starts existing.
+ *
+ * The invite code is not re-checked against the body: it was checked when the
+ * token was minted, and the token is the proof. Asking somebody to re-type a
+ * secret in order to click a link produces support tickets and no security.
+ */
+async function consumeSignup(
+  request: Request,
+  database: D1Database,
+): Promise<Response> {
+  let body: ConsumeTokenBody;
+
+  try {
+    body = (await request.json()) as ConsumeTokenBody;
+  } catch {
+    return jsonResponse({ error: "This confirmation link is not valid." }, 400);
+  }
+
+  if (typeof body.token !== "string" || body.token.trim().length === 0) {
+    return jsonResponse({ error: "This confirmation link is not valid." }, 400);
+  }
+
+  const tokenHash = await hashAuthToken(body.token.trim());
+
+  const row = await database
+    .prepare(
+      `
+        SELECT
+          id,
+          email,
+          account_name AS accountName,
+          expires_at AS expiresAt,
+          consumed_at AS consumedAt
+        FROM auth_signup_tokens
+        WHERE token_hash = ?
+      `,
+    )
+    .bind(tokenHash)
+    .first<SignupTokenRow>();
+
+  // Expired, already used, and never issued are one message on purpose, exactly
+  // as in consumeMagicLink.
+  const expiredOrSpent = jsonResponse(
+    { error: "This confirmation link has expired or has already been used." },
+    400,
+  );
+
+  if (
+    !row ||
+    row.consumedAt !== null ||
+    Date.parse(row.expiresAt) <= Date.now()
+  ) {
+    return expiredOrSpent;
+  }
+
+  /*
+   * A deliberate exception to this file's rule that answers must not
+   * distinguish a known address from an unknown one. Reaching it requires a
+   * live, single-use token that was emailed to the address in question, so the
+   * caller owns that address by construction and is being told the one thing
+   * they can act on. It is not an oracle.
+   */
+  const alreadyClaimed = jsonResponse(
+    {
+      error:
+        "An account already exists for that email address. Sign in instead.",
+    },
+    409,
+  );
+
+  /*
+   * Checked before the token is spent, so the common case -- the account was
+   * created some other way while this link sat in an inbox -- costs the holder
+   * nothing. Not sufficient on its own: the unique index remains the authority
+   * and the catch below is where a genuine race is settled.
+   */
+  if (await findEmailAccountUser(database, row.email)) {
+    return alreadyClaimed;
+  }
+
+  /*
+   * Marked consumed before anything is created, and only where it is still
+   * unconsumed, which is what makes two simultaneous clicks on one link produce
+   * one account. Kept out of the batch below because meta.changes has to be
+   * inspected before deciding to insert, and a batch reports its results only
+   * once every statement in it has already run.
+   */
+  const consumedAt = new Date().toISOString();
+
+  const consumed = await database
+    .prepare(
+      `
+        UPDATE auth_signup_tokens
+        SET consumed_at = ?
+        WHERE id = ?
+          AND consumed_at IS NULL
+      `,
+    )
+    .bind(consumedAt, row.id)
+    .run();
+
+  if (consumed.meta.changes !== 1) {
+    return expiredOrSpent;
+  }
+
+  const accountId = crypto.randomUUID();
+
+  const accountUserId = crypto.randomUUID();
+
+  const nowIso = new Date().toISOString();
+
+  try {
+    /*
+     * One batch, which D1 runs as a single transaction, and that is the whole
+     * point. An accounts row with no account_users row would be both
+     * unreachable -- nothing joins to it -- and undeletable, since every
+     * foreign key into accounts is ON DELETE RESTRICT and there is no admin UI.
+     * It is the worst durable state this endpoint could produce, and batching
+     * makes it unrepresentable rather than merely unlikely.
+     *
+     * database_id is NULL because a new account's rows live in the primary D1
+     * database; resolveAccountDatabase throws for an id it has no binding for.
+     */
+    await database.batch([
+      database
+        .prepare(
+          `
+            INSERT INTO accounts (
+              id,
+              name,
+              status,
+              database_id,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, 'active', NULL, ?, ?)
+          `,
+        )
+        .bind(accountId, row.accountName, nowIso, nowIso),
+
+      database
+        .prepare(
+          `
+            INSERT INTO account_users (
+              id,
+              account_id,
+              auth_provider,
+              auth_subject,
+              email,
+              role,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, 'email', ?, ?, 'owner', ?, ?)
+          `,
+        )
+        .bind(accountUserId, accountId, row.email, row.email, nowIso, nowIso),
+    ]);
+  } catch (error) {
+    /*
+     * Told apart by behaviour, never by error text. "UNIQUE constraint failed:
+     * ..." is a message rather than a contract, and a regex on it would quietly
+     * start returning 500 where a 409 belongs on the day D1 rewords it.
+     */
+    if (await findEmailAccountUser(database, row.email)) {
+      // Somebody else finished first. The token stays consumed: it can never
+      // succeed now, and leaving it spent is what keeps a retry idempotent.
+      return alreadyClaimed;
+    }
+
+    /*
+     * Not the unique index, so something transient. Give the link back rather
+     * than spending this person's confirmation on a database hiccup -- without
+     * this, three unlucky attempts burn all three of the address's slots and
+     * lock them out for the whole token lifetime. The guard clears only the mark
+     * this request wrote, and only this request can have written it.
+     */
+    try {
+      await database
+        .prepare(
+          `
+            UPDATE auth_signup_tokens
+            SET consumed_at = NULL
+            WHERE id = ?
+              AND consumed_at = ?
+          `,
+        )
+        .bind(row.id, consumedAt)
+        .run();
+    } catch (restoreError) {
+      // Its own catch because index.ts has no top-level handler: an uncaught
+      // throw here would reach the client as a non-JSON Workers 500.
+      console.error("Failed to restore a signup token:", restoreError);
+    }
+
+    console.error("Failed to create an account from a signup token:", error);
+
+    return jsonResponse(
+      { error: "Your account could not be created. Try again." },
+      500,
+    );
+  }
+
+  let sessionToken: string;
+
+  try {
+    sessionToken = await createSession(database, accountUserId, request);
+  } catch (error) {
+    /*
+     * Outside the batch because createSession mints its own token and returns
+     * it, and that is a considered trade rather than an oversight. If this
+     * throws, the account exists and its owner is not signed in -- and the
+     * recovery is complete and self-serve, because /sign-in with the same
+     * address now finds the account_users row and mails a link. The
+     * accounts/account_users pair has no such recovery, which is exactly why
+     * that pair, and only that pair, is atomic.
+     */
+    console.error("Created an account but failed to start its session:", error);
+
+    return jsonResponse(
+      {
+        error:
+          "Your account is ready, but signing you in failed. Open the sign-in page and enter your email.",
+      },
+      500,
+    );
+  }
+
+  await deleteSignupTokensForEmail(database, row.email);
+
+  return jsonResponse({ ok: true }, 200, {
+    "Set-Cookie": sessionCookieHeader(sessionToken),
+  });
+}
+
+/** Provider-pinned to email, since that is the only provider signup can create. */
+async function findEmailAccountUser(
+  database: D1Database,
+  email: string,
+): Promise<{ id: string } | null> {
+  return database
+    .prepare(
+      `
+        SELECT id
+        FROM account_users
+        WHERE auth_provider = 'email'
+          AND auth_subject = ?
+      `,
+    )
+    .bind(email)
+    .first<{ id: string }>();
+}
+
+/*
+ * Unconditional rather than consumed-and-expired-only, and best-effort in the
+ * manner of touchSessionQuietly: once the account exists, every other live token
+ * for that address is guaranteed to 409, so clearing them turns a puzzling "an
+ * account already exists" into the "expired or already used" message people
+ * already know from signing in. Scoped to one address, so never an unbounded
+ * delete, and it can destroy nothing of value -- the account those tokens would
+ * have created is the one that just succeeded.
+ */
+async function deleteSignupTokensForEmail(
+  database: D1Database,
+  email: string,
+): Promise<void> {
+  try {
+    await database
+      .prepare(
+        `
+          DELETE FROM auth_signup_tokens
+          WHERE email = ?
+        `,
+      )
+      .bind(email)
+      .run();
+  } catch (error) {
+    console.error("Failed to clear spent signup tokens:", error);
+  }
 }
 
 async function getSession(
