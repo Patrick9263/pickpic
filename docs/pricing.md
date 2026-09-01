@@ -117,6 +117,23 @@ about $15 against $39.
 In the interface, retention should be the limit users see and think about. The
 gigabyte meter belongs in the background.
 
+### Lead with the per-event price, not the subscription
+
+The table above is ordered by tier size because that is how it reads as a
+reference. Anywhere a photographer meets these prices for the first time -- the
+landing page, a beta invitation, a plans screen -- the order should be inverted,
+with the per-event price first and the monthly plans after it.
+
+The first number a stranger sees sets what the product costs in their head, and
+$9 for one gallery is both the smallest and the most honest opening: event work
+is seasonal and often occasional, so paying per booked shoot is genuinely the
+right answer for a large share of the people being pitched. Leading with it also
+changes what the subscriptions mean. Presented after the pass, $15 and $39 read
+as convenience for a photographer who is already busy enough to want it, rather
+than as the price of admission -- and someone who arrives at a subscription by
+that route has already decided they shoot enough to need one, which is the
+customer least likely to churn out of it in the winter.
+
 ## The per-event pass
 
 Roughly $9, sold as a credit rather than as an immediately-starting window.
