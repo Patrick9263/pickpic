@@ -10,7 +10,7 @@ A heart is an edit request rather than a social reaction, so the whole workflow 
 
 ### Photographer
 
-- Sign up with an invite code and sign in with an emailed link
+- Sign up with an invite code and sign in with an emailed link or with Apple
 - Create and continue photo events
 - Batch-upload JPEG files
 - Detect duplicate files using SHA-256 hashes
