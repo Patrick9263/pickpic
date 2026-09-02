@@ -161,6 +161,25 @@
   text-transform: uppercase;
 }
 
+.storage-plan {
+  display: grid;
+  gap: 8px;
+}
+
+.storage-plan-heading {
+  align-items: baseline;
+  color: #77736b;
+  display: flex;
+  font-size: 0.85rem;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.storage-plan-name {
+  color: #171717;
+  font-weight: 700;
+}
+
 .storage-bar {
   background: #eeece6;
   border-radius: 999px;
@@ -190,7 +209,8 @@
 }
 
 .storage-totals dd,
-.storage-event-title {
+.storage-event-title,
+.storage-plan-name {
   color: var(--color-text);
 }
 
@@ -200,7 +220,8 @@
 .storage-table td small,
 .storage-event-status,
 .storage-caveat,
-.storage-placeholder {
+.storage-placeholder,
+.storage-plan-heading {
   color: var(--color-text-muted);
 }
 

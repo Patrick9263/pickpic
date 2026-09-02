@@ -130,5 +130,7 @@ export interface StorageUsageRecord {
   finalBytes: number;
   variantBytes: number;
   totalBytes: number;
+  plan: string;
+  capBytes: number;
   events: EventStorageRecord[];
 }

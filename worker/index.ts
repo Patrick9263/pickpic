@@ -1437,6 +1437,8 @@ async function getStorageUsage(scope: AccountScope): Promise<Response> {
   return jsonResponse({
     storage: {
       ...totals,
+      plan: scope.account.plan,
+      capBytes: scope.account.storageCapBytes,
       events,
     },
   });
