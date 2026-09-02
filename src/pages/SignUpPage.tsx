@@ -123,7 +123,7 @@ function SignUpPage() {
           className="create-form sign-in-form sign-up-form"
           onSubmit={handleSubmit}
         >
-          <label htmlFor="sign-up-name">Studio name</label>
+          <label htmlFor="sign-up-name">Your name or studio</label>
 
           <div className="form-row">
             <input
@@ -132,10 +132,9 @@ function SignUpPage() {
               type="text"
               value={accountName}
               onChange={(event) => setAccountName(event.target.value)}
-              placeholder="Sunset Studios"
+              placeholder="Alex Rivera"
               maxLength={MAX_ACCOUNT_NAME_LENGTH}
               disabled={isSending}
-              autoComplete="organization"
             />
           </div>
 
