@@ -1,5 +1,6 @@
 import "./App.css";
 
+import AccountSettingsPage from "./pages/AccountSettingsPage";
 import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
@@ -71,6 +72,13 @@ function App() {
 
   if (window.location.origin === APP_ORIGIN && pathname === "/") {
     return <AppPage />;
+  }
+
+  if (
+    window.location.origin === APP_ORIGIN &&
+    /^\/account\/?$/.test(pathname)
+  ) {
+    return <AccountSettingsPage />;
   }
 
   if (pathname === "/") {

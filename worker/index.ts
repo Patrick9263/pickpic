@@ -29,6 +29,10 @@ interface UpdateEventBody {
   title?: unknown;
 }
 
+interface UpdateAccountBody {
+  name?: unknown;
+}
+
 type GalleryStatus = "draft" | "ready" | "completed" | "archived";
 
 interface SetEventStatusBody {
@@ -948,6 +952,70 @@ async function createEvent(
   }
 
   return jsonResponse({ event }, 201);
+}
+
+async function updateAccount(
+  request: Request,
+  scope: AccountScope,
+): Promise<Response> {
+  let body: UpdateAccountBody;
+
+  try {
+    body = await request.json<UpdateAccountBody>();
+  } catch {
+    return jsonResponse(
+      {
+        error: "The request body must be valid JSON.",
+      },
+      400,
+    );
+  }
+
+  if (typeof body.name !== "string") {
+    return jsonResponse(
+      {
+        error: "An account name is required.",
+      },
+      400,
+    );
+  }
+
+  const name = body.name.trim();
+
+  if (name.length === 0 || name.length > 120) {
+    return jsonResponse(
+      {
+        error: "The account name must be between 1 and 120 characters.",
+      },
+      400,
+    );
+  }
+
+  if (name === scope.account.name) {
+    return jsonResponse({
+      account: { id: scope.account.id, name },
+    });
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await scope
+    .prepare(
+      `
+      UPDATE accounts
+      SET
+        name = ?,
+        updated_at = ?
+      WHERE id = :accountId
+    `,
+      name,
+      updatedAt,
+    )
+    .run();
+
+  return jsonResponse({
+    account: { id: scope.account.id, name },
+  });
 }
 
 async function updateEvent(
@@ -3403,6 +3471,14 @@ async function handleAdminRequest(
     }
 
     return getStorageUsage(scope);
+  }
+
+  if (url.pathname === "/api/admin/account") {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return updateAccount(request, scope);
   }
 
   const adminEventMatch = url.pathname.match(/^\/api\/admin\/events\/([^/]+)$/);

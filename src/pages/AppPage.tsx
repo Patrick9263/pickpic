@@ -11,6 +11,9 @@ function SignOutControl({
 }) {
   return (
     <div className="header-account">
+      <a className="header-account-link" href="/account">
+        Account settings
+      </a>
       <span>{email}</span>
       <button type="button" onClick={onSignOut}>
         Sign out

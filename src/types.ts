@@ -118,6 +118,10 @@ export interface SessionResponse {
   user: SessionUser;
 }
 
+export interface UpdateAccountResponse {
+  account: SessionAccount;
+}
+
 export interface StorageUsageRecord {
   photoCount: number;
   finalCount: number;
