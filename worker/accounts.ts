@@ -12,6 +12,21 @@ export interface AccountRecord {
   status: string;
 
   /*
+   * Free-form label ("free" / "solo" / "studio" today) with no CHECK behind
+   * it -- see migration 0017. storageCapBytes, not this, is what any cap
+   * comparison should read; this is display-only.
+   */
+  plan: string;
+
+  /*
+   * The byte cap the storage panel measures usage against. Lives on the
+   * account rather than being derived from `plan` so a single account (a
+   * beta tester, a manual override) can carry a cap its plan name doesn't
+   * imply, per migration 0017.
+   */
+  storageCapBytes: number;
+
+  /*
    * NULL means this account's rows live in the primary D1 database. See
    * resolveAccountDatabase.
    */
@@ -76,6 +91,8 @@ export async function resolveAccountForPrincipal(
           id,
           name,
           status,
+          plan,
+          storage_cap_bytes AS storageCapBytes,
           database_id AS databaseId
         FROM accounts
         WHERE id = ?

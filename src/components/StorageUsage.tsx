@@ -29,6 +29,16 @@ function formatCount(value: number, noun: string): string {
   return `${value.toLocaleString()} ${noun}${value === 1 ? "" : "s"}`;
 }
 
+const PLAN_LABELS: Record<string, string> = {
+  free: "Free",
+  solo: "Solo",
+  studio: "Studio",
+};
+
+function formatPlanLabel(plan: string): string {
+  return PLAN_LABELS[plan] ?? plan;
+}
+
 function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {
   const events: EventStorageRecord[] = storage?.events ?? [];
 
@@ -64,6 +74,32 @@ function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {
           </button>
         </div>
       </div>
+
+      {storage && (
+        <div className="storage-plan">
+          <div className="storage-plan-heading">
+            <span className="storage-plan-name">
+              {formatPlanLabel(storage.plan)} plan
+            </span>
+
+            <span>
+              {formatStorageSize(
+                Math.max(storage.capBytes - storage.totalBytes, 0),
+              )}{" "}
+              of {formatStorageSize(storage.capBytes)} remaining
+            </span>
+          </div>
+
+          <span className="storage-bar">
+            <span
+              className="storage-bar-fill"
+              style={{
+                width: `${Math.min((storage.totalBytes / storage.capBytes) * 100, 100).toFixed(1)}%`,
+              }}
+            />
+          </span>
+        </div>
+      )}
 
       {storage && (
         <dl className="storage-totals">
