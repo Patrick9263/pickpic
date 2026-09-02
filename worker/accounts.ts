@@ -56,7 +56,7 @@ export function resolveAccountDatabase(
  * admits exactly one operator plus the iPad service token, and their identifiers
  * are Cloudflare configuration that deliberately does not live in this
  * repository, so that branch still resolves to the bootstrap account. It stops
- * doing so when the iPad moves off service tokens (roadmap step 6).
+ * doing so when the iPad moves off service tokens (roadmap step 9).
  *
  * This is a real SELECT rather than a hardcoded object so that having run the
  * migration is a hard precondition of serving admin traffic, and so database_id
