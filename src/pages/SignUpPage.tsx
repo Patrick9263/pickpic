@@ -123,7 +123,7 @@ function SignUpPage() {
           className="create-form sign-in-form sign-up-form"
           onSubmit={handleSubmit}
         >
-          <label htmlFor="sign-up-name">Studio name</label>
+          <label htmlFor="sign-up-name">Your name or studio</label>
 
           <div className="form-row">
             <input
@@ -132,12 +132,18 @@ function SignUpPage() {
               type="text"
               value={accountName}
               onChange={(event) => setAccountName(event.target.value)}
-              placeholder="Patrick Photography"
+              placeholder="Alex Rivera"
               maxLength={MAX_ACCOUNT_NAME_LENGTH}
               disabled={isSending}
-              autoComplete="organization"
             />
           </div>
+
+          {/* Not shown to clients or anywhere in the dashboard yet -- it's
+              stored for later, so this sets expectations rather than
+              promising a feature that doesn't exist. */}
+          <p className="field-hint">
+            Not shown to clients — just helps identify your account.
+          </p>
 
           <span className="character-count">
             {accountName.length}/{MAX_ACCOUNT_NAME_LENGTH}
