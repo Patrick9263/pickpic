@@ -197,6 +197,16 @@ button:disabled {
   margin-top: 18px;
 }
 
+.sign-up-form .form-row + .form-row {
+  margin-top: 18px;
+}
+
+.sign-up-form .field-hint {
+  color: #8a867e;
+  font-size: 0.75rem;
+  margin-top: 7px;
+}
+
 .character-count {
   color: #8a867e;
   display: block;

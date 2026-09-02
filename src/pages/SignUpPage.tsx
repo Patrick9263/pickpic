@@ -139,6 +139,13 @@ function SignUpPage() {
             />
           </div>
 
+          {/* Not shown to clients or anywhere in the dashboard yet -- it's
+              stored for later, so this sets expectations rather than
+              promising a feature that doesn't exist. */}
+          <p className="field-hint">
+            Not shown to clients — just helps identify your account.
+          </p>
+
           <span className="character-count">
             {accountName.length}/{MAX_ACCOUNT_NAME_LENGTH}
           </span>
