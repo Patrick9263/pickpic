@@ -5,8 +5,13 @@ import type { SessionPrincipal } from "./access.ts";
  * unless it is Secure, Path=/ and carries no Domain attribute, which means no
  * other host under pickpic.photos -- including admin.pickpic.photos and any
  * future subdomain -- can set a cookie of this name that the app would then
- * read. Browsers treat localhost as a secure context, so this works unchanged
- * against `wrangler dev` over plain http.
+ * read. Chromium treats localhost as a secure context and honours the Secure
+ * attribute there unchanged against `npm run dev` over plain http, but Safari
+ * does not extend that exception to cookies -- it silently drops this cookie
+ * on localhost, so a local sign-in there looks like it bounces back to the
+ * sign-in page even though the token was redeemed and the session was created.
+ * Test session sign-in locally with Chromium; production is real HTTPS, where
+ * every browser -- including Safari -- honours Secure with no exception needed.
  */
 export const SESSION_COOKIE_NAME = "__Host-pickpic_session";
 
