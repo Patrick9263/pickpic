@@ -132,7 +132,7 @@ function SignUpPage() {
               type="text"
               value={accountName}
               onChange={(event) => setAccountName(event.target.value)}
-              placeholder="Patrick Photography"
+              placeholder="Sunset Studios"
               maxLength={MAX_ACCOUNT_NAME_LENGTH}
               disabled={isSending}
               autoComplete="organization"
