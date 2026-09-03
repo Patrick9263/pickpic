@@ -203,6 +203,33 @@ button:disabled {
   width: 100%;
 }
 
+.apple-sign-in-row {
+  margin-top: 18px;
+}
+
+/*
+ * An anchor rather than a button element, because it navigates rather than
+ * submits, so every button rule above has to be restated here -- there is no
+ * global reset in this stylesheet and a bare <a> would render as default blue
+ * underlined text, as .brand and the account links already document.
+ */
+.apple-sign-in-button {
+  align-items: center;
+  background: #171717;
+  border: 1px solid #171717;
+  border-radius: 11px;
+  color: #ffffff;
+  display: inline-flex;
+  font-weight: 750;
+  gap: 8px;
+  padding: 12px 17px;
+  text-decoration: none;
+}
+
+.apple-sign-in-button:hover {
+  background: #34312d;
+}
+
 .sign-up-form .form-row + label,
 .sign-up-form .character-count + label {
   margin-top: 18px;

@@ -82,6 +82,17 @@
       "vars": {
         "AUTH_MODE": "session",
         "MAGIC_LINK_FROM": "PickPic <login@pickpic.photos>",
+
+        // The Services ID registered for Sign in with Apple, and the Return URL
+        // registered on it. Vars rather than secrets on purpose: the client id
+        // travels in the query string of every authorize redirect and the
+        // return URL is registered publicly with Apple, so neither is secret,
+        // and a wrong value in either is a configuration bug worth seeing in a
+        // diff. The team id, key id and private key are secrets --
+        // `wrangler secret put APPLE_TEAM_ID --env app`, and likewise
+        // APPLE_KEY_ID and APPLE_PRIVATE_KEY.
+        "APPLE_CLIENT_ID": "photos.pickpic.signin",
+        "APPLE_REDIRECT_URI": "https://app.pickpic.photos/api/auth/apple/callback",
       },
 
       "d1_databases": [

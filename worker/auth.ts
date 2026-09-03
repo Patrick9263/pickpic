@@ -5,6 +5,16 @@ import {
   type AccessEnvironment,
   type AdminAccessResult,
 } from "./access.ts";
+import {
+  appleStateCookieHeader,
+  buildAppleAuthorizeUrl,
+  clearedAppleStateCookieHeader,
+  exchangeAppleCode,
+  readAppleStateCookie,
+  resolveAppleConfig,
+  verifyAppleIdentityToken,
+  type AppleEnvironment,
+} from "./apple.ts";
 import { sendMagicLinkEmail, type EmailEnvironment } from "./email.ts";
 import {
   clearedSessionCookieHeader,
@@ -37,7 +47,8 @@ import {
 export type AuthMode = "access" | "session";
 
 export type AuthEnvironment = AccessEnvironment &
-  EmailEnvironment & {
+  EmailEnvironment &
+  AppleEnvironment & {
     AUTH_MODE?: string;
 
     /*
@@ -340,7 +351,34 @@ export async function handleAuthRequest(
     return null;
   }
 
-  if (isStateChanging(request) && !isSameOriginRequest(request)) {
+  /*
+   * Exempt by pathname, and only this one pathname, because Apple returns the
+   * user with a genuine cross-site top-level POST from appleid.apple.com. That
+   * request cannot carry our own Origin and never will, so the check below would
+   * refuse every Apple sign-in before its handler ever ran.
+   *
+   * The exemption is safe for a specific reason rather than because this route
+   * matters less. The Origin check defends actions that draw their authority
+   * from a cookie the browser attaches automatically; the callback draws none
+   * from a cookie at all. It proves who the user is from an identity token
+   * fetched server to server and pinned to our own client id, and it proves the
+   * flow started here from a single-use state value it compares against the
+   * cookie set at /api/auth/apple/start. Both checks live inside
+   * handleAppleCallback and both must pass before anything is written.
+   *
+   * Narrowed rather than relaxed: every other /api/auth/* route, and every
+   * shape of request to this one that is not that POST, is exactly as strict as
+   * before. requireAdminPrincipal above already scopes the same check to the
+   * session branch, so per-route scoping of this guard is the established shape
+   * here rather than a new idea.
+   */
+  const isAppleCallback = url.pathname === "/api/auth/apple/callback";
+
+  if (
+    !isAppleCallback &&
+    isStateChanging(request) &&
+    !isSameOriginRequest(request)
+  ) {
     return jsonResponse(
       { error: "This request did not come from PickPic." },
       403,
@@ -399,6 +437,22 @@ export async function handleAuthRequest(
     return url.pathname === "/api/auth/signup"
       ? requestSignup(request, url, database, environment, inviteCode)
       : consumeSignup(request, database);
+  }
+
+  if (url.pathname === "/api/auth/apple/start") {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return startAppleSignIn(environment);
+  }
+
+  if (isAppleCallback) {
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return completeAppleSignIn(request, url, database, environment);
   }
 
   if (url.pathname === "/api/auth/session") {
@@ -1249,6 +1303,343 @@ async function consumeSignup(
   return jsonResponse({ ok: true }, 200, {
     "Set-Cookie": sessionCookieHeader(sessionToken),
   });
+}
+
+/*
+ * Sends the browser to Apple with a freshly minted state value, remembered in a
+ * cookie for the callback to compare against.
+ *
+ * A missing configuration answers 503 here rather than redirecting: Apple would
+ * show its own error page for an unknown client id, and an operator debugging
+ * that would have no reason to suspect PickPic's own environment.
+ */
+function startAppleSignIn(environment: AuthEnvironment): Response {
+  const config = resolveAppleConfig(environment);
+
+  if (config === null) {
+    console.error(
+      "Apple sign-in is not configured; APPLE_* values are missing or blank.",
+    );
+
+    return jsonResponse(
+      { error: "Sign in with Apple is not available right now." },
+      503,
+    );
+  }
+
+  const state = generateAuthToken();
+
+  return redirectResponse(buildAppleAuthorizeUrl(config, state), [
+    appleStateCookieHeader(state),
+  ]);
+}
+
+/*
+ * Apple's redirect target, and the only handler here that answers a real browser
+ * navigation rather than a fetch from our own page. Every outcome is therefore a
+ * redirect: a JSON body would render as raw text in the tab, and a bare 500
+ * would strand somebody mid sign-in with nowhere to go.
+ *
+ * Failures deliberately do not distinguish what went wrong beyond what the
+ * person can act on. The one distinction worth drawing is between "something
+ * broke" and "this Apple ID is not attached to an account", because only the
+ * second has an obvious next step.
+ */
+async function completeAppleSignIn(
+  request: Request,
+  url: URL,
+  database: D1Database,
+  environment: AuthEnvironment,
+): Promise<Response> {
+  const config = resolveAppleConfig(environment);
+
+  if (config === null) {
+    console.error(
+      "Apple sign-in is not configured; APPLE_* values are missing or blank.",
+    );
+
+    return appleFailureRedirect(url, "apple");
+  }
+
+  let body: FormData;
+
+  try {
+    body = await request.formData();
+  } catch (error) {
+    console.error("Apple's callback body could not be parsed:", error);
+
+    return appleFailureRedirect(url, "apple");
+  }
+
+  /*
+   * The state check is what makes this route safe without the Origin check the
+   * guard in handleAuthRequest waives for it. A plain comparison is enough for
+   * the same reason session.ts gives for token lookups: this is 256 bits of
+   * CSPRNG output, not a secret anybody guesses a byte at a time.
+   */
+  const suppliedState = body.get("state");
+
+  const expectedState = readAppleStateCookie(request);
+
+  if (
+    typeof suppliedState !== "string" ||
+    expectedState === null ||
+    suppliedState !== expectedState
+  ) {
+    return appleFailureRedirect(url, "apple");
+  }
+
+  const code = body.get("code");
+
+  if (typeof code !== "string" || code.length === 0) {
+    return appleFailureRedirect(url, "apple");
+  }
+
+  let identity: Awaited<ReturnType<typeof verifyAppleIdentityToken>>;
+
+  try {
+    const idToken = await exchangeAppleCode(code, config);
+
+    identity = await verifyAppleIdentityToken(idToken, config);
+  } catch (error) {
+    console.error("Apple sign-in could not be verified:", error);
+
+    return appleFailureRedirect(url, "apple");
+  }
+
+  /*
+   * The Apple identity itself, if this person has signed in before. Every
+   * sign-in after the first one stops here.
+   */
+  const existing = await findAccountUserBySubject(
+    database,
+    "apple",
+    identity.subject,
+  );
+
+  if (existing) {
+    return existing.accountStatus === "active"
+      ? startAppleSession(request, url, database, existing.id)
+      : appleFailureRedirect(url, "apple");
+  }
+
+  /*
+   * First sign-in with this Apple ID. It may still belong to somebody who
+   * already has an account through an emailed link, and attaching a second
+   * identity to that account is not the same thing as creating one -- that is
+   * exactly the shape account_users was built for, many identities to one
+   * account.
+   *
+   * Apple's verified address is the only evidence used, and readVerifiedEmail
+   * has already discarded anything Apple did not vouch for. Sign in with Apple
+   * must never create an account: signup is gated behind an invite code because
+   * an account is the one unauthenticated way to start consuming R2, and a
+   * provider almost every person on earth already has would walk straight
+   * through that gate.
+   */
+  /*
+   * Normalised before it is compared, because account_users.auth_subject holds
+   * an address that normalizeEmail already lowercased. Apple echoes the address
+   * as the person capitalised it on their Apple ID, so comparing it raw would
+   * fail to match an account that does exist -- and fail silently, as an
+   * unlinked Apple ID rather than an error.
+   */
+  const appleEmail = identity.email ? normalizeEmail(identity.email) : null;
+
+  const linkable = appleEmail
+    ? await findLinkableEmailAccountUser(database, appleEmail)
+    : null;
+
+  if (!linkable) {
+    return appleFailureRedirect(url, "apple-unlinked");
+  }
+
+  const accountUserId = crypto.randomUUID();
+
+  try {
+    await linkAppleIdentity(
+      database,
+      accountUserId,
+      linkable,
+      identity.subject,
+      appleEmail,
+    );
+  } catch (error) {
+    /*
+     * Told apart by behaviour rather than by error text, as consumeSignup
+     * argues at greater length: two callbacks racing on a first sign-in both
+     * try this insert and the unique index settles it. No row needs restoring
+     * on the way out -- nothing was consumed to get here.
+     */
+    const raced = await findAccountUserBySubject(
+      database,
+      "apple",
+      identity.subject,
+    );
+
+    if (raced && raced.accountStatus === "active") {
+      return startAppleSession(request, url, database, raced.id);
+    }
+
+    console.error("Failed to link an Apple identity to an account:", error);
+
+    return appleFailureRedirect(url, "apple");
+  }
+
+  return startAppleSession(request, url, database, accountUserId);
+}
+
+/*
+ * The session half, shared by the returning and the newly linked paths so both
+ * set the cookie, clear the state and land in the same place.
+ */
+async function startAppleSession(
+  request: Request,
+  url: URL,
+  database: D1Database,
+  accountUserId: string,
+): Promise<Response> {
+  let token: string;
+
+  try {
+    token = await createSession(database, accountUserId, request);
+  } catch (error) {
+    console.error("Failed to start a session for an Apple sign-in:", error);
+
+    return appleFailureRedirect(url, "apple");
+  }
+
+  await deleteExpiredSessions(database, accountUserId);
+
+  return redirectResponse(new URL("/", url.origin).toString(), [
+    sessionCookieHeader(token),
+    clearedAppleStateCookieHeader(),
+  ]);
+}
+
+function appleFailureRedirect(url: URL, code: string): Response {
+  const target = new URL("/sign-in", url.origin);
+
+  target.searchParams.set("error", code);
+
+  return redirectResponse(target.toString(), [clearedAppleStateCookieHeader()]);
+}
+
+/*
+ * Built through Headers rather than an object literal because Set-Cookie is the
+ * one header that may legitimately repeat, and an object literal can only carry
+ * it once.
+ */
+function redirectResponse(location: string, cookies: string[]): Response {
+  const headers = new Headers({
+    Location: location,
+    "Cache-Control": "no-store",
+  });
+
+  for (const cookie of cookies) {
+    headers.append("Set-Cookie", cookie);
+  }
+
+  return new Response(null, { status: 302, headers });
+}
+
+/*
+ * Carries the account's status rather than filtering on it, so the caller can
+ * tell a suspended account apart from one that does not exist and answer each
+ * differently.
+ */
+async function findAccountUserBySubject(
+  database: D1Database,
+  provider: string,
+  subject: string,
+): Promise<AccountUserStatusRow | null> {
+  return database
+    .prepare(
+      `
+        SELECT
+          u.id AS id,
+          a.status AS accountStatus
+        FROM account_users u
+        JOIN accounts a ON a.id = u.account_id
+        WHERE u.auth_provider = ?
+          AND u.auth_subject = ?
+      `,
+    )
+    .bind(provider, subject)
+    .first<AccountUserStatusRow>();
+}
+
+/*
+ * The email-provider row an Apple identity may attach itself to. Filters on an
+ * active account here, unlike findAccountUserBySubject, because there is nothing
+ * to say to somebody whose account is suspended that differs from having no
+ * account at all -- and linking to a suspended account would quietly hand them a
+ * second way in.
+ */
+async function findLinkableEmailAccountUser(
+  database: D1Database,
+  email: string,
+): Promise<AccountUserRow | null> {
+  return database
+    .prepare(
+      `
+        SELECT
+          u.id AS id,
+          u.account_id AS accountId,
+          u.email AS email,
+          u.role AS role
+        FROM account_users u
+        JOIN accounts a ON a.id = u.account_id
+        WHERE u.auth_provider = 'email'
+          AND u.auth_subject = ?
+          AND a.status = 'active'
+      `,
+    )
+    .bind(email)
+    .first<AccountUserRow>();
+}
+
+/*
+ * One insert, not a batch: the account already exists, so unlike signup there is
+ * no pair of rows that could half-apply. The new row inherits the account and
+ * the role of the email identity it was matched to, because it is the same
+ * person reaching the same account by another door.
+ */
+async function linkAppleIdentity(
+  database: D1Database,
+  accountUserId: string,
+  linkable: AccountUserRow,
+  subject: string,
+  email: string | null,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+
+  await database
+    .prepare(
+      `
+        INSERT INTO account_users (
+          id,
+          account_id,
+          auth_provider,
+          auth_subject,
+          email,
+          role,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, 'apple', ?, ?, ?, ?, ?)
+      `,
+    )
+    .bind(
+      accountUserId,
+      linkable.accountId,
+      subject,
+      email,
+      linkable.role,
+      nowIso,
+      nowIso,
+    )
+    .run();
 }
 
 /** Provider-pinned to email, since that is the only provider signup can create. */

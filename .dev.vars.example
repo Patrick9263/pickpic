@@ -47,3 +47,29 @@ AUTH_MODE=session
 # console fallback here -- leaving it unset means signup cannot be exercised
 # locally at all.
 SIGNUP_INVITE_CODE=local-dev-invite
+
+# Sign in with Apple. All five values come from the Apple Developer portal:
+# APPLE_TEAM_ID from Membership details, APPLE_CLIENT_ID from the Services ID
+# registered for Sign in with Apple, and APPLE_KEY_ID plus APPLE_PRIVATE_KEY
+# from the key created for it -- the private key being the .p8 file's contents,
+# which Apple lets you download exactly once.
+#
+# APPLE_REDIRECT_URI must byte-for-byte match a Return URL registered on that
+# Services ID. It cannot be derived from the incoming request the way a
+# magic-link URL is, and Apple rejects http:// and localhost outright, so
+# exercising this locally means putting an https tunnel in front of the dev
+# server and registering the tunnel's URL alongside the production one.
+#
+# In production the last three are secrets (`wrangler secret put APPLE_TEAM_ID
+# --env app`, and likewise for the other two) while APPLE_CLIENT_ID and
+# APPLE_REDIRECT_URI are vars in wrangler.jsonc.
+#
+# Leaving any of them unset answers 503 on /api/auth/apple/start rather than
+# sending somebody to Apple for a sign-in this deployment could not finish.
+# APPLE_TEAM_ID=
+# APPLE_CLIENT_ID=photos.pickpic.signin
+# APPLE_KEY_ID=
+# APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+# ...
+# -----END PRIVATE KEY-----"
+# APPLE_REDIRECT_URI=https://your-tunnel.example/api/auth/apple/callback

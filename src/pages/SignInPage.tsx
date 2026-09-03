@@ -5,13 +5,32 @@ function readTokenFromLocation(): string | null {
   return new URLSearchParams(window.location.search).get("token");
 }
 
+/*
+ * A failed Apple sign-in comes back as a redirect from the worker rather than a
+ * response this page can catch, so the reason arrives in the query string.
+ * Read once at mount like the magic-link token above, which keeps it out of an
+ * effect and so out of reach of StrictMode's double invocation.
+ */
+function readAppleErrorFromLocation(): string | null {
+  switch (new URLSearchParams(window.location.search).get("error")) {
+    case "apple-unlinked":
+      return "That Apple ID is not connected to a PickPic account. Sign in with your email address below, or create an account if you do not have one yet.";
+
+    case "apple":
+      return "Signing in with Apple did not work. Try again, or use your email address below.";
+
+    default:
+      return null;
+  }
+}
+
 function SignInPage() {
   const [token, setToken] = useState(readTokenFromLocation);
   const [isConsuming, setIsConsuming] = useState(token !== null);
   const [email, setEmail] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(readAppleErrorFromLocation);
   const consumedTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -120,6 +139,17 @@ function SignInPage() {
             </button>
           </div>
         </form>
+      )}
+
+      {/* A plain link for the same reason as the one below, with the added
+          point that Apple's flow is a full cross-origin navigation regardless:
+          there is nothing here for fetch to do. */}
+      {!isConsuming && !sent && (
+        <p className="apple-sign-in-row">
+          <a className="apple-sign-in-button" href="/api/auth/apple/start">
+            Sign in with Apple
+          </a>
+        </p>
       )}
 
       {/* A plain link, not a click handler: App.tsx reads
