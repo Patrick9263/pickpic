@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pickpic.claude-review-surplus</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/patrick/Dev/pickpic/scripts/review/run-review.sh</string>
+        <string>surplus</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/patrick/Dev/pickpic</string>
+
+    <!-- Fri and Sat at 6:10am. The weekly budget window resets Sunday ~4:59am, so these two runs are
+         the last chance to convert leftover budget into work before it expires. Friday's own
+         consumption gates Saturday's via the weekly < 60% check, so the pair is self-limiting. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>10</integer></dict>
+        <dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>10</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/patrick/Library/Logs/claude-review-surplus.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/patrick/Library/Logs/claude-review-surplus.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/patrick/.local/bin:/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

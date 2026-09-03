@@ -82,6 +82,57 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
 
 - **Nothing is on the sandboxed `PATH`.** `node`, `npm`, and `gh` all resolve to "command not found" until you prepend their directories: `export PATH=/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:$PATH`. Do it in the same call as the command; shell state does not persist between calls.
 
+## Scheduled review job
+
+Two LaunchAgents run [scripts/review/run-review.sh](scripts/review/run-review.sh) unattended, at
+6:10am America/New_York — inside the hours Patrick is asleep, so an expensive run never competes
+with his own interactive use.
+
+| Agent                               | When           | What it does                                       |
+| ----------------------------------- | -------------- | -------------------------------------------------- |
+| `com.pickpic.claude-review-daily`   | Mon–Thu 6:10am | Rotating single-surface analysis                   |
+| `com.pickpic.claude-review-surplus` | Fri–Sat 6:10am | Ready-issue implementation, else full-app analysis |
+
+The daily pass rotates — Mon `worker/`, Tue `src/`, Wed `ipad/`, Thu cross-cutting — so each run
+goes deep on one area rather than skimming everything and resurfacing yesterday's findings. Analysis
+runs post a single GitHub issue labelled `review-report` with numbered suggestions; **they never
+file individual issues**, because triage is Patrick's decision.
+
+The surplus runs exist to spend a weekly budget window that would otherwise expire unused. If an
+open issue carries the `ready` label, that run implements it and opens a PR; otherwise it falls back
+to a full cross-surface analysis. Only apply `ready` to work you are comfortable being done
+unattended.
+
+**Budget gates.** The wrapper parses `claude -p "/usage"` before doing anything. It stands down
+entirely above 80% weekly, and scales depth to headroom below that (Opus/`max` under 45%, Opus/`high`
+to 65%, Sonnet/`medium` to 80%). Surplus runs additionally need weekly below 60%.
+
+It will **defer across a session reset but never across a weekly one.** A session window is ≤5h and
+resets the same morning, so sleeping through it still lands a useful report; crossing a weekly reset
+would mean spending the _next_ week's budget early, which is the thing the job exists to avoid.
+
+**Four rules the unattended implementation run must never break** — it never pushes to `main`,
+merges, or deploys (a `main` push deploys all three workers); it never authors a D1 migration; it
+does one issue per run; and it refuses to touch `project.pbxproj` while Xcode is running, because of
+trap 4 below. It also stands down if more than 15 untriaged issues are already open, since a
+suggestion generator that outruns triage capacity just creates work.
+
+Logs are in `~/Library/Logs/claude-review-*.log` and `~/.claude/pickpic-review/logs/`; reports are
+kept in `~/.claude/pickpic-review/reports/`. An unparseable `/usage` aborts the run and logs loudly
+— **if reports stop arriving, read that log first**, because a silent parser break looks exactly
+like "nothing worth reporting".
+
+The versioned plists live in `scripts/review/launchd/`; the loaded copies are in
+`~/Library/LaunchAgents/`. Edit the versioned ones, copy them across, then
+`launchctl bootout` and `launchctl bootstrap gui/$(id -u) <plist>` to reload. To disable entirely:
+
+```bash
+launchctl bootout gui/$(id -u)/com.pickpic.claude-review-daily
+launchctl bootout gui/$(id -u)/com.pickpic.claude-review-surplus
+```
+
+Dry-run the decision logic without spending anything: `./scripts/review/run-review.sh daily --dry-run`.
+
 ## Traps that cost real time
 
 These are not discoverable by reading the code, and several are silently destructive.
