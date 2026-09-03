@@ -334,9 +334,21 @@ final class FinalUploadsViewModel:
             )
             isUploading = false
         } catch {
-            let uploadError =
-            error.localizedDescription
-            
+            let uploadError: String
+
+            if
+                let apiError = error as? APIClientError,
+                case let .server(_, message) = apiError,
+                let capMessage = APIClientError
+                    .friendlyStorageCapMessage(
+                        forServerMessage: message
+                    )
+            {
+                uploadError = capMessage
+            } else {
+                uploadError = error.localizedDescription
+            }
+
             lastUploadedCount =
             uploadedCount
             

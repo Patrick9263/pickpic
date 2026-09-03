@@ -1086,8 +1086,16 @@ final class UploadQueueStore: ObservableObject {
             failureMessage =
                 "The background upload lost its internet connection. PickPic will retry when connectivity returns."
         } else if let statusCode = completion.statusCode {
+            let serverMessage = completion.errorMessage
+
             failureMessage =
-                "The background upload returned HTTP \(statusCode). Open PickPic to retry this photo."
+                serverMessage.flatMap {
+                    APIClientError.friendlyStorageCapMessage(
+                        forServerMessage: $0
+                    )
+                }
+                ?? serverMessage
+                ?? "The background upload returned HTTP \(statusCode). Open PickPic to retry this photo."
         } else {
             failureMessage = completion.errorMessage
                 ?? "The background upload ended before PickPic received a server response."
@@ -3021,6 +3029,17 @@ final class UploadQueueStore: ObservableObject {
                 false,
                 true
             )
+        }
+
+        if
+            let apiError = error as? APIClientError,
+            case let .server(_, message) = apiError,
+            let capMessage = APIClientError
+                .friendlyStorageCapMessage(
+                    forServerMessage: message
+                )
+        {
+            return (capMessage, false, false)
         }
 
         let urlError: URLError?
