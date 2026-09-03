@@ -196,6 +196,13 @@ struct UploadQueueView: View {
                                 using: configuration
                             )
                     },
+                    onContinueAnyway: {
+                        uploadQueue
+                            .acknowledgeStorageHeadroomWarning(
+                                jobID: job.id,
+                                using: configuration
+                            )
+                    },
                     onTestFirstPhoto: {
                         Task {
                             await uploadQueue
@@ -403,6 +410,7 @@ private struct UploadJobRow: View {
     let job: UploadJob
     
     let onContinue: () -> Void
+    let onContinueAnyway: () -> Void
     let onTestFirstPhoto: () -> Void
     let onConvertAll: () -> Void
     let onPause: () -> Void
@@ -433,6 +441,12 @@ private struct UploadJobRow: View {
     private var isContinuedProcessingScheduledOrActive: Bool {
         job.continuedProcessing?
             .isScheduledOrActive == true
+    }
+
+    private var hasUnacknowledgedStorageWarning: Bool {
+        job.storageHeadroomWarningMessage != nil
+            && !job
+            .storageHeadroomWarningAcknowledged
     }
 
     private var statusTitle: String {
@@ -842,26 +856,45 @@ private struct UploadJobRow: View {
             }
             
             Button {
-                onContinue()
+                if hasUnacknowledgedStorageWarning {
+                    onContinueAnyway()
+                } else {
+                    onContinue()
+                }
             } label: {
                 Label(
-                    job.preparedPhotos.isEmpty
-                        ? "Continue Upload"
-                        : "Resume Conversion and Upload",
+                    hasUnacknowledgedStorageWarning
+                        ? "Continue Anyway"
+                        : (
+                            job.preparedPhotos.isEmpty
+                            ? "Continue Upload"
+                            : "Resume Conversion and Upload"
+                        ),
                     systemImage:
-                        "arrow.up.circle.fill"
+                        hasUnacknowledgedStorageWarning
+                        ? "exclamationmark.triangle.fill"
+                        : "arrow.up.circle.fill"
                 )
                 .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
+            .tint(
+                hasUnacknowledgedStorageWarning
+                    ? .orange
+                    : nil
+            )
             .disabled(
                 isContinuedProcessingScheduledOrActive
             )
-            
+
             Text(
-                job.preparedPhotos.isEmpty
-                    ? "Converts the full batch and begins uploading automatically."
-                    : "Reuses the recovered JPEGs, converts only the remaining photos, and then resumes uploading."
+                hasUnacknowledgedStorageWarning
+                    ? "Conversion has not started. Continuing anyway may hit the storage limit before the batch finishes uploading."
+                    : (
+                        job.preparedPhotos.isEmpty
+                        ? "Converts the full batch and begins uploading automatically."
+                        : "Reuses the recovered JPEGs, converts only the remaining photos, and then resumes uploading."
+                    )
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -878,6 +911,8 @@ private struct UploadJobRow: View {
                 alignment: .leading,
                 spacing: 8
             ) {
+                storageHeadroomWarning
+
                 ProgressView(
                     value:
                         Double(
@@ -941,6 +976,8 @@ private struct UploadJobRow: View {
             }
             
         case .readyToUpload:
+            storageHeadroomWarning
+
             if let pausedAt =
                 job.uploadProgress.pausedAt {
                 Label(
@@ -1151,6 +1188,8 @@ private struct UploadJobRow: View {
                 alignment: .leading,
                 spacing: 8
             ) {
+                storageHeadroomWarning
+
                 ProgressView(
                     value:
                         Double(

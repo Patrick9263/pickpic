@@ -32,11 +32,15 @@ struct UploadJob:
     var preflight: PreflightState?
 
     /*
-     * Advisory only, set right before conversion starts by
-     * StorageHeadroomService. Never blocks conversion -- the server's
-     * storage-cap 403 is the only authoritative gate.
+     * Set right before conversion starts by StorageHeadroomService. A
+     * non-nil, unacknowledged message pauses the pipeline at .prepared so
+     * the photographer can choose to continue -- it never fails the batch
+     * outright, since the server's storage-cap 403 is the only
+     * authoritative gate. Once acknowledged, conversion and upload proceed
+     * and the message stays displayed alongside their progress.
      */
     var storageHeadroomWarningMessage: String?
+    var storageHeadroomWarningAcknowledged: Bool
 
     var conversionProcessedCount: Int
     var conversionCurrentFilename: String?
@@ -232,6 +236,10 @@ struct UploadJob:
         [PreparedPhoto] = [],
         preflight:
         PreflightState? = nil,
+        storageHeadroomWarningMessage:
+        String? = nil,
+        storageHeadroomWarningAcknowledged:
+        Bool = false,
         conversionProcessedCount:
         Int = 0,
         conversionCurrentFilename:
@@ -263,6 +271,10 @@ struct UploadJob:
         conversionErrorMessage
         self.preparedPhotos = preparedPhotos
         self.preflight = preflight
+        self.storageHeadroomWarningMessage =
+        storageHeadroomWarningMessage
+        self.storageHeadroomWarningAcknowledged =
+        storageHeadroomWarningAcknowledged
         self.conversionProcessedCount =
         conversionProcessedCount
         self.conversionCurrentFilename =
@@ -296,6 +308,7 @@ struct UploadJob:
         case preparedPhotos
         case preflight
         case storageHeadroomWarningMessage
+        case storageHeadroomWarningAcknowledged
         case conversionProcessedCount
         case conversionCurrentFilename
         case conversionStartedAt
@@ -402,6 +415,14 @@ struct UploadJob:
             forKey:
                     .storageHeadroomWarningMessage
         )
+
+        storageHeadroomWarningAcknowledged =
+        try container.decodeIfPresent(
+            Bool.self,
+            forKey:
+                    .storageHeadroomWarningAcknowledged
+        )
+        ?? false
 
         conversionProcessedCount =
         try container.decodeIfPresent(

@@ -3,11 +3,14 @@ import Foundation
 /*
  * Storage headroom estimate.
  *
- * Before conversion starts, this gives the photographer a heads-up if the
- * batch looks likely to exceed the account's remaining storage headroom.
- * It is advisory only: the server's storage-cap 403 (wouldExceedStorageCap
- * in worker/index.ts) is the sole authoritative gate, and this check never
- * stops conversion, only informs it.
+ * Before conversion starts -- the most expensive step in the pipeline --
+ * this gives the photographer a heads-up if the batch looks likely to
+ * exceed the account's remaining storage headroom, so the pipeline can
+ * pause at .prepared for a "Continue Anyway" decision instead of paying
+ * for a conversion whose upload is likely to be rejected. It is still
+ * only ever a recommendation: the server's storage-cap 403
+ * (wouldExceedStorageCap in worker/index.ts) is the sole authoritative
+ * gate, and the photographer can always continue anyway.
  *
  * The estimate can't be exact. photos.byte_size on the server is the
  * converted proof's size, not the source RAW's, and the client has no way
@@ -65,8 +68,7 @@ enum StorageHeadroomService {
         return """
         This batch could use about \(estimatedText), more than the \
         \(remainingText) left before this account's storage limit. \
-        Conversion will continue, but uploads may be rejected once \
-        the limit is reached.
+        Uploads may be rejected once the limit is reached.
         """
     }
 }
