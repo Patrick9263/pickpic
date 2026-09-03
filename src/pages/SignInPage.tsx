@@ -16,6 +16,16 @@ function readAppleErrorFromLocation(): string | null {
     case "apple-unlinked":
       return "That Apple ID is not connected to a PickPic account. Sign in with your email address below, or create an account if you do not have one yet.";
 
+    /*
+     * Apple shares an address only on the first authorization, so this person
+     * cannot be connected by trying again -- they have to make the next
+     * authorization a first one. Naming the exact settings path matters: it is
+     * several levels deep and nothing on Apple's own screens hints that it is
+     * what unblocks signing in.
+     */
+    case "apple-no-email":
+      return "Apple did not share your email address, which it only does the first time you use Sign in with Apple. Sign in with your email address below to reach your account. To connect this Apple ID, open Settings, tap your name, then Sign-In & Security → Sign in with Apple → PickPic → Stop Using Apple ID, and try again.";
+
     case "apple":
       return "Signing in with Apple did not work. Try again, or use your email address below.";
 
