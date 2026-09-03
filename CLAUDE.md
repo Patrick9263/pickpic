@@ -76,6 +76,10 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
 
 - **Filter `xcodebuild`.** A full build log is enormous and stays in context for the rest of the session. Append `2>&1 | grep -E "error:|warning:|BUILD" | tail -30`.
 - **Device verification gets its own short session.** It produces no diff, so it shouldn't ride on the back of an implementation session already carrying a large context.
+- **Keep prose short — replies, PR descriptions, commit bodies.** Everything written into a reply is resent on every later turn, so verbosity is charged repeatedly rather than once. Cut recaps of what the diff already shows, verification tables a sentence would cover, and "what's next" epilogues. A PR description should carry the _why_, the non-obvious trade-off, and anything surprising — not a tour of the feature.
+
+  This is about reporting, not thinking, and it explicitly does not apply to code. **In-code comments explaining why stay exactly as they are** — they're the house style here and they're load-bearing. Keep design reasoning at the moment a decision is being made, and keep warnings before anything destructive.
+
 - **Nothing is on the sandboxed `PATH`.** `node`, `npm`, and `gh` all resolve to "command not found" until you prepend their directories: `export PATH=/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:$PATH`. Do it in the same call as the command; shell state does not persist between calls.
 
 ## Traps that cost real time
