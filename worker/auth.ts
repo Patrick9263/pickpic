@@ -1446,9 +1446,28 @@ async function completeAppleSignIn(
    */
   const appleEmail = identity.email ? normalizeEmail(identity.email) : null;
 
-  const linkable = appleEmail
-    ? await findLinkableEmailAccountUser(database, appleEmail)
-    : null;
+  /*
+   * Distinguished from an unmatched address on purpose, because the two need
+   * completely different advice and only one of them is a dead end.
+   *
+   * Apple sends the email claim only on the *first* authorization for a given
+   * Apple ID and Services ID; every later sign-in carries the subject alone,
+   * and there is no endpoint to look the address up afterwards. So linking by
+   * verified address gets exactly one attempt, and somebody who tried Apple
+   * before they had an account has already spent it. Retrying cannot work, and
+   * neither can signing up first, because no address will arrive to match on.
+   * The only way back is to revoke PickPic under Sign in with Apple in system
+   * settings, which makes the next authorization a first one again.
+   *
+   * Telling them that is the whole fix here. The message it produces is the
+   * only route out of a state a person can reach by doing something entirely
+   * reasonable in the wrong order.
+   */
+  if (!appleEmail) {
+    return appleFailureRedirect(url, "apple-no-email");
+  }
+
+  const linkable = await findLinkableEmailAccountUser(database, appleEmail);
 
   if (!linkable) {
     return appleFailureRedirect(url, "apple-unlinked");
