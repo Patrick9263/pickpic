@@ -26,10 +26,17 @@ struct UploadJob:
     
     var conversionPreview: ConversionPreview?
     var conversionErrorMessage: String?
-    
+
     var preparedPhotos: [PreparedPhoto]
 
     var preflight: PreflightState?
+
+    /*
+     * Advisory only, set right before conversion starts by
+     * StorageHeadroomService. Never blocks conversion -- the server's
+     * storage-cap 403 is the only authoritative gate.
+     */
+    var storageHeadroomWarningMessage: String?
 
     var conversionProcessedCount: Int
     var conversionCurrentFilename: String?
@@ -288,6 +295,7 @@ struct UploadJob:
         case conversionErrorMessage
         case preparedPhotos
         case preflight
+        case storageHeadroomWarningMessage
         case conversionProcessedCount
         case conversionCurrentFilename
         case conversionStartedAt
@@ -386,6 +394,13 @@ struct UploadJob:
         try container.decodeIfPresent(
             PreflightState.self,
             forKey: .preflight
+        )
+
+        storageHeadroomWarningMessage =
+        try container.decodeIfPresent(
+            String.self,
+            forKey:
+                    .storageHeadroomWarningMessage
         )
 
         conversionProcessedCount =

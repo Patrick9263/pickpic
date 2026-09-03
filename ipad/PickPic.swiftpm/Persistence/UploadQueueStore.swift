@@ -1655,6 +1655,51 @@ final class UploadQueueStore: ObservableObject {
         }
     }
 
+    /*
+     * Storage headroom estimate. Runs after preflight so
+     * photosToConvertCount already excludes confirmed duplicates, and
+     * before conversion so the photographer sees it up front. Advisory
+     * only: a fetch failure here is silently skipped rather than shown,
+     * since it is only ever a heads-up about a heads-up.
+     */
+    private func checkStorageHeadroom(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) async {
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.stage == .prepared
+        else {
+            return
+        }
+
+        guard
+            let client = try? configuration
+                .makeClient()
+        else {
+            return
+        }
+
+        let message = await StorageHeadroomService
+            .warningMessage(
+                for: currentJob,
+                client: client
+            )
+
+        guard !Task.isCancelled else {
+            return
+        }
+
+        try? updateJob(jobID) { job in
+            job.storageHeadroomWarningMessage =
+                message
+        }
+    }
+
     private func restorePreparedStage(
         jobID: UUID
     ) {
@@ -3248,6 +3293,20 @@ final class UploadQueueStore: ObservableObject {
             let configuration
         {
             await runPreflight(
+                jobID: jobID,
+                using: configuration
+            )
+
+            guard !Task.isCancelled else {
+                return false
+            }
+        }
+
+        if
+            stage(for: jobID) == .prepared,
+            let configuration
+        {
+            await checkStorageHeadroom(
                 jobID: jobID,
                 using: configuration
             )

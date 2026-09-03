@@ -559,6 +559,20 @@ private struct UploadJobRow: View {
         }
     }
 
+    @ViewBuilder
+    private var storageHeadroomWarning: some View {
+        if let message =
+            job.storageHeadroomWarningMessage {
+            Label(
+                message,
+                systemImage:
+                    "externaldrive.badge.exclamationmark"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
+    }
+
     var body: some View {
         VStack(
             alignment: .leading,
@@ -753,6 +767,7 @@ private struct UploadJobRow: View {
 
         case .prepared:
             preflightSummary
+            storageHeadroomWarning
 
             if job.preparedPhotos.isEmpty {
                 Label(

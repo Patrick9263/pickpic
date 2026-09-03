@@ -385,6 +385,7 @@ struct StorageUsageRecord: Decodable {
     let finalBytes: Int64
     let variantBytes: Int64
     let totalBytes: Int64
+    let capBytes: Int64
     let events: [EventStorageRecord]
 }
 
