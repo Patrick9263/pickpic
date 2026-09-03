@@ -373,6 +373,18 @@ final class BackgroundUploadSession:
 
         let nsError = error as NSError?
 
+        /*
+         * A non-2xx HTTP response is not a transport error, so `error`
+         * is nil and `data` (already buffered by didReceive above) holds
+         * the server's real {"error": "..."} body. Preferring it over
+         * nsError's description is what lets a relaunch after the app
+         * was killed mid-upload show the actual reason -- e.g. the
+         * storage-cap message -- instead of a bare status code.
+         */
+        let serverMessage = try? JSONDecoder()
+            .decode(APIErrorResponse.self, from: data)
+            .error
+
         let completion = BackgroundUploadCompletion(
             context: context,
             statusCode:
@@ -380,7 +392,9 @@ final class BackgroundUploadSession:
                     .statusCode,
             errorDomain: nsError?.domain,
             errorCode: nsError?.code,
-            errorMessage: nsError?.localizedDescription,
+            errorMessage:
+                serverMessage
+                ?? nsError?.localizedDescription,
             completedAt: Date()
         )
 

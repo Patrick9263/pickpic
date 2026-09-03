@@ -505,3 +505,38 @@ enum APIClientError: LocalizedError {
         }
     }
 }
+
+extension APIClientError {
+    /*
+     * worker/index.ts's wouldExceedStorageCap sends this exact string from
+     * all five of its 403 sites (createPhoto, uploadFinalPhoto,
+     * uploadPhotoVariants, and their post-write size-check fallbacks).
+     * Matched by text rather than by bare status code, because 403 is also
+     * returned for unrelated account-access failures that must not be
+     * shown this message.
+     */
+    private static let storageCapServerMessage =
+        "This account's storage limit has been reached."
+
+    /*
+     * Rewrites the server's terse message into one that tells whoever is
+     * holding the iPad that retrying alone will not fix it. Returns nil
+     * for every other message so callers fall back to their existing
+     * generic handling. Takes the raw server string rather than an
+     * APIClientError so the background-upload relaunch path -- which
+     * only has a decoded response body, not a thrown error -- can use it
+     * too.
+     */
+    static func friendlyStorageCapMessage(
+        forServerMessage message: String
+    ) -> String? {
+        guard message == storageCapServerMessage else {
+            return nil
+        }
+
+        return """
+        This account has reached its storage limit. Delete some photos, \
+        or ask for the limit to be raised, before uploading more.
+        """
+    }
+}
