@@ -6,6 +6,7 @@ import {
 import {
   resolveAccountDatabase,
   resolveAccountForPrincipal,
+  type AccountRecord,
 } from "./accounts.ts";
 import { scheduleUploadStartedNotification } from "./telegram.ts";
 import {
@@ -137,11 +138,14 @@ interface PhotoRow {
 interface StoredPhotoRow {
   storageKey: string;
   finalStorageKey: string | null;
+  byteSize: number;
+  finalByteSize: number | null;
 }
 
 interface FinalPhotoUploadRow {
   eventId: string;
   finalStorageKey: string | null;
+  finalByteSize: number | null;
 }
 
 interface FinalPhotoKeyRow {
@@ -307,6 +311,7 @@ interface VariantPhotoRow {
 
 interface StoredVariantRow {
   storageKey: string;
+  byteSize: number;
 }
 
 const UUID_PATTERN =
@@ -1117,13 +1122,15 @@ async function updateEvent(
 async function collectEventStorageKeys(
   scope: AccountScope,
   eventId: string,
-): Promise<{ storageKeys: string[]; photoCount: number }> {
+): Promise<{ storageKeys: string[]; photoCount: number; totalBytes: number }> {
   const photoResult = await scope.database
     .prepare(
       `
       SELECT
         storage_key AS storageKey,
-        final_storage_key AS finalStorageKey
+        final_storage_key AS finalStorageKey,
+        byte_size AS byteSize,
+        final_byte_size AS finalByteSize
       FROM photos
       WHERE event_id = ?
     `,
@@ -1135,7 +1142,8 @@ async function collectEventStorageKeys(
     .prepare(
       `
         SELECT
-          v.storage_key AS storageKey
+          v.storage_key AS storageKey,
+          v.byte_size AS byteSize
         FROM photo_variants v
         INNER JOIN photos p
           ON p.id = v.photo_id
@@ -1158,9 +1166,17 @@ async function collectEventStorageKeys(
     ),
   );
 
+  const totalBytes =
+    photoResult.results.reduce(
+      (sum, photo) => sum + photo.byteSize + (photo.finalByteSize ?? 0),
+      0,
+    ) +
+    variantResult.results.reduce((sum, variant) => sum + variant.byteSize, 0);
+
   return {
     storageKeys,
     photoCount: photoResult.results.length,
+    totalBytes,
   };
 }
 
@@ -1186,7 +1202,10 @@ async function deleteEvent(
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const { storageKeys } = await collectEventStorageKeys(scope, eventId);
+  const { storageKeys, totalBytes } = await collectEventStorageKeys(
+    scope,
+    eventId,
+  );
 
   try {
     for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
@@ -1226,6 +1245,8 @@ async function deleteEvent(
     );
   }
 
+  await adjustAccountStorageBytes(scope, -totalBytes);
+
   return jsonResponse({
     deleted: true,
     eventId,
@@ -1263,7 +1284,7 @@ async function clearEventPhotos(
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const { storageKeys, photoCount } = await collectEventStorageKeys(
+  const { storageKeys, photoCount, totalBytes } = await collectEventStorageKeys(
     scope,
     eventId,
   );
@@ -1312,6 +1333,8 @@ async function clearEventPhotos(
     );
   }
 
+  await adjustAccountStorageBytes(scope, -totalBytes);
+
   return jsonResponse({
     eventId,
     deletedPhotoCount: photoCount,
@@ -1342,11 +1365,58 @@ async function listEvents(scope: AccountScope): Promise<Response> {
 }
 
 /*
+ * Whether adding additionalBytes (which may be negative, e.g. a replace
+ * that shrinks a file) would push the account over its cap. Reads the
+ * request-scoped snapshot of storage_bytes rather than a fresh SELECT --
+ * see AccountRecord.storageBytes -- so this is a same-request check, not
+ * a race-free reservation. Concurrent uploads on one account are rare
+ * enough here that getStorageUsage's reconciliation on the next dashboard
+ * load is an acceptable backstop rather than something to lock against.
+ */
+function wouldExceedStorageCap(
+  account: AccountRecord,
+  additionalBytes: number,
+): boolean {
+  return account.storageBytes + additionalBytes > account.storageCapBytes;
+}
+
+/*
+ * The running counter enforcement reads (AccountRecord.storageBytes) is
+ * maintained here rather than by a trigger so every adjustment site is a
+ * grep-able call. Clamped to zero so a missed decrement elsewhere can't
+ * compound into a negative counter that then under-reports usage forever.
+ */
+async function adjustAccountStorageBytes(
+  scope: AccountScope,
+  deltaBytes: number,
+): Promise<void> {
+  if (deltaBytes === 0) {
+    return;
+  }
+
+  await scope
+    .prepare(
+      `
+      UPDATE accounts
+      SET storage_bytes = MAX(0, storage_bytes + ?)
+      WHERE id = :accountId
+    `,
+      deltaBytes,
+    )
+    .run();
+}
+
+/*
  * Storage usage is summed from what the database records about every
  * stored object rather than measured against the bucket, which keeps
  * this to two queries with no R2 listing and no extra credentials.
  * The tradeoff is that it reports the database's belief: if a delete
  * ever half-failed, the bucket holds more than this reports.
+ *
+ * This is also the reconciliation point for accounts.storage_bytes (the
+ * counter createPhoto/uploadFinalPhoto/uploadPhotoVariants/deletes
+ * maintain incrementally): every dashboard load writes the true sum back,
+ * so any drift from a missed adjustment self-heals rather than compounding.
  */
 async function getStorageUsage(scope: AccountScope): Promise<Response> {
   const eventResult = await scope
@@ -1434,6 +1504,19 @@ async function getStorageUsage(scope: AccountScope): Promise<Response> {
     },
   );
 
+  if (totals.totalBytes !== scope.account.storageBytes) {
+    await scope
+      .prepare(
+        `
+        UPDATE accounts
+        SET storage_bytes = ?
+        WHERE id = :accountId
+      `,
+        totals.totalBytes,
+      )
+      .run();
+  }
+
   return jsonResponse({
     storage: {
       ...totals,
@@ -1510,6 +1593,16 @@ async function createPhoto(
     return jsonResponse({ error: "The JPEG must be 25 MB or smaller." }, 413);
   }
 
+  if (
+    Number.isFinite(declaredSize) &&
+    wouldExceedStorageCap(scope.account, declaredSize)
+  ) {
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
+  }
+
   const duplicatePhoto = await findDuplicatePhoto(scope, eventId, sourceSha256);
 
   if (duplicatePhoto) {
@@ -1560,6 +1653,15 @@ async function createPhoto(
     await env.pickpic_photos.delete(storageKey);
 
     return jsonResponse({ error: "The JPEG must be 25 MB or smaller." }, 413);
+  }
+
+  if (wouldExceedStorageCap(scope.account, storedObject.size)) {
+    await env.pickpic_photos.delete(storageKey);
+
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
   }
 
   const createdAt = new Date().toISOString();
@@ -1631,6 +1733,7 @@ async function createPhoto(
     );
   }
 
+  await adjustAccountStorageBytes(scope, storedObject.size);
   await openDraftEventForUpload(scope, eventId);
   scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
 
@@ -1782,7 +1885,9 @@ async function deletePhoto(
       `
       SELECT
         storage_key AS storageKey,
-        final_storage_key AS finalStorageKey
+        final_storage_key AS finalStorageKey,
+        byte_size AS byteSize,
+        final_byte_size AS finalByteSize
       FROM photos
       WHERE
         id = ?
@@ -1800,13 +1905,19 @@ async function deletePhoto(
     .prepare(
       `
         SELECT
-          storage_key AS storageKey
+          storage_key AS storageKey,
+          byte_size AS byteSize
         FROM photo_variants
         WHERE photo_id = ?
       `,
     )
     .bind(photoId)
     .all<StoredVariantRow>();
+
+  const totalBytes =
+    photo.byteSize +
+    (photo.finalByteSize ?? 0) +
+    variantResult.results.reduce((sum, variant) => sum + variant.byteSize, 0);
 
   const storageKeys = [
     photo.storageKey,
@@ -1844,6 +1955,8 @@ async function deletePhoto(
       500,
     );
   }
+
+  await adjustAccountStorageBytes(scope, -totalBytes);
 
   return jsonResponse({
     deletedPhotoId: photoId,
@@ -2815,7 +2928,8 @@ async function uploadFinalPhoto(
       `
       SELECT
         event_id AS eventId,
-        final_storage_key AS finalStorageKey
+        final_storage_key AS finalStorageKey,
+        final_byte_size AS finalByteSize
       FROM photos
       WHERE
         id = ?
@@ -2832,7 +2946,9 @@ async function uploadFinalPhoto(
   const oldFinalVariants = await scope.database
     .prepare(
       `
-      SELECT storage_key AS storageKey
+      SELECT
+        storage_key AS storageKey,
+        byte_size AS byteSize
       FROM photo_variants
       WHERE
         photo_id = ?
@@ -2841,6 +2957,20 @@ async function uploadFinalPhoto(
     )
     .bind(photoId)
     .all<StoredVariantRow>();
+
+  /*
+   * What replacing the final image will free -- the old final plus its
+   * optimized variants, which the batch below deletes. Enforcement checks
+   * the net change against the cap, not the new file's raw size, so
+   * replacing a final with one of similar size doesn't get blocked at 100%
+   * usage.
+   */
+  const replacedFinalBytes =
+    (photo.finalByteSize ?? 0) +
+    oldFinalVariants.results.reduce(
+      (sum, variant) => sum + variant.byteSize,
+      0,
+    );
 
   const contentType = request.headers
     .get("Content-Type")
@@ -2892,6 +3022,16 @@ async function uploadFinalPhoto(
     );
   }
 
+  if (
+    Number.isFinite(declaredSize) &&
+    wouldExceedStorageCap(scope.account, declaredSize - replacedFinalBytes)
+  ) {
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
+  }
+
   const uploadId = crypto.randomUUID();
 
   const newStorageKey =
@@ -2922,6 +3062,17 @@ async function uploadFinalPhoto(
     return jsonResponse(
       { error: "The final JPEG must be 50 MB or smaller." },
       413,
+    );
+  }
+
+  if (
+    wouldExceedStorageCap(scope.account, storedObject.size - replacedFinalBytes)
+  ) {
+    await env.pickpic_photos.delete(newStorageKey);
+
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
     );
   }
 
@@ -2982,6 +3133,11 @@ async function uploadFinalPhoto(
       500,
     );
   }
+
+  await adjustAccountStorageBytes(
+    scope,
+    storedObject.size - replacedFinalBytes,
+  );
 
   const replacedStorageKeys = [
     photo.finalStorageKey,
@@ -3133,7 +3289,9 @@ async function uploadPhotoVariants(
   const oldVariants = await scope.database
     .prepare(
       `
-      SELECT storage_key AS storageKey
+      SELECT
+        storage_key AS storageKey,
+        byte_size AS byteSize
       FROM photo_variants
       WHERE
         photo_id = ?
@@ -3142,6 +3300,25 @@ async function uploadPhotoVariants(
     )
     .bind(photoId, sourceKind)
     .all<StoredVariantRow>();
+
+  // Both files are already fully read into memory (multipart form data), so
+  // .size is exact -- no Content-Length approximation needed here.
+  const replacedVariantBytes = oldVariants.results.reduce(
+    (sum, variant) => sum + variant.byteSize,
+    0,
+  );
+
+  if (
+    wouldExceedStorageCap(
+      scope.account,
+      thumbnail.size + preview.size - replacedVariantBytes,
+    )
+  ) {
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
+  }
 
   const uploadId = crypto.randomUUID();
 
@@ -3296,6 +3473,11 @@ async function uploadPhotoVariants(
       500,
     );
   }
+
+  await adjustAccountStorageBytes(
+    scope,
+    thumbnailObject.size + previewObject.size - replacedVariantBytes,
+  );
 
   const newStorageKeys = new Set([thumbnailStorageKey, previewStorageKey]);
   const replacedStorageKeys = oldVariants.results

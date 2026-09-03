@@ -27,6 +27,14 @@ export interface AccountRecord {
   storageCapBytes: number;
 
   /*
+   * The maintained running total an upload checks against storageCapBytes,
+   * per migration 0018. Not authoritative on its own -- getStorageUsage
+   * reconciles it against the true SUM() on every read, so this can lag
+   * briefly but not drift indefinitely.
+   */
+  storageBytes: number;
+
+  /*
    * NULL means this account's rows live in the primary D1 database. See
    * resolveAccountDatabase.
    */
@@ -93,6 +101,7 @@ export async function resolveAccountForPrincipal(
           status,
           plan,
           storage_cap_bytes AS storageCapBytes,
+          storage_bytes AS storageBytes,
           database_id AS databaseId
         FROM accounts
         WHERE id = ?
