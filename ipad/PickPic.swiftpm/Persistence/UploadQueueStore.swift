@@ -1655,6 +1655,90 @@ final class UploadQueueStore: ObservableObject {
         }
     }
 
+    /*
+     * Storage headroom estimate. Runs after preflight so
+     * photosToConvertCount already excludes confirmed duplicates, and
+     * before conversion so the photographer sees it up front. A fetch
+     * failure here is silently skipped rather than shown, since it is
+     * only ever a heads-up about a heads-up.
+     *
+     * Skipped entirely once already acknowledged for this job, the same
+     * way runPreflight skips once preflight.didComplete -- otherwise
+     * acknowledging would just trigger a fresh check on the next pipeline
+     * re-entry and pause right back.
+     */
+    private func checkStorageHeadroom(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) async {
+        guard
+            let currentJob = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            currentJob.stage == .prepared,
+            currentJob
+                .storageHeadroomWarningAcknowledged
+                != true
+        else {
+            return
+        }
+
+        guard
+            let client = try? configuration
+                .makeClient()
+        else {
+            return
+        }
+
+        let message = await StorageHeadroomService
+            .warningMessage(
+                for: currentJob,
+                client: client
+            )
+
+        guard !Task.isCancelled else {
+            return
+        }
+
+        try? updateJob(jobID) { job in
+            job.storageHeadroomWarningMessage =
+                message
+        }
+    }
+
+    /*
+     * The photographer's explicit "Continue Anyway" after seeing the
+     * storage-headroom warning. Marks it acknowledged so
+     * checkStorageHeadroom stops re-evaluating it, then resumes exactly
+     * through the normal continue path so conversion and upload proceed
+     * like any other resumed batch.
+     */
+    func acknowledgeStorageHeadroomWarning(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) {
+        do {
+            try updateJob(jobID) { job in
+                job
+                    .storageHeadroomWarningAcknowledged =
+                    true
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save your choice to continue despite the storage warning: \(error.localizedDescription)"
+
+            return
+        }
+
+        startUserInitiatedUploadPipeline(
+            jobID: jobID,
+            using: configuration
+        )
+    }
+
     private func restorePreparedStage(
         jobID: UUID
     ) {
@@ -3255,6 +3339,41 @@ final class UploadQueueStore: ObservableObject {
             guard !Task.isCancelled else {
                 return false
             }
+        }
+
+        if
+            stage(for: jobID) == .prepared,
+            let configuration
+        {
+            await checkStorageHeadroom(
+                jobID: jobID,
+                using: configuration
+            )
+
+            guard !Task.isCancelled else {
+                return false
+            }
+        }
+
+        /*
+         * An unacknowledged storage warning pauses the pipeline here,
+         * before conversion pays its cost, rather than mid-batch. The job
+         * rests at .prepared showing the warning until the photographer
+         * taps Continue Anyway (acknowledgeStorageHeadroomWarning), the
+         * same resting state a paused or interrupted batch already uses.
+         */
+        if
+            let job = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            job.stage == .prepared,
+            job.storageHeadroomWarningMessage != nil,
+            job.storageHeadroomWarningAcknowledged
+                != true
+        {
+            return false
         }
 
         if stage(for: jobID) == .prepared {
