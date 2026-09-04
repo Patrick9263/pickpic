@@ -2108,6 +2108,17 @@ async function getPublicGallery(
  * event". Every public photo lookup -- hearts, comments, and the three image
  * routes below -- goes through here, which is also where a future per-client
  * share (a subset of an event's photos) gets its narrowing check added.
+ *
+ * The status filter mirrors getPublicGallery: a share token only exposes
+ * anything while the event is `ready` or `completed`. Without it, archiving an
+ * event removes the gallery page but leaves every image URL live forever, so
+ * anyone who scraped the page (or kept a link) retains full-resolution access
+ * to a shoot the photographer considers withdrawn -- and getStoredJpeg sends a
+ * one-year immutable Cache-Control, so those responses persist downstream too.
+ * Filtering here covers the hearts, comments and all three image routes at
+ * once. It is safe during upload: the event is still `draft` then, and only
+ * the `/api/admin/*` image routes -- which do not come through here -- are used
+ * by the dashboard and the iPad app.
  */
 async function findPhotoInShare(
   env: Env,
@@ -2127,6 +2138,7 @@ async function findPhotoInShare(
       WHERE
         p.id = ?
         AND e.share_token = ?
+        AND e.status IN ('ready', 'completed')
     `,
   )
     .bind(photoId, shareToken)
@@ -3970,6 +3982,27 @@ async function routeRequest(
     );
   }
 
+  /*
+   * This guard must stay ahead of every route its regex covers. The chain is
+   * ordered and each block returns, so a matching route declared above here
+   * simply never reaches the check -- which is how hearts silently escaped it
+   * and kept accepting edit requests on a `completed` gallery the UI had
+   * already told the viewer was closed.
+   */
+  const galleryMutationMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|comments(?:\/[^/]+)?)$/,
+  );
+
+  if (galleryMutationMatch && request.method !== "GET") {
+    const shareToken = decodeURIComponent(galleryMutationMatch[1]);
+
+    const galleryGuard = await requireOpenGallery(env, shareToken);
+
+    if (galleryGuard) {
+      return galleryGuard;
+    }
+  }
+
   const galleryHeartMatch = url.pathname.match(
     /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/heart$/,
   );
@@ -3987,20 +4020,6 @@ async function routeRequest(
     }
 
     return jsonResponse({ error: "Method not allowed." }, 405);
-  }
-
-  const galleryMutationMatch = url.pathname.match(
-    /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|comments(?:\/[^/]+)?)$/,
-  );
-
-  if (galleryMutationMatch && request.method !== "GET") {
-    const shareToken = decodeURIComponent(galleryMutationMatch[1]);
-
-    const galleryGuard = await requireOpenGallery(env, shareToken);
-
-    if (galleryGuard) {
-      return galleryGuard;
-    }
   }
 
   const galleryCommentMatch = url.pathname.match(

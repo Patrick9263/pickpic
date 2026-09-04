@@ -89,6 +89,16 @@ function GalleryLightbox({
   const pointerStartRef = useRef<PointerStart | null>(null);
   const navigationFrameRef = useRef<number | null>(null);
   const [isImageLoaded, setIsImageLoaded] = useState(false);
+  const [hasImageFailed, setHasImageFailed] = useState(false);
+  /*
+   * Bumped on retry and appended to the request, because a browser that has
+   * cached the failed response would otherwise serve it straight back and the
+   * retry would appear to do nothing. Mirrors the grid's per-photo retry
+   * counter; it resets whenever the displayed photo changes so navigating on
+   * from a recovered photo goes back to the plain, cacheable URL that
+   * GalleryPage prefetches.
+   */
+  const [imageRetryCount, setImageRetryCount] = useState(0);
   const runNavigation = useCallback((navigate: () => void): void => {
     /*
      * Collapse duplicate navigation callbacks that occur in the same frame.
@@ -121,6 +131,8 @@ function GalleryLightbox({
 
   useEffect(() => {
     setIsImageLoaded(false);
+    setHasImageFailed(false);
+    setImageRetryCount(0);
   }, [selectedImageUrl]);
   useEffect(() => {
     const body = document.body;
@@ -274,6 +286,20 @@ function GalleryLightbox({
     event.stopPropagation();
   }
 
+  function retryImage(): void {
+    setIsImageLoaded(false);
+    setHasImageFailed(false);
+    setImageRetryCount((currentCount) => currentCount + 1);
+  }
+
+  const displayedImageUrl = selectedImageUrl ?? selectedPhoto.imageUrl;
+  const requestedImageUrl =
+    imageRetryCount > 0
+      ? `${displayedImageUrl}${
+          displayedImageUrl.includes("?") ? "&" : "?"
+        }retry=${imageRetryCount}`
+      : displayedImageUrl;
+
   return (
     <div
       ref={dialogRef}
@@ -287,7 +313,7 @@ function GalleryLightbox({
       <div className="lightbox-content">
         <div
           className="lightbox-image-stage"
-          aria-busy={!isImageLoaded}
+          aria-busy={!isImageLoaded && !hasImageFailed}
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
@@ -331,20 +357,47 @@ function GalleryLightbox({
               />
             </svg>
           </button>
-          {!isImageLoaded && (
+          {!isImageLoaded && !hasImageFailed && (
             <div
               className="lightbox-image-loading"
               aria-label="Loading photo"
             />
           )}
 
-          <img
-            src={selectedImageUrl ?? selectedPhoto.imageUrl}
-            alt={selectedPhoto.originalFilename}
-            className={isImageLoaded ? "lightbox-image-ready" : ""}
-            onLoad={() => setIsImageLoaded(true)}
-            draggable={false}
-          />
+          {/*
+           * Without this the loading pulse is the only thing a failed image
+           * ever shows, and it animates forever behind an image that is held at
+           * opacity 0 -- no message, no retry, and nothing to say anything went
+           * wrong. On a phone one dropped request is enough to reach that, and
+           * navigating away and back re-enters it. The grid already handles the
+           * same failure with a message and tap-to-retry, so the two surfaces
+           * behave the same way here.
+           */}
+          {hasImageFailed ? (
+            <button
+              className="lightbox-image-error"
+              type="button"
+              onClick={retryImage}
+              onPointerDown={handleStageControlPointer}
+              onPointerUp={handleStageControlPointer}
+              aria-label={`Retry loading ${selectedPhoto.originalFilename}`}
+            >
+              <span>Image unavailable</span>
+              <span className="gallery-image-retry-label">Tap to retry</span>
+            </button>
+          ) : (
+            <img
+              src={requestedImageUrl}
+              alt={selectedPhoto.originalFilename}
+              className={isImageLoaded ? "lightbox-image-ready" : ""}
+              onLoad={() => setIsImageLoaded(true)}
+              onError={() => {
+                setIsImageLoaded(false);
+                setHasImageFailed(true);
+              }}
+              draggable={false}
+            />
+          )}
           <button
             className="lightbox-nav lightbox-nav-next"
             type="button"

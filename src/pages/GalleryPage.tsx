@@ -1,5 +1,12 @@
 import { downloadZip } from "client-zip";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import type {
   GalleryPhotoRecord,
   GalleryStatus,
@@ -414,12 +421,30 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     }
   }, [previousPhotoImageUrl, nextPhotoImageUrl]);
 
-  useEffect(() => {
-    let isCancelled = false;
+  /*
+   * Only the newest request may write state. The initial load and a background
+   * refresh can overlap, and without this a slow earlier response would land
+   * last and reinstate a stale gallery.
+   */
+  const galleryRequestIdRef = useRef(0);
 
-    async function loadGallery(): Promise<void> {
-      setIsLoading(true);
-      setLoadError(null);
+  const loadGallery = useCallback(
+    async (options: { silent: boolean }): Promise<void> => {
+      const requestId = galleryRequestIdRef.current + 1;
+
+      galleryRequestIdRef.current = requestId;
+
+      /*
+       * A silent refresh must not touch the spinner or the error banner: the
+       * viewer is already looking at a usable gallery, so a failed refresh
+       * should leave it exactly as it was rather than replacing it with an
+       * error. The next refresh will pick the change up.
+       */
+      if (!options.silent) {
+        setIsLoading(true);
+        setLoadError(null);
+      }
+
       try {
         const body = await fetchJson<GalleryResponse>(
           `/api/galleries/${encodeURIComponent(shareToken)}`,
@@ -429,11 +454,12 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             },
           },
         );
-        if (!isCancelled) {
+
+        if (galleryRequestIdRef.current === requestId) {
           setGallery(body);
         }
       } catch (caughtError) {
-        if (!isCancelled) {
+        if (!options.silent && galleryRequestIdRef.current === requestId) {
           setLoadError(
             caughtError instanceof Error
               ? caughtError.message
@@ -441,18 +467,44 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           );
         }
       } finally {
-        if (!isCancelled) {
+        if (!options.silent && galleryRequestIdRef.current === requestId) {
           setIsLoading(false);
         }
       }
+    },
+    [shareToken, visitorToken],
+  );
+
+  useEffect(() => {
+    void loadGallery({ silent: false });
+  }, [loadGallery]);
+
+  /*
+   * Uploads are deliberately progressive and hearts arrive from other viewers,
+   * so a tab opened during the event goes stale as it sits: proofs still
+   * uploading never appear, finals never appear, other viewers' heart counts
+   * never move, and -- because `interactionsEnabled` is derived from this
+   * response -- a gallery closed since mount still looks open and lets the
+   * viewer heart into a rejection.
+   *
+   * Viewers are mostly on phones, and a phone viewer does not reload; they
+   * background the tab and come back to it. `visibilitychange` is therefore the
+   * moment that matters, and it is preferable to polling, which would keep
+   * hitting the worker for tabs nobody is looking at.
+   */
+  useEffect(() => {
+    function handleVisibilityChange(): void {
+      if (document.visibilityState === "visible") {
+        void loadGallery({ silent: true });
+      }
     }
 
-    void loadGallery();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
-      isCancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [shareToken, visitorToken]);
+  }, [loadGallery]);
   async function resolveDisplayName(): Promise<string | null> {
     const existingName = displayName.trim();
 
