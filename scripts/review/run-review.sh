@@ -91,7 +91,31 @@ record_metrics() {
     "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" >>"$METRICS_FILE"
 }
 
-trap 'record_metrics; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+# An implementation run checks out main and branches from it, leaving the working tree somewhere
+# else when it finishes. Every scheduled run afterwards invokes this script by absolute path from
+# that same tree, so if the branch it lands on does not contain the script, the next run dies with a
+# missing-file error and the job silently stops until someone notices. Put the tree back.
+ORIGINAL_BRANCH="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+
+restore_branch() {
+  [[ "${RUN_KIND:-}" != "implement" || -z "$ORIGINAL_BRANCH" ]] && return 0
+  local now
+  now="$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [[ -z "$now" || "$now" == "$ORIGINAL_BRANCH" ]] && return 0
+  # Never discard work to get back. A dirty tree here means the run did not finish cleanly, and the
+  # uncommitted changes are worth more than the convenience of an automatic restore.
+  if [[ -n "$(git -C "$REPO" status --porcelain 2>/dev/null)" ]]; then
+    log "WARNING: tree is dirty on $now, leaving it alone. Scheduled runs will fail until the tree is back on a branch holding this script."
+    return 0
+  fi
+  if git -C "$REPO" checkout -q "$ORIGINAL_BRANCH" 2>/dev/null; then
+    log "restored working tree to $ORIGINAL_BRANCH"
+  else
+    log "WARNING: could not restore $ORIGINAL_BRANCH from $now"
+  fi
+}
+
+trap 'restore_branch; record_metrics; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 # ---------------------------------------------------------------------------
 # Budget
@@ -300,9 +324,20 @@ fi
 
 # Surplus mode prefers shipping an already-triaged issue over generating more triage work. One issue
 # per run only: it fires Friday and Saturday, so two ready issues still become two reviewable PRs.
+#
+# `review-report` and `review-trends` issues are excluded even when labelled `ready`. Those are
+# containers -- a report holds a numbered list of suggestions, not one implementable change -- and
+# labelling one `ready` is an easy mistake to make while triaging on a phone. Picking one up makes
+# the run implement several unrelated suggestions at once, which is exactly the unreviewable diff
+# the one-issue-per-run rule exists to prevent.
+#
+# Oldest first, so the backlog drains in the order it was filed rather than newest-first, which is
+# what `gh issue list` returns by default.
 READY_ISSUE=""
 if [[ "$MODE" == "surplus" ]]; then
-  READY_ISSUE="$(gh issue list --label ready --state open --limit 1 --json number --jq '.[0].number' 2>/dev/null || true)"
+  READY_ISSUE="$(gh issue list --label ready --state open --limit 50 --json number,labels \
+    --jq '[.[] | select(([.labels[].name] | any(. == "review-report" or . == "review-trends")) | not)]
+          | sort_by(.number) | .[0].number // empty' 2>/dev/null || true)"
 fi
 
 # A suggestion generator that outruns triage capacity just creates work, so stand down when the

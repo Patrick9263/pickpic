@@ -130,6 +130,18 @@ It will **defer across a session reset but never across a weekly one.** A sessio
 resets the same morning, so sleeping through it still lands a useful report; crossing a weekly reset
 would mean spending the _next_ week's budget early, which is the thing the job exists to avoid.
 
+**Do not label a `review-report` or `review-trends` issue `ready`.** Those are containers holding a
+numbered list of suggestions, not single implementable changes, and an implementation run that picks
+one up will implement several unrelated suggestions in one diff. The script now filters them out
+defensively — and takes the _oldest_ eligible ready issue, since `gh issue list` returns newest
+first — but the label belongs on the individual issue you file from a report, not on the report.
+
+An implementation run also **restores the working tree to the branch it started on.** It checks out
+`main` and branches from there, and every scheduled run afterwards invokes the script by absolute
+path from that same tree; if it were left on a branch that does not contain the script, the next run
+would die with a missing-file error and the job would silently stop. It will not do this if the tree
+is dirty — uncommitted work is worth more than the automatic restore.
+
 **Four rules the unattended implementation run must never break** — it never pushes to `main`,
 merges, or deploys (a `main` push deploys all three workers); it never authors a D1 migration; it
 does one issue per run; and it refuses to touch `project.pbxproj` while Xcode is running, because of
