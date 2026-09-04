@@ -221,6 +221,83 @@ fi
 cd "$REPO"
 git fetch --quiet origin main 2>/dev/null || true
 
+# ---------------------------------------------------------------------------
+# Trends mode
+# ---------------------------------------------------------------------------
+# Reads the accumulated metrics and asks whether this job's own settings are right. Runs Sunday
+# morning, just after the weekly window resets, so it reports on a completed week and spends from a
+# fresh one.
+#
+# The question it exists to answer is conversion, not cost: what fraction of suggestions actually
+# became issues. Cost is already known to be about a point per scan and is not the constraint. If
+# most suggestions are ignored the caps are too generous and scans are being wasted; if nearly all
+# are taken up, the caps are throttling useful work.
+if [[ "$MODE" == "trends" ]]; then
+  RUN_KIND="trends"
+  TARGET="weekly trends"
+
+  if [[ ! -s "$METRICS_FILE" ]]; then
+    RUN_OUTCOME="skip-no-metrics"
+    log "SKIP: no metrics recorded yet ($METRICS_FILE)"
+    exit 0
+  fi
+
+  METRIC_ROWS="$(( $(wc -l <"$METRICS_FILE") - 1 ))"
+  log "trends: $METRIC_ROWS recorded runs"
+
+  ISSUE_HISTORY="$(gh issue list --state all --limit 300 \
+    --json number,title,state,createdAt,closedAt,labels \
+    --jq '.[] | "\(.createdAt[0:10]) #\(.number) [\(.state)] {\(.labels | map(.name) | join("|"))} \(.title)"' \
+    2>/dev/null || echo '(unavailable)')"
+
+  STAMP="$(date +%Y-%m-%d)"
+  REPORT_FILE="$REPORTS_DIR/$STAMP-trends.md"
+  ALLOWED=(Read Grep Glob)
+
+  TRENDS_PROMPT="$(cat "$REPO/scripts/review/prompts/trends.md")
+
+## metrics.csv ($METRIC_ROWS runs recorded)
+
+$(cat "$METRICS_FILE")
+
+## Every issue in the repository, oldest first
+
+Format: created-date #number [state] {labels} title
+
+$ISSUE_HISTORY"
+
+  set +e
+  claude -p "$TRENDS_PROMPT" --model "$MODEL" --effort "$EFFORT" \
+    --allowedTools "${ALLOWED[@]}" >"$REPORT_FILE" 2>>"$LOG_FILE"
+  TRENDS_RC=$?
+  set -e
+  if [[ "$TRENDS_RC" -ne 0 ]]; then
+    RUN_OUTCOME="error-claude-failed"
+    log "ERROR: trends analysis failed"
+    exit 1
+  fi
+
+  read_usage
+  BUDGET_AFTER_WEEK="${WEEK_PCT:-?}"
+  BUDGET_AFTER_SESSION="${SESSION_PCT:-?}"
+  SCANS_DONE=1
+
+  TRENDS_BODY="$STATE_DIR/.trends-body.md"
+  {
+    printf 'Covering %s recorded runs. Budget for this analysis: weekly %s%% -> %s%%\n\n' \
+      "$METRIC_ROWS" "$BUDGET_BEFORE_WEEK" "$BUDGET_AFTER_WEEK"
+    printf -- '---\n\n'
+    cat "$REPORT_FILE"
+  } >"$TRENDS_BODY"
+
+  ISSUE_URL="$(gh issue create --title "Review job trends — $STAMP" \
+    --body-file "$TRENDS_BODY" --label review-trends --assignee @me 2>&1)"
+  RUN_OUTCOME="ok"
+  ISSUE_REF="$(printf '%s' "$ISSUE_URL" | grep -o '[0-9]*$' || true)"
+  log "posted: $ISSUE_URL"
+  exit 0
+fi
+
 # Surplus mode prefers shipping an already-triaged issue over generating more triage work. One issue
 # per run only: it fires Friday and Saturday, so two ready issues still become two reviewable PRs.
 READY_ISSUE=""

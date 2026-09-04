@@ -88,10 +88,11 @@ Two LaunchAgents run [scripts/review/run-review.sh](scripts/review/run-review.sh
 6:10am America/New_York — inside the hours Patrick is asleep, so an expensive run never competes
 with his own interactive use.
 
-| Agent                               | When           | What it does                                       |
-| ----------------------------------- | -------------- | -------------------------------------------------- |
-| `com.pickpic.claude-review-daily`   | Mon–Thu 6:10am | Rotating single-surface analysis                   |
-| `com.pickpic.claude-review-surplus` | Fri–Sat 6:10am | Ready-issue implementation, else full-app analysis |
+| Agent                               | When           | What it does                             |
+| ----------------------------------- | -------------- | ---------------------------------------- |
+| `com.pickpic.claude-review-daily`   | Mon–Thu 6:10am | Rotating single-surface analysis         |
+| `com.pickpic.claude-review-surplus` | Fri–Sat 6:10am | Ready-issue implementation, else a sweep |
+| `com.pickpic.claude-review-trends`  | Sun 7:10am     | Audits the job's own effectiveness       |
 
 The daily pass rotates — Mon `worker/`, Tue `src/`, Wed `ipad/`, Thu cross-cutting — so each run
 goes deep on one area rather than skimming everything and resurfacing yesterday's findings. Analysis
@@ -134,6 +135,15 @@ merges, or deploys (a `main` push deploys all three workers); it never authors a
 does one issue per run; and it refuses to touch `project.pbxproj` while Xcode is running, because of
 trap 4 below. It also stands down if more than 15 untriaged issues are already open, since a
 suggestion generator that outruns triage capacity just creates work.
+
+**The Sunday trends run audits the job rather than the code**, posting an issue labelled
+`review-trends`. It runs after the weekly window resets, so it reports on a fully closed week and
+pays for itself out of the fresh one. The question it exists to answer is **conversion — what
+fraction of suggestions Patrick actually filed as issues** — because cost is already known (about a
+point per scan) and is not the binding constraint. Low conversion means the caps are too generous
+and scans are being wasted; high conversion means they are throttling useful work. The prompt is
+told explicitly **not to recommend threshold changes with under three weeks of data**, since a
+confident recommendation drawn from six rows will be acted on and is worse than none.
 
 Every run appends one row to `~/.claude/pickpic-review/metrics.csv` — timestamp, mode, kind, target,
 outcome, model, effort, scan count, findings, before/after budget for both windows, duration, and
