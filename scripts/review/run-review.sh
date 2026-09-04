@@ -215,12 +215,44 @@ elif [[ "$MODE" == "surplus" ]]; then
   # the single-run path already respects.
   RUN_KIND="sweep"
   PROMPT_FILE="$REPO/scripts/review/prompts/daily.md"
-  SWEEP_SLOTS=$(( (15 - UNTRIAGED) / 3 ))
-  [[ "$SWEEP_SLOTS" -gt 5 ]] && SWEEP_SLOTS=5
-  [[ "$SWEEP_SLOTS" -lt 1 ]] && SWEEP_SLOTS=1
-  ALL_TARGETS=(worker src ipad cross-cutting ux-and-docs)
+
+  # How full a backlog to aim for. This is the lever: an empty backlog with budget to spare is
+  # exactly when it is worth stocking up, because the weekly window expires Sunday whether or not it
+  # was used. When the window is already well spent, aim lower and leave the rest for interactive
+  # work.
+  if [[ "$WEEK_PCT" -lt 45 ]]; then
+    BACKLOG_TARGET=24
+  elif [[ "$WEEK_PCT" -lt 60 ]]; then
+    BACKLOG_TARGET=15
+  else
+    BACKLOG_TARGET=9
+  fi
+
+  # Targets are deliberately finer-grained than the weekday rotation's four. More scans only pay off
+  # if each one covers genuinely different ground -- rerunning "worker" five times mostly reproduces
+  # the first run's findings, however much budget is left.
+  ALL_TARGETS=(
+    worker-auth-and-tenancy
+    worker-data-and-storage
+    worker-api-and-errors
+    src-dashboard
+    src-gallery
+    ipad-pipeline
+    ipad-ui
+    security
+    performance
+    accessibility
+    ux-and-docs
+  )
+
+  BACKLOG_DEFICIT=$(( BACKLOG_TARGET - UNTRIAGED ))
+  [[ "$BACKLOG_DEFICIT" -lt 3 ]] && BACKLOG_DEFICIT=3
+  # Roughly three findings survive consolidation per scan, so this is the deficit divided by three,
+  # rounded up.
+  SWEEP_SLOTS=$(( (BACKLOG_DEFICIT + 2) / 3 ))
+  [[ "$SWEEP_SLOTS" -gt "${#ALL_TARGETS[@]}" ]] && SWEEP_SLOTS="${#ALL_TARGETS[@]}"
   SWEEP_TARGETS=("${ALL_TARGETS[@]:0:$SWEEP_SLOTS}")
-  TARGET="sweep of ${SWEEP_TARGETS[*]}"
+  TARGET="sweep of ${#SWEEP_TARGETS[@]} areas"
 else
   RUN_KIND="analyse"
   PROMPT_FILE="$REPO/scripts/review/prompts/daily.md"
@@ -344,7 +376,8 @@ each covering a different area. Merge them into ONE ranked report.
 Rules:
 - Combine duplicates and near-duplicates into a single entry, keeping the clearest wording.
 - Drop anything trivial or speculative. Quality over completeness.
-- Keep at most 12 entries. If there are more, keep the 12 most worth doing.
+- Keep at most $BACKLOG_DEFICIT entries. If there are more, keep the best ones. Do not pad to reach
+  that number — a shorter honest report is better than a padded one.
 - Renumber from 1, ordered by value, most worth doing first.
 - Preserve each entry's What / Why it matters / Where / Size structure verbatim where you can.
 - Output only the merged markdown report. No preamble, no commentary about merging.

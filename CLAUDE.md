@@ -104,11 +104,22 @@ open issue carries the `ready` label, that run implements it and opens a PR; oth
 deduplicates and ranks them into one report of at most 12 entries. Only apply `ready` to work you
 are comfortable being done unattended.
 
-**A sweep's breadth is capped by triage capacity, not budget.** A single scan measures at roughly one
-point of the weekly window, so a Saturday at 45% could afford about thirty-five — but the limit that
-matters is how many suggestions are worth reading. Slots are `(15 - untriaged) / 3`, capped at five.
-The sweep also re-reads the budget between scans and stops early at 70% weekly, because it is the
-longest thing this job does and an interactive session can move that window underneath it.
+**A sweep fills the backlog toward a target, rather than running a fixed number of scans.** The
+weekly window expires Sunday whether or not it was used, so an empty backlog with budget left is
+exactly when it is worth stocking up. The target is 24 open untriaged issues under 45% weekly, 15
+under 60%, and 9 above that; scans run at roughly three surviving findings each, so the count is
+`(target − untriaged) / 3`. An empty backlog on a good week gets 8 scans; a full one gets 1.
+
+Sweep targets are finer-grained than the weekday rotation's four (`worker-auth-and-tenancy`,
+`src-gallery`, `ipad-pipeline`, `accessibility`, and so on — the full list is in
+`scripts/review/prompts/daily.md`). That is deliberate: more scans only pay off if each covers
+different ground, and rerunning `worker` five times mostly reproduces the first run's findings
+however much budget is left.
+
+The consolidation cap tracks the same deficit, so extra scans are not wasted — but the prompt says
+explicitly not to pad, because a short honest report beats a padded one. The sweep also re-reads the
+budget between scans and stops early at 70% weekly, since it is the longest thing this job does and
+an interactive session can move that window underneath it.
 
 **Budget gates.** The wrapper parses `claude -p "/usage"` before doing anything. It stands down
 entirely above 80% weekly, and scales depth to headroom below that (Opus/`max` under 45%, Opus/`high`

@@ -11,9 +11,26 @@ your entire output becomes the body of a GitHub issue that Patrick reads on his 
 - `ipad` — `ipad/PickPic.swiftpm/` only: the upload pipeline, the durable queue, RAW conversion.
 - `cross-cutting` — security, error handling, performance, accessibility, and consistency between
   the web and iPad surfaces.
-- `ux-and-docs` — product polish and friction in the actual photographer/viewer workflows, plus
-  whether `CLAUDE.md` and `docs/` still match the code.
 - `everything` — all of the above, in one sweep.
+
+A sweep run uses narrower targets, so that several scans cover genuinely different ground:
+
+- `worker-auth-and-tenancy` — `requireAdminPrincipal`, Access vs session principals, `AccountScope`,
+  Origin/CSRF checks, anything that could leak across accounts.
+- `worker-data-and-storage` — D1 queries and indexes, R2 key handling, the storage counter, deletes
+  and the paths that decrement it.
+- `worker-api-and-errors` — route ordering in the regex chain, status codes, validation, what
+  happens on a malformed or hostile request.
+- `src-dashboard` — the admin dashboard at `src/pages/DashboardPage.tsx` and its components.
+- `src-gallery` — the public gallery. Mobile-first; most viewers are on phones.
+- `ipad-pipeline` — RAW conversion, the durable queue, background uploads, resumption after
+  suspension.
+- `ipad-ui` — the SwiftUI screens, navigation, and what the photographer actually sees mid-shoot.
+- `security` — authn/authz, secrets handling, injection, information disclosure, cache headers.
+- `performance` — N+1 queries, unnecessary work on the upload path, oversized payloads, re-renders.
+- `accessibility` — semantics, focus handling, contrast, touch targets, screen-reader behaviour.
+- `ux-and-docs` — friction in the real photographer/viewer workflows, plus whether `CLAUDE.md` and
+  `docs/` still match the code.
 
 ## Before you start
 
