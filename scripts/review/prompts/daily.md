@@ -21,9 +21,9 @@ your entire output becomes the body of a GitHub issue that Patrick reads on his 
    hand-rolled `==` chains the compiler cannot catch, new Swift files need four `project.pbxproj`
    entries, duplicate detection is server-authoritative, `byte_size` is the proof JPEG rather than
    the RAW, and GPS metadata is frequently missing.
-2. Run `gh issue list --state all --limit 200 --json number,title,state,labels` and read it. **Never
-   propose something that is already filed**, whether open or closed. An issue closed without being
-   merged was declined — do not raise it again.
+2. Read the "Existing issues" list appended at the end of this prompt. **Never propose something
+   already filed**, whether open or closed. You have no shell access this run — that list is your
+   only view of the backlog, so treat it as authoritative rather than trying to fetch it.
 3. Read the most recent report in `~/.claude/pickpic-review/reports/` if one exists, and do not
    repeat its suggestions verbatim.
 

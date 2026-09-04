@@ -133,6 +133,17 @@ launchctl bootout gui/$(id -u)/com.pickpic.claude-review-surplus
 
 Dry-run the decision logic without spending anything: `./scripts/review/run-review.sh daily --dry-run`.
 
+Two things about headless `claude -p` that cost a broken run to find, and that `--dry-run` cannot
+catch because it exits before the invocation:
+
+- **`--allowedTools` must be a bash array, not a string.** Rules like `Bash(git log:*)` contain a
+  space, so an unquoted string expansion splits them into fragments and the CLI silently drops every
+  one — logging `Ignoring --allowedTools rule "log:*)"` and then running with no Bash access at all.
+- **`gh` cannot be granted to a headless run at all.** It requests approval regardless of the rule,
+  even `Bash(gh:*)`, and in print mode nothing can approve it. Anything needing GitHub or network
+  access must be done by the wrapper and passed in through the prompt — which is how the analysis
+  run gets its deduplication list.
+
 ## Traps that cost real time
 
 These are not discoverable by reading the code, and several are silently destructive.

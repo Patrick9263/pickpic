@@ -23,6 +23,22 @@ LOCK_DIR="$STATE_DIR/.lock"
 # launchd starts jobs with a minimal PATH, and none of node/npm/gh resolve without this.
 export PATH="/Users/patrick/.local/bin:/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+# Re-exec from a snapshot outside the repo before doing anything else.
+#
+# bash reads a script lazily, by byte offset, as it executes. This script lives in the working tree
+# it operates on, so an implementation run that checks out another branch would rewrite or delete
+# the very file bash is mid-way through reading -- and bash would then execute whatever bytes now
+# sit at that offset. Copying to a fixed location first makes the running copy immune to anything
+# git does to the tree.
+SNAPSHOT="$STATE_DIR/.run-review.snapshot.sh"
+if [[ "${REVIEW_SNAPSHOTTED:-}" != "1" ]]; then
+  mkdir -p "$STATE_DIR"
+  cp "$0" "$SNAPSHOT"
+  chmod +x "$SNAPSHOT"
+  export REVIEW_SNAPSHOTTED=1
+  exec "$SNAPSHOT" "$@"
+fi
+
 MODE="${1:-daily}"
 DRY_RUN="no"
 [[ "${2:-}" == "--dry-run" ]] && DRY_RUN="yes"
@@ -213,6 +229,26 @@ REPORT_FILE="$REPORTS_DIR/$STAMP-$MODE.md"
 
 PROMPT="$(sed -e "s|{{TARGET}}|$TARGET|g" -e "s|{{ISSUE}}|${READY_ISSUE:-}|g" "$PROMPT_FILE")"
 
+# Deduplication context, gathered here rather than by the model. The wrapper runs in an ordinary
+# shell where `gh` works; an analysis run does not (see the ALLOWED note below), and without this a
+# report happily re-proposes things already filed or already declined.
+if [[ "$RUN_KIND" == "analyse" ]]; then
+  EXISTING_ISSUES="$(gh issue list --state all --limit 200 --json number,title,state \
+    --jq '.[] | "- #\(.number) [\(.state)] \(.title)"' 2>/dev/null || echo '(unavailable)')"
+  RECENT_COMMITS="$(git log --oneline -15 2>/dev/null || echo '(unavailable)')"
+  PROMPT="$PROMPT
+
+## Existing issues — never re-propose any of these
+
+An issue closed without a matching merge was declined. Do not raise it again.
+
+$EXISTING_ISSUES
+
+## Recent commits
+
+$RECENT_COMMITS"
+fi
+
 if [[ "$RUN_KIND" == "implement" ]]; then
   # Xcode overwrites a disk-edited project.pbxproj from its stale in-memory copy and silently drops
   # file references (CLAUDE.md trap 4). An unattended run must never risk that.
@@ -222,17 +258,22 @@ if [[ "$RUN_KIND" == "implement" ]]; then
 IMPORTANT: Xcode is currently running on this machine. You must NOT edit ipad/PickPic.xcodeproj/project.pbxproj.
 If this issue requires adding a new Swift file, stop and report that it was deferred for that reason."
   fi
-  ALLOWED="Read Grep Glob Edit Write Bash(git:*) Bash(gh:*) Bash(npm:*) Bash(xcodebuild:*)"
+  # An array, not a space-separated string: several of these rules contain spaces inside the
+  # parentheses, and an unquoted string expansion splits them into fragments the CLI then rejects.
+  ALLOWED=(Read Grep Glob Edit Write "Bash(git:*)" "Bash(gh:*)" "Bash(npm:*)" "Bash(xcodebuild:*)")
 else
-  # Analysis is strictly read-only; the report comes back on stdout rather than through Write.
-  ALLOWED="Read Grep Glob Bash(git log:*) Bash(git diff:*) Bash(gh issue list:*) Bash(gh issue view:*)"
+  # Analysis gets no Bash at all. `gh` cannot be granted to a headless `-p` run through
+  # --allowedTools -- it asks for approval regardless of the rule, and in print mode there is nobody
+  # to approve it -- so the wrapper gathers the git and GitHub context itself (just above) and hands
+  # it over in the prompt. That also keeps the analysis run genuinely read-only.
+  ALLOWED=(Read Grep Glob)
 fi
 
 set +e
 claude -p "$PROMPT" \
   --model "$MODEL" \
   --effort "$EFFORT" \
-  --allowedTools $ALLOWED \
+  --allowedTools "${ALLOWED[@]}" \
   >"$REPORT_FILE" 2>>"$LOG_FILE"
 CLAUDE_RC=$?
 set -e
