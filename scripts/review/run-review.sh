@@ -194,6 +194,20 @@ fi
 # A suggestion generator that outruns triage capacity just creates work, so stand down when the
 # untriaged backlog is already large.
 UNTRIAGED="$(gh issue list --state open --limit 100 --json number,labels --jq '[.[] | select(.labels | length == 0)] | length' 2>/dev/null || echo 0)"
+
+# Suggestions waiting inside an open report count as backlog too.
+#
+# Without this the backlog metric can never rise from this job's own output: a sweep posts ONE issue
+# and labels it `review-report`, so it never lands in the unlabelled count above. Every subsequent
+# run would then see an empty backlog and scan at full width forever, regardless of how many
+# untriaged suggestions were already sitting in reports nobody had read yet.
+PENDING_IN_REPORTS=0
+for n in $(gh issue list --label review-report --state open --limit 20 --json number --jq '.[].number' 2>/dev/null); do
+  c="$(gh issue view "$n" --json body --jq '.body' 2>/dev/null | grep -c '^### [0-9]' || true)"
+  PENDING_IN_REPORTS=$(( PENDING_IN_REPORTS + c ))
+done
+UNTRIAGED=$(( UNTRIAGED + PENDING_IN_REPORTS ))
+log "backlog: $UNTRIAGED untriaged ($PENDING_IN_REPORTS of them inside open reports)"
 if [[ -z "$READY_ISSUE" && "$UNTRIAGED" -gt 15 ]]; then
   log "SKIP: $UNTRIAGED untriaged open issues already -- not adding more"
   exit 0
