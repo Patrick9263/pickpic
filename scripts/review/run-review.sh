@@ -343,11 +343,24 @@ fi
 #
 # Oldest first, so the backlog drains in the order it was filed rather than newest-first, which is
 # what `gh issue list` returns by default.
+#
+# Issues already covered by an open PR are skipped. An issue stays open until the PR closing it is
+# merged, so without this the next run picks up the same issue it implemented yesterday and opens a
+# duplicate PR against work already awaiting review.
 READY_ISSUE=""
 if [[ "$MODE" == "surplus" ]]; then
-  READY_ISSUE="$(gh issue list --label ready --state open --limit 50 --json number,labels \
-    --jq '[.[] | select(([.labels[].name] | any(. == "review-report" or . == "review-trends")) | not)]
-          | sort_by(.number) | .[0].number // empty' 2>/dev/null || true)"
+  LINKED_ISSUES="$(gh pr list --state open --limit 50 --json body --jq '.[].body // ""' 2>/dev/null \
+    | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
+  for cand in $(gh issue list --label ready --state open --limit 50 --json number,labels \
+      --jq '[.[] | select(([.labels[].name] | any(. == "review-report" or . == "review-trends")) | not)]
+            | sort_by(.number) | .[].number' 2>/dev/null || true); do
+    if printf '%s\n' "$LINKED_ISSUES" | grep -qx "$cand" 2>/dev/null; then
+      log "skipping ready issue #$cand -- already has an open PR"
+      continue
+    fi
+    READY_ISSUE="$cand"
+    break
+  done
 fi
 
 # Unreviewed pull requests are backlog too, and the untriaged-issue count cannot see them.
