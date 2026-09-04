@@ -204,9 +204,23 @@ if [[ -n "$READY_ISSUE" ]]; then
   PROMPT_FILE="$REPO/scripts/review/prompts/surplus.md"
   TARGET="issue #$READY_ISSUE"
 elif [[ "$MODE" == "surplus" ]]; then
-  RUN_KIND="analyse"
+  # Several narrow scans beat one broad one when there is surplus to spend: each spends a full pass
+  # of attention on a single surface, and a consolidation step at the end merges and ranks them into
+  # one report.
+  #
+  # Breadth is capped by triage capacity, NOT by budget. A scan measures at roughly one point of the
+  # weekly window, so a Saturday sitting at 45% could afford about thirty-five of them -- but nobody
+  # can act on a hundred suggestions, and a report too long to read is worth less than a short one.
+  # The limit below leaves room for roughly three findings per scan under the same 15-issue ceiling
+  # the single-run path already respects.
+  RUN_KIND="sweep"
   PROMPT_FILE="$REPO/scripts/review/prompts/daily.md"
-  TARGET="everything"
+  SWEEP_SLOTS=$(( (15 - UNTRIAGED) / 3 ))
+  [[ "$SWEEP_SLOTS" -gt 5 ]] && SWEEP_SLOTS=5
+  [[ "$SWEEP_SLOTS" -lt 1 ]] && SWEEP_SLOTS=1
+  ALL_TARGETS=(worker src ipad cross-cutting ux-and-docs)
+  SWEEP_TARGETS=("${ALL_TARGETS[@]:0:$SWEEP_SLOTS}")
+  TARGET="sweep of ${SWEEP_TARGETS[*]}"
 else
   RUN_KIND="analyse"
   PROMPT_FILE="$REPO/scripts/review/prompts/daily.md"
@@ -232,11 +246,12 @@ PROMPT="$(sed -e "s|{{TARGET}}|$TARGET|g" -e "s|{{ISSUE}}|${READY_ISSUE:-}|g" "$
 # Deduplication context, gathered here rather than by the model. The wrapper runs in an ordinary
 # shell where `gh` works; an analysis run does not (see the ALLOWED note below), and without this a
 # report happily re-proposes things already filed or already declined.
-if [[ "$RUN_KIND" == "analyse" ]]; then
+CONTEXT_BLOCK=""
+if [[ "$RUN_KIND" != "implement" ]]; then
   EXISTING_ISSUES="$(gh issue list --state all --limit 200 --json number,title,state \
     --jq '.[] | "- #\(.number) [\(.state)] \(.title)"' 2>/dev/null || echo '(unavailable)')"
   RECENT_COMMITS="$(git log --oneline -15 2>/dev/null || echo '(unavailable)')"
-  PROMPT="$PROMPT
+  CONTEXT_BLOCK="
 
 ## Existing issues — never re-propose any of these
 
@@ -247,6 +262,7 @@ $EXISTING_ISSUES
 ## Recent commits
 
 $RECENT_COMMITS"
+  PROMPT="$PROMPT$CONTEXT_BLOCK"
 fi
 
 if [[ "$RUN_KIND" == "implement" ]]; then
@@ -269,18 +285,82 @@ else
   ALLOWED=(Read Grep Glob)
 fi
 
-set +e
-claude -p "$PROMPT" \
-  --model "$MODEL" \
-  --effort "$EFFORT" \
-  --allowedTools "${ALLOWED[@]}" \
-  >"$REPORT_FILE" 2>>"$LOG_FILE"
-CLAUDE_RC=$?
-set -e
+run_claude() {
+  local prompt="$1" outfile="$2" rc
+  set +e
+  claude -p "$prompt" \
+    --model "$MODEL" \
+    --effort "$EFFORT" \
+    --allowedTools "${ALLOWED[@]}" \
+    >"$outfile" 2>>"$LOG_FILE"
+  rc=$?
+  set -e
+  return "$rc"
+}
 
-if [[ "$CLAUDE_RC" -ne 0 ]]; then
-  log "ERROR: claude exited $CLAUDE_RC -- see $REPORT_FILE and this log"
-  exit "$CLAUDE_RC"
+if [[ "$RUN_KIND" == "sweep" ]]; then
+  SWEEP_ACCUM="$STATE_DIR/.sweep-findings.md"
+  : >"$SWEEP_ACCUM"
+
+  for t in "${SWEEP_TARGETS[@]}"; do
+    # Re-check between scans rather than trusting the opening reading. A sweep is the longest thing
+    # this job does, and the window it is spending can be moved by an interactive session at the
+    # same time.
+    read_usage
+    if [[ -n "${WEEK_PCT:-}" && "$WEEK_PCT" -ge 70 ]]; then
+      log "sweep: stopping early at ${WEEK_PCT}% weekly, before scanning $t"
+      break
+    fi
+
+    SCAN_PROMPT="$(sed -e "s|{{TARGET}}|$t|g" -e "s|{{ISSUE}}||g" "$PROMPT_FILE")$CONTEXT_BLOCK"
+    if [[ -s "$SWEEP_ACCUM" ]]; then
+      SCAN_PROMPT="$SCAN_PROMPT
+
+## Already found earlier in this same sweep — do not repeat any of these
+
+$(cat "$SWEEP_ACCUM")"
+    fi
+
+    log "sweep: scanning $t"
+    if run_claude "$SCAN_PROMPT" "$REPORTS_DIR/$STAMP-sweep-$t.md"; then
+      printf '\n## From the %s scan\n\n' "$t" >>"$SWEEP_ACCUM"
+      cat "$REPORTS_DIR/$STAMP-sweep-$t.md" >>"$SWEEP_ACCUM"
+    else
+      log "sweep: $t scan failed, continuing"
+    fi
+  done
+
+  if [[ ! -s "$SWEEP_ACCUM" ]]; then
+    log "ERROR: sweep produced no findings"
+    exit 1
+  fi
+
+  # Consolidate. Without this the report is N concatenated lists with their own numbering and
+  # overlapping findings, which is exactly the unreadable output the slot cap exists to avoid.
+  log "sweep: consolidating"
+  CONSOLIDATE_PROMPT="Below are findings from several independent scans of the PickPic codebase,
+each covering a different area. Merge them into ONE ranked report.
+
+Rules:
+- Combine duplicates and near-duplicates into a single entry, keeping the clearest wording.
+- Drop anything trivial or speculative. Quality over completeness.
+- Keep at most 12 entries. If there are more, keep the 12 most worth doing.
+- Renumber from 1, ordered by value, most worth doing first.
+- Preserve each entry's What / Why it matters / Where / Size structure verbatim where you can.
+- Output only the merged markdown report. No preamble, no commentary about merging.
+- End with a single line '**Recommended next:**' naming the one entry to do first and why.
+
+$(cat "$SWEEP_ACCUM")"
+
+  if ! run_claude "$CONSOLIDATE_PROMPT" "$REPORT_FILE"; then
+    log "consolidation failed -- falling back to the raw concatenated findings"
+    cp "$SWEEP_ACCUM" "$REPORT_FILE"
+  fi
+else
+  if ! run_claude "$PROMPT" "$REPORT_FILE"; then
+    log "ERROR: claude failed -- see $REPORT_FILE and this log"
+    exit 1
+  fi
 fi
 
 read_usage

@@ -99,9 +99,16 @@ runs post a single GitHub issue labelled `review-report` with numbered suggestio
 file individual issues**, because triage is Patrick's decision.
 
 The surplus runs exist to spend a weekly budget window that would otherwise expire unused. If an
-open issue carries the `ready` label, that run implements it and opens a PR; otherwise it falls back
-to a full cross-surface analysis. Only apply `ready` to work you are comfortable being done
-unattended.
+open issue carries the `ready` label, that run implements it and opens a PR; otherwise it runs a
+**sweep** — several independent single-surface scans, then a consolidation pass that merges,
+deduplicates and ranks them into one report of at most 12 entries. Only apply `ready` to work you
+are comfortable being done unattended.
+
+**A sweep's breadth is capped by triage capacity, not budget.** A single scan measures at roughly one
+point of the weekly window, so a Saturday at 45% could afford about thirty-five — but the limit that
+matters is how many suggestions are worth reading. Slots are `(15 - untriaged) / 3`, capped at five.
+The sweep also re-reads the budget between scans and stops early at 70% weekly, because it is the
+longest thing this job does and an interactive session can move that window underneath it.
 
 **Budget gates.** The wrapper parses `claude -p "/usage"` before doing anything. It stands down
 entirely above 80% weekly, and scales depth to headroom below that (Opus/`max` under 45%, Opus/`high`

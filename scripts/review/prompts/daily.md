@@ -11,6 +11,8 @@ your entire output becomes the body of a GitHub issue that Patrick reads on his 
 - `ipad` — `ipad/PickPic.swiftpm/` only: the upload pipeline, the durable queue, RAW conversion.
 - `cross-cutting` — security, error handling, performance, accessibility, and consistency between
   the web and iPad surfaces.
+- `ux-and-docs` — product polish and friction in the actual photographer/viewer workflows, plus
+  whether `CLAUDE.md` and `docs/` still match the code.
 - `everything` — all of the above, in one sweep.
 
 ## Before you start
