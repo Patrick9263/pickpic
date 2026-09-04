@@ -84,9 +84,9 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
 
 ## Scheduled review job
 
-Two LaunchAgents run [scripts/review/run-review.sh](scripts/review/run-review.sh) unattended, at
-6:10am America/New_York — inside the hours Patrick is asleep, so an expensive run never competes
-with his own interactive use.
+Three LaunchAgents run [scripts/review/run-review.sh](scripts/review/run-review.sh) unattended, in
+the early morning America/New_York — inside the hours Patrick is asleep, so an expensive run never
+competes with his own interactive use.
 
 | Agent                               | When           | What it does                             |
 | ----------------------------------- | -------------- | ---------------------------------------- |
