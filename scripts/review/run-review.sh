@@ -502,6 +502,7 @@ If this issue requires adding a new Swift file, stop and report that it was defe
   # An array, not a space-separated string: several of these rules contain spaces inside the
   # parentheses, and an unquoted string expansion splits them into fragments the CLI then rejects.
   ALLOWED=(Read Grep Glob Edit Write "Bash(git:*)" "Bash(gh:*)" "Bash(npm:*)" "Bash(xcodebuild:*)")
+  PR_BEFORE="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
 else
   # Analysis gets no Bash at all. `gh` cannot be granted to a headless `-p` run through
   # --allowedTools -- it asks for approval regardless of the rule, and in print mode there is nobody
@@ -607,6 +608,17 @@ log "done: week ${BUDGET_BEFORE_WEEK}% -> ${BUDGET_AFTER_WEEK}% (+${WEEK_DELTA} 
 # ---------------------------------------------------------------------------
 # An implementation run opens its own PR, so there is nothing further to post.
 if [[ "$RUN_KIND" == "implement" ]]; then
+  # Record which PR this produced. The wrapper does not open it -- the model does, as part of the
+  # prompt -- so the only way to know is to look for one that was not there before. Without this the
+  # metrics row has no link to its output, and the trends run cannot measure conversion for
+  # implementation runs at all.
+  PR_AFTER="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+  if [[ -n "$PR_AFTER" && "$PR_AFTER" != "$PR_BEFORE" ]]; then
+    ISSUE_REF="$PR_AFTER"
+    log "opened PR #$PR_AFTER"
+  else
+    log "no new PR detected -- the run may have stopped short; check $REPORT_FILE"
+  fi
   RUN_OUTCOME="ok-implement"
   log "implementation run finished for $TARGET; PR handling was Claude's responsibility"
   exit 0
