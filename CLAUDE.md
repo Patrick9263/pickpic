@@ -82,6 +82,116 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
 
 - **Nothing is on the sandboxed `PATH`.** `node`, `npm`, and `gh` all resolve to "command not found" until you prepend their directories: `export PATH=/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:$PATH`. Do it in the same call as the command; shell state does not persist between calls.
 
+## Scheduled review job
+
+Three LaunchAgents run [scripts/review/run-review.sh](scripts/review/run-review.sh) unattended, in
+the early morning America/New_York — inside the hours Patrick is asleep, so an expensive run never
+competes with his own interactive use.
+
+| Agent                               | When           | What it does                             |
+| ----------------------------------- | -------------- | ---------------------------------------- |
+| `com.pickpic.claude-review-daily`   | Mon–Thu 6:10am | Rotating single-surface analysis         |
+| `com.pickpic.claude-review-surplus` | Fri–Sat 6:10am | Ready-issue implementation, else a sweep |
+| `com.pickpic.claude-review-trends`  | Sun 7:10am     | Audits the job's own effectiveness       |
+
+The daily pass rotates — Mon `worker/`, Tue `src/`, Wed `ipad/`, Thu cross-cutting — so each run
+goes deep on one area rather than skimming everything and resurfacing yesterday's findings. Analysis
+runs post a single GitHub issue labelled `review-report` with numbered suggestions; **they never
+file individual issues**, because triage is Patrick's decision.
+
+The surplus runs exist to spend a weekly budget window that would otherwise expire unused. If an
+open issue carries the `ready` label, that run implements it and opens a PR; otherwise it runs a
+**sweep** — several independent single-surface scans, then a consolidation pass that merges,
+deduplicates and ranks them into one report of at most 12 entries. Only apply `ready` to work you
+are comfortable being done unattended.
+
+**A sweep fills the backlog toward a target, rather than running a fixed number of scans.** The
+weekly window expires Sunday whether or not it was used, so an empty backlog with budget left is
+exactly when it is worth stocking up. The target is 24 open untriaged issues under 45% weekly, 15
+under 60%, and 9 above that; scans run at roughly three surviving findings each, so the count is
+`(target − untriaged) / 3`. An empty backlog on a good week gets 8 scans; a full one gets 1.
+
+Sweep targets are finer-grained than the weekday rotation's four (`worker-auth-and-tenancy`,
+`src-gallery`, `ipad-pipeline`, `accessibility`, and so on — the full list is in
+`scripts/review/prompts/daily.md`). That is deliberate: more scans only pay off if each covers
+different ground, and rerunning `worker` five times mostly reproduces the first run's findings
+however much budget is left.
+
+The consolidation cap tracks the same deficit, so extra scans are not wasted — but the prompt says
+explicitly not to pad, because a short honest report beats a padded one. The sweep also re-reads the
+budget between scans and stops early at 70% weekly, since it is the longest thing this job does and
+an interactive session can move that window underneath it.
+
+**Budget gates.** The wrapper parses `claude -p "/usage"` before doing anything. It stands down
+entirely above 80% weekly, and scales depth to headroom below that (Opus/`max` under 45%, Opus/`high`
+to 65%, Sonnet/`medium` to 80%). Surplus runs additionally need weekly below 60%.
+
+It will **defer across a session reset but never across a weekly one.** A session window is ≤5h and
+resets the same morning, so sleeping through it still lands a useful report; crossing a weekly reset
+would mean spending the _next_ week's budget early, which is the thing the job exists to avoid.
+
+**Do not label a `review-report` or `review-trends` issue `ready`.** Those are containers holding a
+numbered list of suggestions, not single implementable changes, and an implementation run that picks
+one up will implement several unrelated suggestions in one diff. The script now filters them out
+defensively — and takes the _oldest_ eligible ready issue, since `gh issue list` returns newest
+first — but the label belongs on the individual issue you file from a report, not on the report.
+
+An implementation run also **restores the working tree to the branch it started on.** It checks out
+`main` and branches from there, and every scheduled run afterwards invokes the script by absolute
+path from that same tree; if it were left on a branch that does not contain the script, the next run
+would die with a missing-file error and the job would silently stop. It will not do this if the tree
+is dirty — uncommitted work is worth more than the automatic restore.
+
+**Four rules the unattended implementation run must never break** — it never pushes to `main`,
+merges, or deploys (a `main` push deploys all three workers); it never authors a D1 migration; it
+does one issue per run; and it refuses to touch `project.pbxproj` while Xcode is running, because of
+trap 4 below. It also stands down if more than 15 untriaged issues are already open, since a
+suggestion generator that outruns triage capacity just creates work.
+
+**The Sunday trends run audits the job rather than the code**, posting an issue labelled
+`review-trends`. It runs after the weekly window resets, so it reports on a fully closed week and
+pays for itself out of the fresh one. The question it exists to answer is **conversion — what
+fraction of suggestions Patrick actually filed as issues** — because cost is already known (about a
+point per scan) and is not the binding constraint. Low conversion means the caps are too generous
+and scans are being wasted; high conversion means they are throttling useful work. The prompt is
+told explicitly **not to recommend threshold changes with under three weeks of data**, since a
+confident recommendation drawn from six rows will be acted on and is worse than none.
+
+Every run appends one row to `~/.claude/pickpic-review/metrics.csv` — timestamp, mode, kind, target,
+outcome, model, effort, scan count, findings, before/after budget for both windows, duration, and
+the issue it posted. It is written from an `EXIT` trap, so **skips and failures are recorded as
+faithfully as successes**: how often the job stands down and why is the more interesting trend than
+what a successful run costs. Budget figures are integer percentages, so a single row is coarse, but
+across weeks it answers whether sweeps are getting more expensive and how much of the weekly window
+this job really consumes.
+
+Logs are in `~/Library/Logs/claude-review-*.log` and `~/.claude/pickpic-review/logs/`; reports are
+kept in `~/.claude/pickpic-review/reports/`. An unparseable `/usage` aborts the run and logs loudly
+— **if reports stop arriving, read that log first**, because a silent parser break looks exactly
+like "nothing worth reporting".
+
+The versioned plists live in `scripts/review/launchd/`; the loaded copies are in
+`~/Library/LaunchAgents/`. Edit the versioned ones, copy them across, then
+`launchctl bootout` and `launchctl bootstrap gui/$(id -u) <plist>` to reload. To disable entirely:
+
+```bash
+launchctl bootout gui/$(id -u)/com.pickpic.claude-review-daily
+launchctl bootout gui/$(id -u)/com.pickpic.claude-review-surplus
+```
+
+Dry-run the decision logic without spending anything: `./scripts/review/run-review.sh daily --dry-run`.
+
+Two things about headless `claude -p` that cost a broken run to find, and that `--dry-run` cannot
+catch because it exits before the invocation:
+
+- **`--allowedTools` must be a bash array, not a string.** Rules like `Bash(git log:*)` contain a
+  space, so an unquoted string expansion splits them into fragments and the CLI silently drops every
+  one — logging `Ignoring --allowedTools rule "log:*)"` and then running with no Bash access at all.
+- **`gh` cannot be granted to a headless run at all.** It requests approval regardless of the rule,
+  even `Bash(gh:*)`, and in print mode nothing can approve it. Anything needing GitHub or network
+  access must be done by the wrapper and passed in through the prompt — which is how the analysis
+  run gets its deduplication list.
+
 ## Traps that cost real time
 
 These are not discoverable by reading the code, and several are silently destructive.

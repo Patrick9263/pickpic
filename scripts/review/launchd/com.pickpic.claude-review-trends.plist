@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pickpic.claude-review-trends</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/patrick/Dev/pickpic/scripts/review/run-review.sh</string>
+        <string>trends</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/patrick/Dev/pickpic</string>
+
+    <!-- Sunday at 7:10am, which is after the weekly window resets around 4:59am. That ordering is
+         deliberate: the analysis reports on a week that has fully closed, and pays for itself out
+         of the fresh window rather than the one it is measuring. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>10</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/patrick/Library/Logs/claude-review-trends.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/patrick/Library/Logs/claude-review-trends.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/patrick/.local/bin:/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
