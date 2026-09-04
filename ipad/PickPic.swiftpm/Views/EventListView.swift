@@ -318,6 +318,13 @@ struct EventListView: View {
             EventTitleEditorView(
                 navigationTitle: "New Event",
                 saveButtonTitle: "Create",
+                /*
+                 * A new event starts with an empty name and nothing else
+                 * to decide, so the keyboard comes up with the sheet.
+                 * Renaming deliberately does not: that sheet opens on an
+                 * existing title the user may only want to amend or read.
+                 */
+                focusesTitleOnAppear: true,
                 onSave: onCreateEvent
             )
         }
