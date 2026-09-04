@@ -135,6 +135,14 @@ does one issue per run; and it refuses to touch `project.pbxproj` while Xcode is
 trap 4 below. It also stands down if more than 15 untriaged issues are already open, since a
 suggestion generator that outruns triage capacity just creates work.
 
+Every run appends one row to `~/.claude/pickpic-review/metrics.csv` — timestamp, mode, kind, target,
+outcome, model, effort, scan count, findings, before/after budget for both windows, duration, and
+the issue it posted. It is written from an `EXIT` trap, so **skips and failures are recorded as
+faithfully as successes**: how often the job stands down and why is the more interesting trend than
+what a successful run costs. Budget figures are integer percentages, so a single row is coarse, but
+across weeks it answers whether sweeps are getting more expensive and how much of the weekly window
+this job really consumes.
+
 Logs are in `~/Library/Logs/claude-review-*.log` and `~/.claude/pickpic-review/logs/`; reports are
 kept in `~/.claude/pickpic-review/reports/`. An unparseable `/usage` aborts the run and logs loudly
 — **if reports stop arriving, read that log first**, because a silent parser break looks exactly

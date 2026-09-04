@@ -58,7 +58,40 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
   log "SKIP: another review run holds the lock ($LOCK_DIR)"
   exit 0
 fi
-trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+# One row per run, written from the EXIT trap so that skips and failures are recorded as faithfully
+# as successes -- how often the job stands down, and why, is the more interesting trend than how
+# much a successful run cost.
+#
+# The budget figures are integer percentages, so a single run's delta is coarse (one to three
+# points). Over weeks that is still enough to answer the questions worth asking: whether sweeps are
+# getting more expensive, whether the depth ladder picks sensible models, and how much of the weekly
+# window this job is really consuming.
+METRICS_FILE="$STATE_DIR/metrics.csv"
+START_EPOCH="$(date +%s)"
+RUN_OUTCOME="unknown"
+SCANS_DONE=0
+FINDINGS_COUNT=""
+ISSUE_REF=""
+
+record_metrics() {
+  [[ "$DRY_RUN" == "yes" ]] && return 0
+  if [[ ! -f "$METRICS_FILE" ]]; then
+    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue\n' >"$METRICS_FILE"
+  fi
+  local wb="${BUDGET_BEFORE_WEEK:-}" wa="${BUDGET_AFTER_WEEK:-}" wd=""
+  [[ -n "$wb" && -n "$wa" && "$wa" != "?" ]] && wd=$(( wa - wb ))
+  printf '%s,%s,%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$MODE" "${RUN_KIND:-}" "${TARGET:-}" "$RUN_OUTCOME" \
+    "${MODEL:-}" "${EFFORT:-}" "$SCANS_DONE" "$FINDINGS_COUNT" \
+    "$wb" "$wa" "$wd" "${BUDGET_BEFORE_SESSION:-}" "${BUDGET_AFTER_SESSION:-}" \
+    "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" >>"$METRICS_FILE"
+}
+
+trap 'record_metrics; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 
 # ---------------------------------------------------------------------------
 # Budget
@@ -83,6 +116,7 @@ read_usage() {
 # identical to "nothing worth reporting" from the outside. If reports stop arriving, read this log.
 require_budget() {
   if [[ -z "${SESSION_PCT:-}" || -z "${WEEK_PCT:-}" ]]; then
+    RUN_OUTCOME="abort-unparseable-usage"
     log "ABORT: could not parse /usage output -- the format may have changed. Raw output follows:"
     printf '%s\n' "$USAGE_RAW" | tee -a "$LOG_FILE"
     exit 1
@@ -146,6 +180,7 @@ BUDGET_BEFORE_SESSION="$SESSION_PCT"
 log "mode=$MODE week=${WEEK_PCT}% session=${SESSION_PCT}% depth=$DEPTH"
 
 if [[ "$DEPTH" == "skip" ]]; then
+  RUN_OUTCOME="skip-weekly-ceiling"
   log "SKIP: weekly window at ${WEEK_PCT}% -- protecting remaining interactive capacity"
   exit 0
 fi
@@ -153,6 +188,7 @@ fi
 # The surplus run exists to drain an old weekly window before it expires, so it is only worth firing
 # when there is genuine surplus to drain.
 if [[ "$MODE" == "surplus" && "$WEEK_PCT" -ge 60 ]]; then
+  RUN_OUTCOME="skip-no-surplus"
   log "SKIP: surplus run needs weekly < 60%, currently ${WEEK_PCT}%"
   exit 0
 fi
@@ -175,6 +211,7 @@ if [[ "$MODE" == "surplus" && "$SESSION_PCT" -ge 70 ]]; then
       log "post-defer: week=${WEEK_PCT}% session=${SESSION_PCT}% depth=$DEPTH"
       [[ "$DEPTH" == "skip" ]] && { log "SKIP after defer"; exit 0; }
     else
+      RUN_OUTCOME="skip-defer-too-long"
       log "SKIP: session at ${SESSION_PCT}% and reset is ${WAIT}s away -- beyond the 5.5h defer cap"
       exit 0
     fi
@@ -209,6 +246,7 @@ done
 UNTRIAGED=$(( UNTRIAGED + PENDING_IN_REPORTS ))
 log "backlog: $UNTRIAGED untriaged ($PENDING_IN_REPORTS of them inside open reports)"
 if [[ -z "$READY_ISSUE" && "$UNTRIAGED" -gt 15 ]]; then
+  RUN_OUTCOME="skip-backlog-full"
   log "SKIP: $UNTRIAGED untriaged open issues already -- not adding more"
   exit 0
 fi
@@ -276,6 +314,7 @@ fi
 log "kind=$RUN_KIND target=$TARGET model=${MODEL} effort=${EFFORT}"
 
 if [[ "$DRY_RUN" == "yes" ]]; then
+  RUN_OUTCOME="dry-run"
   log "DRY RUN -- would invoke claude with prompt $PROMPT_FILE"
   exit 0
 fi
@@ -369,6 +408,7 @@ $(cat "$SWEEP_ACCUM")"
 
     log "sweep: scanning $t"
     if run_claude "$SCAN_PROMPT" "$REPORTS_DIR/$STAMP-sweep-$t.md"; then
+      SCANS_DONE=$(( SCANS_DONE + 1 ))
       printf '\n## From the %s scan\n\n' "$t" >>"$SWEEP_ACCUM"
       cat "$REPORTS_DIR/$STAMP-sweep-$t.md" >>"$SWEEP_ACCUM"
     else
@@ -377,6 +417,7 @@ $(cat "$SWEEP_ACCUM")"
   done
 
   if [[ ! -s "$SWEEP_ACCUM" ]]; then
+    RUN_OUTCOME="error-no-findings"
     log "ERROR: sweep produced no findings"
     exit 1
   fi
@@ -404,7 +445,9 @@ $(cat "$SWEEP_ACCUM")"
     cp "$SWEEP_ACCUM" "$REPORT_FILE"
   fi
 else
+  SCANS_DONE=1
   if ! run_claude "$PROMPT" "$REPORT_FILE"; then
+    RUN_OUTCOME="error-claude-failed"
     log "ERROR: claude failed -- see $REPORT_FILE and this log"
     exit 1
   fi
@@ -424,6 +467,7 @@ log "done: week ${BUDGET_BEFORE_WEEK}% -> ${BUDGET_AFTER_WEEK}% (+${WEEK_DELTA} 
 # ---------------------------------------------------------------------------
 # An implementation run opens its own PR, so there is nothing further to post.
 if [[ "$RUN_KIND" == "implement" ]]; then
+  RUN_OUTCOME="ok-implement"
   log "implementation run finished for $TARGET; PR handling was Claude's responsibility"
   exit 0
 fi
@@ -444,4 +488,7 @@ ISSUE_URL="$(gh issue create \
   --label review-report \
   --assignee @me 2>&1)"
 
-log "posted: $ISSUE_URL"
+RUN_OUTCOME="ok"
+ISSUE_REF="$(printf '%s' "$ISSUE_URL" | grep -o '[0-9]*$' || true)"
+FINDINGS_COUNT="$(grep -c '^### [0-9]' "$REPORT_FILE" || true)"
+log "posted: $ISSUE_URL (${FINDINGS_COUNT} findings, ${SCANS_DONE} scan(s))"
