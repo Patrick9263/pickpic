@@ -90,6 +90,32 @@ export function isLocalRequest(request: Request): boolean {
   );
 }
 
+/*
+ * Fails closed on role: an Access principal is either the bootstrap operator
+ * or the iPad service token, both already fully privileged with no narrower
+ * role to check, so only a session principal is examined here -- and only
+ * 'owner' passes. Today that's every row that exists (signup and Apple
+ * linking both write 'owner' -- see resolveAccountForPrincipal's callers in
+ * worker/auth.ts), so this changes nothing yet. It exists so the first
+ * account_users row written with any other role doesn't silently inherit
+ * delete-event, clear-photos and clear-hearts access nobody granted it.
+ */
+export function requireOwnerRole(principal: AdminPrincipal): Response | null {
+  if (principal.kind === "session" && principal.role !== "owner") {
+    return Response.json(
+      { error: "This action requires the account owner." },
+      {
+        status: 403,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  }
+
+  return null;
+}
+
 export function forbidden(error: string): AdminAccessResult {
   return {
     ok: false,
