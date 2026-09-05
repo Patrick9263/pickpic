@@ -50,6 +50,17 @@ struct UploadProgress:
     var duplicateSourceFilenames: Set<String>
     var optimizedSourceFilenames: Set<String>
 
+    /*
+     * Filenames a background transfer completed while PickPic was not
+     * running, staged for re-upload so the server can confirm they truly
+     * landed. The server correctly answers that re-upload as a duplicate,
+     * but that is this job recovering its own work, not a duplicate the
+     * photographer should be told about -- so it must not join
+     * duplicateSourceFilenames, which feeds the "already existed" count.
+     */
+    var reconciliationPendingSourceFilenames:
+        Set<String>
+
     var currentFilename: String?
 
     var startedAt: Date?
@@ -102,7 +113,9 @@ struct UploadProgress:
         activeBackgroundTransfer:
             BackgroundUploadContext? = nil,
         backgroundTransferNeedsReconciliation:
-            Bool = false
+            Bool = false,
+        reconciliationPendingSourceFilenames:
+            Set<String> = []
     ) {
         self.completedSourceFilenames =
         completedSourceFilenames
@@ -110,6 +123,8 @@ struct UploadProgress:
         duplicateSourceFilenames
         self.optimizedSourceFilenames =
         optimizedSourceFilenames
+        self.reconciliationPendingSourceFilenames =
+        reconciliationPendingSourceFilenames
         self.currentFilename = currentFilename
         self.startedAt = startedAt
         self.completedAt = completedAt
@@ -169,6 +184,7 @@ struct UploadProgress:
         case completedSourceFilenames
         case duplicateSourceFilenames
         case optimizedSourceFilenames
+        case reconciliationPendingSourceFilenames
         case currentFilename
         case startedAt
         case completedAt
@@ -212,6 +228,14 @@ struct UploadProgress:
             Set<String>.self,
             forKey:
                 .optimizedSourceFilenames
+        )
+        ?? []
+
+        reconciliationPendingSourceFilenames =
+        try container.decodeIfPresent(
+            Set<String>.self,
+            forKey:
+                .reconciliationPendingSourceFilenames
         )
         ?? []
 

@@ -46,8 +46,16 @@ enum AppStorageService {
     private static let megabyte:
     Int64 = 1_024 * 1_024
     
+    /*
+     * Docs/pricing.md puts proofs near 4 MB regardless of source RAW size,
+     * since conversion always downsamples to the same bounded long edge
+     * and quality (ImageConversionService.maxLongEdge / .jpegQuality).
+     * StorageHeadroomService anchors its own estimate at 5 MB for the same
+     * reason; this adds a little extra margin because, unlike that
+     * warning, this check blocks conversion outright with no override.
+     */
     private static let proofAllowancePerPhoto:
-    Int64 = 15 * megabyte
+    Int64 = 6 * megabyte
     
     private static let proofProcessingReserve:
     Int64 = 512 * megabyte

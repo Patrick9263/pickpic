@@ -249,7 +249,10 @@ struct UploadQueueView: View {
                     onRelinkFolder: {
                         relinkingJobID = job.id
                         showingFolderRelinker = true
-                    }
+                    },
+                    preflightProgress:
+                        uploadQueue
+                            .preflightProgressByJobID[job.id]
                 )
             }
             .onDelete(perform: deleteJobs)
@@ -419,7 +422,9 @@ private struct UploadJobRow: View {
     let isRelinkingFolder: Bool
     let canRelinkFolder: Bool
     let onRelinkFolder: () -> Void
-    
+    let preflightProgress:
+        (processed: Int, total: Int)?
+
     @State private var folderIsAccessible:
     Bool?
     
@@ -771,10 +776,22 @@ private struct UploadJobRow: View {
             
         case .preflighting:
             HStack(spacing: 10) {
-                ProgressView()
-                Text(
-                    "Checking which photos are already uploaded…"
-                )
+                if let progress = preflightProgress,
+                    progress.total > 0
+                {
+                    ProgressView(
+                        value: Double(progress.processed),
+                        total: Double(progress.total)
+                    )
+                    Text(
+                        "Checking \(progress.processed) of \(progress.total) photos for duplicates…"
+                    )
+                } else {
+                    ProgressView()
+                    Text(
+                        "Checking which photos are already uploaded…"
+                    )
+                }
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
