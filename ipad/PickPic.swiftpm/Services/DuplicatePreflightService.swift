@@ -173,9 +173,15 @@ enum DuplicatePreflightService {
          * All file access happens inside a single detached task so the
          * security-scoped resource is never held across a suspension
          * point, matching how conversion isolates its file work.
+         *
+         * A detached task does not inherit the caller's cancellation, so
+         * expireContinuedProcessing cancelling this call's own Task would
+         * otherwise never reach the guard inside hashCandidates. Routing
+         * the await through withTaskCancellationHandler bridges that:
+         * cancelling the caller now explicitly cancels the detached task
+         * too.
          */
-        let passResult =
-        try await Task.detached(
+        let hashingTask = Task.detached(
             priority: .utility
         ) {
             try DuplicatePreflightService.hashCandidates(
@@ -183,7 +189,14 @@ enum DuplicatePreflightService {
                 bookmarkData: bookmarkData,
                 onProgress: onProgress
             )
-        }.value
+        }
+
+        let passResult =
+        try await withTaskCancellationHandler {
+            try await hashingTask.value
+        } onCancel: {
+            hashingTask.cancel()
+        }
 
         for outcome in passResult.outcomes {
             if let sha256 = outcome.sha256 {
