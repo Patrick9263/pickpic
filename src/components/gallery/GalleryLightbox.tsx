@@ -382,8 +382,30 @@ function GalleryLightbox({
               onPointerUp={handleStageControlPointer}
               aria-label={`Retry loading ${selectedPhoto.originalFilename}`}
             >
-              <span>Image unavailable</span>
-              <span className="gallery-image-retry-label">Tap to retry</span>
+              <span className="lightbox-image-error-message">
+                Image unavailable
+              </span>
+              <span className="gallery-image-retry-label lightbox-image-retry-label">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path
+                    d="M3 4v5h5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2.25"
+                  />
+                  <path
+                    d="M3.51 9a9 9 0 1 1 .49 6"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2.25"
+                  />
+                </svg>
+                Tap to retry
+              </span>
             </button>
           ) : (
             <img
