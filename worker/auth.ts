@@ -276,7 +276,30 @@ export async function requireAdminPrincipal(
   }
 
   if (mode === "access") {
-    return requireAdminAccess(request, environment);
+    const result = await requireAdminAccess(request, environment);
+
+    /*
+     * CF_Authorization is a cookie at admin.pickpic.photos, so a browser
+     * attaches it to a cross-site request the same way it would a session
+     * cookie -- this is the other half of the CSRF defence below, gated to
+     * the one Access identity a browser can hold. The iPad's service token
+     * is exempt: it authenticates via header pair, not a cookie, and sends
+     * no Origin at all (URLSession doesn't set one), so it would fail this
+     * check on every request. isLocalDevelopment is exempt for the same
+     * reason wrangler dev has no Access in front of it to begin with.
+     */
+    if (
+      result.ok &&
+      result.principal.kind === "access" &&
+      result.principal.provider === "cloudflare_access" &&
+      !result.principal.isLocalDevelopment &&
+      isStateChanging(request) &&
+      !isSameOriginRequest(request)
+    ) {
+      return forbidden("This request did not come from PickPic.");
+    }
+
+    return result;
   }
 
   if (isStateChanging(request) && !isSameOriginRequest(request)) {

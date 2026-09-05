@@ -8,6 +8,7 @@ import {
   resolveAccountForPrincipal,
   type AccountRecord,
 } from "./accounts.ts";
+import { requireOwnerRole, type AdminPrincipal } from "./access.ts";
 import { scheduleUploadStartedNotification } from "./telegram.ts";
 import {
   createAccountScope,
@@ -1366,12 +1367,15 @@ async function listEvents(scope: AccountScope): Promise<Response> {
 
 /*
  * Whether adding additionalBytes (which may be negative, e.g. a replace
- * that shrinks a file) would push the account over its cap. Reads the
- * request-scoped snapshot of storage_bytes rather than a fresh SELECT --
- * see AccountRecord.storageBytes -- so this is a same-request check, not
- * a race-free reservation. Concurrent uploads on one account are rare
- * enough here that getStorageUsage's reconciliation on the next dashboard
- * load is an acceptable backstop rather than something to lock against.
+ * that shrinks a file) would push the account over its cap. Reads whatever is
+ * currently on account.storageBytes -- the request-scoped snapshot at the
+ * cheap pre-checks, or a value refreshAccountStorageBytes just re-read at the
+ * checks that actually decide -- so even there this is a race-narrowing
+ * check, not a race-free reservation: two decisive checks can still land
+ * between each other's refresh and its own account_users write. Concurrent
+ * uploads on one account are rare enough here that getStorageUsage's
+ * reconciliation on the next dashboard load is an acceptable backstop for
+ * that remaining gap rather than something to lock against.
  */
 function wouldExceedStorageCap(
   account: AccountRecord,
@@ -1404,6 +1408,33 @@ async function adjustAccountStorageBytes(
       deltaBytes,
     )
     .run();
+}
+
+/*
+ * Re-reads storage_bytes immediately before the check in each upload path
+ * that actually rejects (the one comparing against an exact, already-known
+ * size rather than a declared Content-Length). Progressive, parallel uploads
+ * from the iPad mean several requests can pass wouldExceedStorageCap against
+ * the same request-start snapshot before any of them adjusts the counter, so
+ * refreshing right before the deciding check narrows -- without eliminating
+ * -- that window. Mutates scope.account in place rather than threading a
+ * fresh AccountRecord through, since every remaining use in the request
+ * (adjustAccountStorageBytes, the response body) should see the same value.
+ */
+async function refreshAccountStorageBytes(scope: AccountScope): Promise<void> {
+  const row = await scope
+    .prepare(
+      `
+      SELECT storage_bytes AS storageBytes
+      FROM accounts
+      WHERE id = :accountId
+    `,
+    )
+    .first<{ storageBytes: number }>();
+
+  if (row) {
+    scope.account.storageBytes = row.storageBytes;
+  }
 }
 
 /*
@@ -1654,6 +1685,8 @@ async function createPhoto(
 
     return jsonResponse({ error: "The JPEG must be 25 MB or smaller." }, 413);
   }
+
+  await refreshAccountStorageBytes(scope);
 
   if (wouldExceedStorageCap(scope.account, storedObject.size)) {
     await env.pickpic_photos.delete(storageKey);
@@ -3077,6 +3110,8 @@ async function uploadFinalPhoto(
     );
   }
 
+  await refreshAccountStorageBytes(scope);
+
   if (
     wouldExceedStorageCap(scope.account, storedObject.size - replacedFinalBytes)
   ) {
@@ -3319,6 +3354,8 @@ async function uploadPhotoVariants(
     (sum, variant) => sum + variant.byteSize,
     0,
   );
+
+  await refreshAccountStorageBytes(scope);
 
   if (
     wouldExceedStorageCap(
@@ -3648,6 +3685,7 @@ async function handleAdminRequest(
   env: TenantEnv,
   ctx: ExecutionContext,
   scope: AccountScope,
+  principal: AdminPrincipal,
 ): Promise<Response | null> {
   if (url.pathname === "/api/admin/events") {
     if (request.method === "POST") {
@@ -3687,7 +3725,7 @@ async function handleAdminRequest(
     }
 
     if (request.method === "DELETE") {
-      return deleteEvent(env, scope, eventId);
+      return requireOwnerRole(principal) ?? deleteEvent(env, scope, eventId);
     }
 
     return jsonResponse({ error: "Method not allowed." }, 405);
@@ -3737,7 +3775,9 @@ async function handleAdminRequest(
     }
 
     if (request.method === "DELETE") {
-      return clearEventPhotos(env, scope, eventId);
+      return (
+        requireOwnerRole(principal) ?? clearEventPhotos(env, scope, eventId)
+      );
     }
 
     return jsonResponse({ error: "Method not allowed." }, 405);
@@ -3830,7 +3870,7 @@ async function handleAdminRequest(
 
     const photoId = decodeURIComponent(photoHeartsMatch[1]);
 
-    return clearPhotoHearts(scope, photoId);
+    return requireOwnerRole(principal) ?? clearPhotoHearts(scope, photoId);
   }
 
   const photoWorkflowMatch = url.pathname.match(
@@ -3925,6 +3965,7 @@ async function routeRequest(
       env,
       ctx,
       createAccountScope(account, resolveAccountDatabase(env, account)),
+      access.principal,
     );
 
     if (adminResponse) {
