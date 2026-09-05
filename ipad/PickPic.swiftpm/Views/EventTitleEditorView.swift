@@ -4,6 +4,7 @@ struct EventTitleEditorView: View {
     let navigationTitle: String
     let saveButtonTitle: String
     let unchangedTitle: String?
+    let focusesTitleOnAppear: Bool
     let onSave: (String) async throws -> Void
     
     @Environment(\.dismiss) private var dismiss
@@ -11,18 +12,21 @@ struct EventTitleEditorView: View {
     @State private var title: String
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @FocusState private var isTitleFocused: Bool
     
     init(
         navigationTitle: String,
         saveButtonTitle: String,
         initialTitle: String = "",
         unchangedTitle: String? = nil,
+        focusesTitleOnAppear: Bool = false,
         onSave:
         @escaping (String) async throws -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.saveButtonTitle = saveButtonTitle
         self.unchangedTitle = unchangedTitle
+        self.focusesTitleOnAppear = focusesTitleOnAppear
         self.onSave = onSave
         
         _title = State(
@@ -59,6 +63,7 @@ struct EventTitleEditorView: View {
                         "Event name",
                         text: $title
                     )
+                    .focused($isTitleFocused)
                     .textInputAutocapitalization(.words)
                     .submitLabel(.done)
                     .onSubmit {
@@ -96,6 +101,21 @@ struct EventTitleEditorView: View {
             }
             .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                guard focusesTitleOnAppear else {
+                    return
+                }
+                /*
+                 * Focus requested while the sheet is still animating in
+                 * is dropped, because the field is not in the responder
+                 * chain yet — so claim it a beat after presentation
+                 * rather than in the same run loop as `onAppear`.
+                 */
+                try? await Task.sleep(
+                    for: .milliseconds(300)
+                )
+                isTitleFocused = true
+            }
             .toolbar {
                 ToolbarItem(
                     placement: .cancellationAction
