@@ -100,6 +100,22 @@ goes deep on one area rather than skimming everything and resurfacing yesterday'
 runs post a single GitHub issue labelled `review-report` with numbered suggestions; **they never
 file individual issues**, because triage is Patrick's decision.
 
+**`pickpic` is a public repo, so a security-tagged finding never reaches its public issue tracker.**
+Every finding in `scripts/review/prompts/daily.md`'s schema carries an optional `**Category**`
+field; anything tagged `security` (an exploitable authn/authz bypass, injection, secret exposure, or
+access-control bypass) is split out in `run-review.sh` before either `gh issue create` call and
+posted instead to `Patrick9263/pickpic-security` — a private, code-free companion repo, same
+`review-report` label, same `--assignee @me`. Two of the sweep's fine-grained targets, `security`
+and `worker-auth-and-tenancy`, skip the tag entirely and route their whole sub-report there
+unconditionally, since they're security scans by definition; every other target relies on the model
+tagging individual findings correctly, since an incidental security finding can surface from any
+scan (that's exactly how #124's closed-gallery bug came out of a `cross-cutting` run). This was
+added after #124 and #127 published working descriptions of real, if short-lived, vulnerabilities —
+both were fixed within a day, but a public repo shouldn't carry that window at all. **Known
+simplification:** the untriaged-backlog count, sweep sizing, and the `surplus` mode's ready-issue
+auto-implement path all stay scoped to the public repo only — a privately-filed security issue
+won't be auto-implemented and doesn't count against the 15-issue backlog ceiling.
+
 The surplus runs exist to spend a weekly budget window that would otherwise expire unused. If an
 open issue carries the `ready` label, that run implements it and opens a PR; otherwise it runs a
 **sweep** — several independent single-surface scans, then a consolidation pass that merges,

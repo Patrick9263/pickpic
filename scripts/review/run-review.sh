@@ -15,6 +15,9 @@
 set -euo pipefail
 
 REPO="/Users/patrick/Dev/pickpic"
+# Issues-only, no code: where security-tagged findings go instead of the public repo. See CLAUDE.md
+# "Scheduled review job" for why.
+SECURITY_REPO="Patrick9263/pickpic-security"
 STATE_DIR="/Users/patrick/.claude/pickpic-review"
 REPORTS_DIR="$STATE_DIR/reports"
 LOG_FILE="$STATE_DIR/logs/run-$(date +%Y-%m).log"
@@ -86,19 +89,20 @@ RUN_OUTCOME="unknown"
 SCANS_DONE=0
 FINDINGS_COUNT=""
 ISSUE_REF=""
+ISSUE_REF_PRIVATE=""
 
 record_metrics() {
   [[ "$DRY_RUN" == "yes" ]] && return 0
   if [[ ! -f "$METRICS_FILE" ]]; then
-    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue\n' >"$METRICS_FILE"
+    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private\n' >"$METRICS_FILE"
   fi
   local wb="${BUDGET_BEFORE_WEEK:-}" wa="${BUDGET_AFTER_WEEK:-}" wd=""
   [[ -n "$wb" && -n "$wa" && "$wa" != "?" ]] && wd=$(( wa - wb ))
-  printf '%s,%s,%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$MODE" "${RUN_KIND:-}" "${TARGET:-}" "$RUN_OUTCOME" \
     "${MODEL:-}" "${EFFORT:-}" "$SCANS_DONE" "$FINDINGS_COUNT" \
     "$wb" "$wa" "$wd" "${BUDGET_BEFORE_SESSION:-}" "${BUDGET_AFTER_SESSION:-}" \
-    "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" >>"$METRICS_FILE"
+    "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" "$ISSUE_REF_PRIVATE" >>"$METRICS_FILE"
 }
 
 # An implementation run checks out main and branches from it, leaving the working tree somewhere
@@ -537,9 +541,48 @@ run_claude() {
   return "$rc"
 }
 
+# Splits a finished report into a public and a private file by each finding's **Category** tag,
+# so a security-flavored finding never reaches the public gh issue create below. A report with no
+# numbered findings at all (the honest "nothing found" case the prompt explicitly allows) is passed
+# through to the public file untouched -- there is nothing to route privately.
+split_by_category() {
+  local infile="$1" pubfile="$2" privfile="$3"
+  : >"$pubfile"
+  : >"$privfile"
+  if ! grep -q '^### [0-9]' "$infile" 2>/dev/null; then
+    cat "$infile" >"$pubfile"
+    return 0
+  fi
+  awk -v pub="$pubfile" -v priv="$privfile" '
+    /^### [0-9]+\./ {
+      if (have_block) print block > (is_security ? priv : pub)
+      block = $0 "\n"; is_security = 0; have_block = 1
+      next
+    }
+    have_block {
+      block = block $0 "\n"
+      if (tolower($0) ~ /\*\*category\*\*.*security/) is_security = 1
+    }
+    END { if (have_block) print block > (is_security ? priv : pub) }
+  ' "$infile"
+}
+
+# Findings are numbered within their original (pre-split) report, so each bucket needs its own
+# 1..N sequence afterward.
+renumber() {
+  local file="$1"
+  [[ -s "$file" ]] || return 0
+  awk '
+    /^### [0-9]+\./ { n++; sub(/^### [0-9]+\./, "### " n "."); print; next }
+    { print }
+  ' "$file" >"$file.tmp" && mv "$file.tmp" "$file"
+}
+
 if [[ "$RUN_KIND" == "sweep" ]]; then
   SWEEP_ACCUM="$STATE_DIR/.sweep-findings.md"
+  PRIVATE_ACCUM="$STATE_DIR/.sweep-findings-private.md"
   : >"$SWEEP_ACCUM"
+  : >"$PRIVATE_ACCUM"
 
   for t in "${SWEEP_TARGETS[@]}"; do
     # Re-check between scans rather than trusting the opening reading. A sweep is the longest thing
@@ -552,34 +595,43 @@ if [[ "$RUN_KIND" == "sweep" ]]; then
     fi
 
     SCAN_PROMPT="$(sed -e "s|{{TARGET}}|$t|g" -e "s|{{ISSUE}}||g" "$PROMPT_FILE")$CONTEXT_BLOCK"
-    if [[ -s "$SWEEP_ACCUM" ]]; then
+    if [[ -s "$SWEEP_ACCUM" || -s "$PRIVATE_ACCUM" ]]; then
       SCAN_PROMPT="$SCAN_PROMPT
 
 ## Already found earlier in this same sweep — do not repeat any of these
 
-$(cat "$SWEEP_ACCUM")"
+$(cat "$SWEEP_ACCUM" "$PRIVATE_ACCUM" 2>/dev/null)"
     fi
 
     log "sweep: scanning $t"
     if run_claude "$SCAN_PROMPT" "$REPORTS_DIR/$STAMP-sweep-$t.md"; then
       SCANS_DONE=$(( SCANS_DONE + 1 ))
-      printf '\n## From the %s scan\n\n' "$t" >>"$SWEEP_ACCUM"
-      cat "$REPORTS_DIR/$STAMP-sweep-$t.md" >>"$SWEEP_ACCUM"
+      # security and worker-auth-and-tenancy are security scans by definition -- route the whole
+      # sub-report privately rather than trusting per-finding **Category** tagging for these two.
+      if [[ "$t" == "security" || "$t" == "worker-auth-and-tenancy" ]]; then
+        printf '\n## From the %s scan\n\n' "$t" >>"$PRIVATE_ACCUM"
+        cat "$REPORTS_DIR/$STAMP-sweep-$t.md" >>"$PRIVATE_ACCUM"
+      else
+        printf '\n## From the %s scan\n\n' "$t" >>"$SWEEP_ACCUM"
+        cat "$REPORTS_DIR/$STAMP-sweep-$t.md" >>"$SWEEP_ACCUM"
+      fi
     else
       log "sweep: $t scan failed, continuing"
     fi
   done
 
-  if [[ ! -s "$SWEEP_ACCUM" ]]; then
+  if [[ ! -s "$SWEEP_ACCUM" && ! -s "$PRIVATE_ACCUM" ]]; then
     RUN_OUTCOME="error-no-findings"
     log "ERROR: sweep produced no findings"
     exit 1
   fi
 
-  # Consolidate. Without this the report is N concatenated lists with their own numbering and
-  # overlapping findings, which is exactly the unreadable output the slot cap exists to avoid.
-  log "sweep: consolidating"
-  CONSOLIDATE_PROMPT="Below are findings from several independent scans of the PickPic codebase,
+  # Consolidate the public findings only. The private accumulator (the two security-named scans,
+  # plus whatever else gets **Category** — security tagged below) is short enough -- usually one or
+  # two scans' worth -- that it doesn't need ranking down to a slot cap; it's posted close to as-is.
+  if [[ -s "$SWEEP_ACCUM" ]]; then
+    log "sweep: consolidating"
+    CONSOLIDATE_PROMPT="Below are findings from several independent scans of the PickPic codebase,
 each covering a different area. Merge them into ONE ranked report.
 
 Rules:
@@ -588,15 +640,20 @@ Rules:
 - Keep at most $BACKLOG_DEFICIT entries. If there are more, keep the best ones. Do not pad to reach
   that number — a shorter honest report is better than a padded one.
 - Renumber from 1, ordered by value, most worth doing first.
-- Preserve each entry's What / Why it matters / Where / Size structure verbatim where you can.
+- Preserve each entry's What / Why it matters / Where / Size / Category structure verbatim where
+  you can. Category in particular must never be dropped or invented -- it decides whether the
+  finding is published or routed privately.
 - Output only the merged markdown report. No preamble, no commentary about merging.
 - End with a single line '**Recommended next:**' naming the one entry to do first and why.
 
 $(cat "$SWEEP_ACCUM")"
 
-  if ! run_claude "$CONSOLIDATE_PROMPT" "$REPORT_FILE"; then
-    log "consolidation failed -- falling back to the raw concatenated findings"
-    cp "$SWEEP_ACCUM" "$REPORT_FILE"
+    if ! run_claude "$CONSOLIDATE_PROMPT" "$REPORT_FILE"; then
+      log "consolidation failed -- falling back to the raw concatenated findings"
+      cp "$SWEEP_ACCUM" "$REPORT_FILE"
+    fi
+  else
+    : >"$REPORT_FILE"
   fi
 else
   SCANS_DONE=1
@@ -637,23 +694,68 @@ if [[ "$RUN_KIND" == "implement" ]]; then
   exit 0
 fi
 
-ISSUE_BODY="$STATE_DIR/.issue-body.md"
-{
-  printf 'Budget: weekly %s%% -> %s%% used (+%s pts) - session %s%% -> %s%% - weekly window resets %s\n' \
-    "$BUDGET_BEFORE_WEEK" "$BUDGET_AFTER_WEEK" "$WEEK_DELTA" \
-    "$BUDGET_BEFORE_SESSION" "$BUDGET_AFTER_SESSION" "${WEEK_RESET:-unknown}"
-  printf 'Mode: %s / %s - %s - effort %s\n\n' "$MODE" "$TARGET" "$MODEL" "$EFFORT"
-  printf -- '---\n\n'
-  cat "$REPORT_FILE"
-} >"$ISSUE_BODY"
+# Split by **Category** before anything gets posted -- this is the only gate between a described,
+# unfixed vulnerability and the public issue tracker. See CLAUDE.md "Scheduled review job".
+PUBLIC_REPORT="$REPORT_FILE.public.md"
+PRIVATE_REPORT="$REPORT_FILE.private.md"
+split_by_category "$REPORT_FILE" "$PUBLIC_REPORT" "$PRIVATE_REPORT"
 
-ISSUE_URL="$(gh issue create \
-  --title "Automated review — $STAMP ($TARGET)" \
-  --body-file "$ISSUE_BODY" \
-  --label review-report \
-  --assignee @me 2>&1)"
+# Sweep's security-named scans bypassed tagging entirely (see the loop above) -- fold their raw,
+# unconsolidated findings into the private report too.
+if [[ "$RUN_KIND" == "sweep" && -s "${PRIVATE_ACCUM:-}" ]]; then
+  cat "$PRIVATE_ACCUM" >>"$PRIVATE_REPORT"
+fi
+
+renumber "$PUBLIC_REPORT"
+renumber "$PRIVATE_REPORT"
 
 RUN_OUTCOME="ok"
-ISSUE_REF="$(printf '%s' "$ISSUE_URL" | grep -o '[0-9]*$' || true)"
-FINDINGS_COUNT="$(grep -c '^### [0-9]' "$REPORT_FILE" || true)"
-log "posted: $ISSUE_URL (${FINDINGS_COUNT} findings, ${SCANS_DONE} scan(s))"
+FINDINGS_COUNT=$(( $(grep -c '^### [0-9]' "$PUBLIC_REPORT" 2>/dev/null || echo 0) \
+  + $(grep -c '^### [0-9]' "$PRIVATE_REPORT" 2>/dev/null || echo 0) ))
+
+if [[ -s "$PUBLIC_REPORT" ]]; then
+  ISSUE_BODY="$STATE_DIR/.issue-body.md"
+  {
+    printf 'Budget: weekly %s%% -> %s%% used (+%s pts) - session %s%% -> %s%% - weekly window resets %s\n' \
+      "$BUDGET_BEFORE_WEEK" "$BUDGET_AFTER_WEEK" "$WEEK_DELTA" \
+      "$BUDGET_BEFORE_SESSION" "$BUDGET_AFTER_SESSION" "${WEEK_RESET:-unknown}"
+    printf 'Mode: %s / %s - %s - effort %s\n\n' "$MODE" "$TARGET" "$MODEL" "$EFFORT"
+    printf -- '---\n\n'
+    cat "$PUBLIC_REPORT"
+  } >"$ISSUE_BODY"
+
+  ISSUE_URL="$(gh issue create \
+    --title "Automated review — $STAMP ($TARGET)" \
+    --body-file "$ISSUE_BODY" \
+    --label review-report \
+    --assignee @me 2>&1)"
+  ISSUE_REF="$(printf '%s' "$ISSUE_URL" | grep -o '[0-9]*$' || true)"
+  log "posted: $ISSUE_URL"
+else
+  log "nothing public this run -- all findings were security-tagged"
+fi
+
+# Security-tagged findings never reach the public repo -- they go to a private, code-free companion
+# repo instead, so Patrick still sees them but a description of an unfixed hole is never public.
+if [[ -s "$PRIVATE_REPORT" ]]; then
+  PRIVATE_ISSUE_BODY="$STATE_DIR/.issue-body-private.md"
+  {
+    printf 'Budget: weekly %s%% -> %s%% used (+%s pts) - session %s%% -> %s%% - weekly window resets %s\n' \
+      "$BUDGET_BEFORE_WEEK" "$BUDGET_AFTER_WEEK" "$WEEK_DELTA" \
+      "$BUDGET_BEFORE_SESSION" "$BUDGET_AFTER_SESSION" "${WEEK_RESET:-unknown}"
+    printf 'Mode: %s / %s - %s - effort %s\n\n' "$MODE" "$TARGET" "$MODEL" "$EFFORT"
+    printf -- '---\n\n'
+    cat "$PRIVATE_REPORT"
+  } >"$PRIVATE_ISSUE_BODY"
+
+  PRIVATE_ISSUE_URL="$(gh issue create \
+    --repo "$SECURITY_REPO" \
+    --title "Automated review — $STAMP ($TARGET)" \
+    --body-file "$PRIVATE_ISSUE_BODY" \
+    --label review-report \
+    --assignee @me 2>&1)"
+  ISSUE_REF_PRIVATE="$(printf '%s' "$PRIVATE_ISSUE_URL" | grep -o '[0-9]*$' || true)"
+  log "posted (private): $PRIVATE_ISSUE_URL"
+fi
+
+log "findings: ${FINDINGS_COUNT} total (${SCANS_DONE} scan(s))"
