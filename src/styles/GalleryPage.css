@@ -924,14 +924,25 @@
 
 .comment-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
+/*
+ * Edit and Delete sit side by side inside a phone-sized lightbox, and at 2px of
+ * padding each was roughly an 18px-tall target 10px from its neighbour -- small
+ * enough that a thumb aiming at Edit could land on the destructive one.
+ * min-width rather than horizontal padding so the wider Delete label is
+ * untouched and stays flush with the card edge, while the narrow Edit label
+ * grows a hit area around itself; the row is centre-aligned, so the extra
+ * height only makes the comment heading slightly taller.
+ */
 .comment-actions button {
   background: transparent;
   border: 0;
   color: var(--color-accent);
   font-size: 0.72rem;
+  min-height: 32px;
+  min-width: 32px;
   padding: 2px;
 }
 
