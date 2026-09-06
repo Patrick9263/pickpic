@@ -422,7 +422,7 @@ function getPhotoUploadMetadata(request: Request): PhotoUploadMetadataResult {
   };
 }
 
-function roundPublicCoordinate(value: number | null): number | null {
+export function roundPublicCoordinate(value: number | null): number | null {
   if (value === null) {
     return null;
   }

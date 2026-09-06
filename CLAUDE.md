@@ -16,9 +16,10 @@ Web app / Worker, from the repo root:
 
 ```bash
 npm run dev             # vite dev server
-npm run check           # lint + format:check + build — the correctness gate; CI runs exactly this
+npm run check           # lint + format:check + test + build — the correctness gate; CI runs exactly this
 npm run lint             # oxlint (native binding; macOS-capable here)
 npm run format           # prettier --write .
+npm run test             # vitest run — worker/**/*.test.ts, plain Node environment, no Workers runtime
 npm run build             # tsc -b && vite build
 npm run build:admin       # same build with CLOUDFLARE_ENV=admin
 npm run build:app         # same build with CLOUDFLARE_ENV=app
@@ -28,7 +29,7 @@ npm run deploy:app         # build:app + wrangler deploy (app worker)
 npm run cf-typegen         # regenerate worker-configuration.d.ts from wrangler.jsonc bindings
 ```
 
-There is **no test suite**. `npm run check` is the only automated gate.
+A vitest suite (`worker/*.test.ts`) covers pure, zero-I/O worker helpers — auth-mode resolution, same-origin/state-changing request checks, email normalization, coordinate rounding — and runs as part of `npm run check`. It intentionally does not touch D1/R2 or route handlers; that would need `@cloudflare/vitest-pool-workers` and is a separate, heavier lift.
 
 Use `npm run dev` when testing worker changes, not `npx wrangler dev` — the latter serves the last `npm run build` output from `dist/`, so edits appear to have no effect and stack traces point at `dist/pickpic/index.js`. `npm run dev` also reads `.dev.vars` (git-ignored; see `.dev.vars.example`), which is how `AUTH_MODE` and the magic-link sender are set locally.
 
