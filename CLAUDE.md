@@ -19,7 +19,7 @@ npm run dev             # vite dev server
 npm run check           # lint + format:check + test + build — the correctness gate; CI runs exactly this
 npm run lint             # oxlint (native binding; macOS-capable here)
 npm run format           # prettier --write .
-npm run test             # vitest run — worker/**/*.test.ts, plain Node environment, no Workers runtime
+npm run test             # two vitest runs: worker/**/*.test.ts (plain Node), then src/**/*.test.{ts,tsx} (jsdom)
 npm run build             # tsc -b && vite build
 npm run build:admin       # same build with CLOUDFLARE_ENV=admin
 npm run build:app         # same build with CLOUDFLARE_ENV=app
@@ -30,6 +30,8 @@ npm run cf-typegen         # regenerate worker-configuration.d.ts from wrangler.
 ```
 
 A vitest suite (`worker/*.test.ts`) covers pure, zero-I/O worker helpers — auth-mode resolution, same-origin/state-changing request checks, email normalization, coordinate rounding — and runs as part of `npm run check`. It intentionally does not touch D1/R2 or route handlers; that would need `@cloudflare/vitest-pool-workers` and is a separate, heavier lift.
+
+A second vitest suite covers `src/` (`vitest.config.src.ts`, jsdom + `@testing-library/react`), kept as a separate config rather than folded into `vitest.config.ts` so DOM tests never run under the worker suite's plain-Node environment and vice versa. It has two layers: extracted pure helpers — `src/pages/galleryHelpers.ts` and `src/pages/dashboardHelpers.ts`, pulled out of `GalleryPage.tsx`/`DashboardPage.tsx` so formatting/grouping/dedup logic is unit-testable without rendering — plus `src/api.test.ts` for the `fetchJson`/`getErrorMessage` client, and one component-level test (`GalleryPage.heart.test.tsx`) exercising hearting a photo end to end, since a heart being an edit request rather than a social reaction is the load-bearing part of the data model. Neither `DashboardPage.tsx` nor `GalleryPage.tsx` has full component coverage — that's a much heavier lift the same way route-handler coverage is for the worker.
 
 Use `npm run dev` when testing worker changes, not `npx wrangler dev` — the latter serves the last `npm run build` output from `dist/`, so edits appear to have no effect and stack traces point at `dist/pickpic/index.js`. `npm run dev` also reads `.dev.vars` (git-ignored; see `.dev.vars.example`), which is how `AUTH_MODE` and the magic-link sender are set locally.
 

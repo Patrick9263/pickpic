@@ -13,7 +13,6 @@ import type {
   GalleryStatus,
   ImageVariantSet,
   PhotoRecord,
-  PhotoVariantSource,
   PhotoWorkflowStatus,
   StorageUsageRecord,
   UploadBatchProgress,
@@ -24,9 +23,9 @@ import { fetchJson, getErrorMessage } from "../api";
 import { extractPhotoMetadata } from "../photoMetadata";
 import {
   generateImageVariants,
-  isVariantSetMissing,
   type GeneratedImageVariants,
 } from "../imageVariants";
+import { getMissingVariantSources } from "./dashboardHelpers";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -107,20 +106,6 @@ async function downloadImageAsFile(
   return new File([blob], filename, {
     type: "image/jpeg",
   });
-}
-
-function getMissingVariantSources(photo: PhotoRecord): PhotoVariantSource[] {
-  const sources: PhotoVariantSource[] = [];
-
-  if (isVariantSetMissing(photo.variants)) {
-    sources.push("original");
-  }
-
-  if (photo.finalPhoto && isVariantSetMissing(photo.finalPhoto.variants)) {
-    sources.push("final");
-  }
-
-  return sources;
 }
 
 async function loadPhotos(eventId: string): Promise<PhotoRecord[]> {
