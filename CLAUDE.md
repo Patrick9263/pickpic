@@ -19,7 +19,7 @@ npm run dev             # vite dev server
 npm run check           # lint + format:check + test + build — the correctness gate; CI runs exactly this
 npm run lint             # oxlint (native binding; macOS-capable here)
 npm run format           # prettier --write .
-npm run test             # vitest run — worker/**/*.test.ts, plain Node environment, no Workers runtime
+npm run test             # both vitest projects below, in sequence
 npm run build             # tsc -b && vite build
 npm run build:admin       # same build with CLOUDFLARE_ENV=admin
 npm run build:app         # same build with CLOUDFLARE_ENV=app
@@ -29,7 +29,9 @@ npm run deploy:app         # build:app + wrangler deploy (app worker)
 npm run cf-typegen         # regenerate worker-configuration.d.ts from wrangler.jsonc bindings
 ```
 
-A vitest suite (`worker/*.test.ts`) covers pure, zero-I/O worker helpers — auth-mode resolution, same-origin/state-changing request checks, email normalization, coordinate rounding — and runs as part of `npm run check`. It intentionally does not touch D1/R2 or route handlers; that would need `@cloudflare/vitest-pool-workers` and is a separate, heavier lift.
+Two vitest projects run as part of `npm run check`, both under `worker/`. `vitest.config.ts` covers `worker/*.test.ts` — pure, zero-I/O helpers (auth-mode resolution, same-origin/state-changing request checks, email normalization, coordinate rounding) — in a plain Node environment. `vitest.config.workers.ts` covers `worker/*.workers.test.ts` — D1-backed queries and route handlers, run inside workerd via `@cloudflare/vitest-pool-workers`, against the real schema applied from `migrations/`. The Workers-pool suite shares one D1 database across files with no per-test isolation, so `fileParallelism` is off and each file clears its own tables in `beforeEach`.
+
+`@cloudflare/vitest-pool-workers` pins this repo to `vitest@^4` — no published version of the pool supports vitest 5 yet (it fails to start miniflare's proxy worker). Confirm that's still true (`npm view @cloudflare/vitest-pool-workers peerDependencies`) before upgrading vitest.
 
 Use `npm run dev` when testing worker changes, not `npx wrangler dev` — the latter serves the last `npm run build` output from `dist/`, so edits appear to have no effect and stack traces point at `dist/pickpic/index.js`. `npm run dev` also reads `.dev.vars` (git-ignored; see `.dev.vars.example`), which is how `AUTH_MODE` and the magic-link sender are set locally.
 

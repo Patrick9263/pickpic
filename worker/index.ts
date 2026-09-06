@@ -467,7 +467,7 @@ function getSourceSha256(request: Request): string | null {
  * the two in sync: preflight is only an optimisation, and this function
  * remains the authoritative check.
  */
-async function findDuplicatePhoto(
+export async function findDuplicatePhoto(
   scope: AccountScope,
   eventId: string,
   sourceSha256: string,
