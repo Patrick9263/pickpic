@@ -121,9 +121,21 @@ final class UploadQueueStore: ObservableObject {
     private var isResumingWaitingForConnectivityJobs = false
     private var activeContinuedProcessingTasks:
         [UUID: ActiveContinuedProcessingTask] = [:]
+    private var pendingProgressSaveTask: Task<Void, Never>?
 
     @Published private(set)
     var retryingEventIDs: Set<String> = []
+
+    /*
+     * Hashing progress for an in-flight preflight pass, keyed by job.
+     * Deliberately not part of the persisted UploadJob/PreflightState:
+     * it changes once per file and would otherwise multiply the
+     * per-photo queue rewrites the pipeline already does during
+     * conversion and upload.
+     */
+    @Published private(set)
+    var preflightProgressByJobID:
+        [UUID: (processed: Int, total: Int)] = [:]
 
     init() {
         storageURL = Self.makeStorageURL()
@@ -1022,6 +1034,9 @@ final class UploadQueueStore: ObservableObject {
                     job.uploadProgress
                         .backgroundTransferNeedsReconciliation =
                             true
+                    job.uploadProgress
+                        .reconciliationPendingSourceFilenames
+                        .insert(context.sourceFilename)
                     job.uploadProgress.errorMessage =
                         shouldRemainPaused
                         ? "The background transfer ended while PickPic was closed. Uploading remains paused and will be safely verified when you resume."
@@ -1134,6 +1149,9 @@ final class UploadQueueStore: ObservableObject {
                     job.uploadProgress
                         .backgroundTransferNeedsReconciliation =
                             true
+                    job.uploadProgress
+                        .reconciliationPendingSourceFilenames
+                        .insert(context.sourceFilename)
                 } else {
                     let message = failureMessage
                         ?? "The background upload failed."
@@ -1604,7 +1622,15 @@ final class UploadQueueStore: ObservableObject {
                 job: currentJob,
                 existingState: currentJob.preflight,
                 client: client
-            )
+            ) { [weak self] processed, total in
+                Task { @MainActor in
+                    self?.preflightProgressByJobID[jobID] =
+                        (processed, total)
+                }
+            }
+
+            preflightProgressByJobID
+                .removeValue(forKey: jobID)
 
             try updateJob(jobID) { job in
                 job.preflight = result.state
@@ -1621,12 +1647,18 @@ final class UploadQueueStore: ObservableObject {
                 job.updatedAt = Date()
             }
         } catch is CancellationError {
+            preflightProgressByJobID
+                .removeValue(forKey: jobID)
+
             /*
              * Confirmed hashes are already durable, so the next run
              * resumes where this one stopped.
              */
             restorePreparedStage(jobID: jobID)
         } catch {
+            preflightProgressByJobID
+                .removeValue(forKey: jobID)
+
             recordPreflightFailure(
                 jobID: jobID,
                 error: error
@@ -1833,6 +1865,17 @@ final class UploadQueueStore: ObservableObject {
                 for: currentJob
             )
 
+        /*
+         * Preflight-skipped duplicates are never converted, and photos
+         * recovered from a prior run are already on disk, so only the
+         * photos this pass will actually decode need capacity checked.
+         */
+        let remainingPhotosToConvert = max(
+            currentJob.photosToConvertCount
+                - recoveredPreparedPhotos.count,
+            0
+        )
+
         do {
             try await Task.detached(
                 priority: .utility
@@ -1840,7 +1883,7 @@ final class UploadQueueStore: ObservableObject {
                 try AppStorageService
                     .ensureProofBatchCapacity(
                         photoCount:
-                            currentJob.photoCount
+                            remainingPhotosToConvert
                     )
             }
             .value
@@ -1885,6 +1928,11 @@ final class UploadQueueStore: ObservableObject {
             .optimizedSourceFilenames
             .intersection(sourceFilenames)
 
+        let preservedReconciliationPendingFilenames =
+        currentJob.uploadProgress
+            .reconciliationPendingSourceFilenames
+            .intersection(sourceFilenames)
+
         let preservedActiveUploadDuration =
         currentJob.uploadProgress
             .activeUploadDuration
@@ -1914,7 +1962,9 @@ final class UploadQueueStore: ObservableObject {
                     optimizedSourceFilenames:
                         preservedOptimizedFilenames,
                     activeUploadDuration:
-                        preservedActiveUploadDuration
+                        preservedActiveUploadDuration,
+                    reconciliationPendingSourceFilenames:
+                        preservedReconciliationPendingFilenames
                 )
                 job.updatedAt = startedAt
             }
@@ -1988,7 +2038,7 @@ final class UploadQueueStore: ObservableObject {
                     continue
                 }
 
-                try updateJob(jobID) { job in
+                updateJobProgressOnly(jobID) { job in
                     job.conversionCurrentFilename =
                     sourcePhoto.filename
                     job.updatedAt = Date()
@@ -2350,22 +2400,15 @@ final class UploadQueueStore: ObservableObject {
                 return
             }
 
-            do {
-                try updateJob(jobID) { job in
-                    job.uploadProgress.currentFilename =
-                        preparedPhoto.sourceFilename
+            updateJobProgressOnly(jobID) { job in
+                job.uploadProgress.currentFilename =
+                    preparedPhoto.sourceFilename
 
-                    job.uploadProgress.currentStep =
-                        .proofUpload
+                job.uploadProgress.currentStep =
+                    .proofUpload
 
-                    job.uploadProgress.errorMessage = nil
-                    job.updatedAt = Date()
-                }
-            } catch {
-                loadErrorMessage =
-                    error.localizedDescription
-
-                return
+                job.uploadProgress.errorMessage = nil
+                job.updatedAt = Date()
             }
 
             let fileURL =
@@ -2468,7 +2511,21 @@ final class UploadQueueStore: ObservableObject {
                                 .sourceFilename
                         )
 
-                    if isDuplicate {
+                    /*
+                     * A duplicate answer for a filename this job staged
+                     * for reconciliation is this job recovering its own
+                     * background upload, not a photo the event already
+                     * had -- it must not count toward
+                     * alreadyExistedPhotoCount.
+                     */
+                    let isReconciliation =
+                        job.uploadProgress
+                        .reconciliationPendingSourceFilenames
+                        .contains(
+                            preparedPhoto.sourceFilename
+                        )
+
+                    if isDuplicate && !isReconciliation {
                         job.uploadProgress
                             .duplicateSourceFilenames
                             .insert(
@@ -2476,6 +2533,12 @@ final class UploadQueueStore: ObservableObject {
                                     .sourceFilename
                             )
                     }
+
+                    job.uploadProgress
+                        .reconciliationPendingSourceFilenames
+                        .remove(
+                            preparedPhoto.sourceFilename
+                        )
 
                     if shouldUploadOriginalVariants {
                         job.uploadProgress
@@ -2664,14 +2727,10 @@ final class UploadQueueStore: ObservableObject {
             )
         }
 
-        do {
-            try updateJob(jobID) { job in
-                job.uploadProgress.currentStep =
-                    .variantGeneration
-                job.updatedAt = Date()
-            }
-        } catch {
-            throw error
+        updateJobProgressOnly(jobID) { job in
+            job.uploadProgress.currentStep =
+                .variantGeneration
+            job.updatedAt = Date()
         }
 
         let variants: GeneratedFinalVariants
@@ -2699,7 +2758,7 @@ final class UploadQueueStore: ObservableObject {
                 )
         }
 
-        try updateJob(jobID) { job in
+        updateJobProgressOnly(jobID) { job in
             job.uploadProgress.currentStep =
                 .variantUpload
             job.updatedAt = Date()
@@ -3481,6 +3540,13 @@ final class UploadQueueStore: ObservableObject {
         var updatedJobs = jobs
         change(&updatedJobs[index])
 
+        // A durability checkpoint always writes immediately and
+        // supersedes any progress-only write still waiting to fire, so
+        // that pending write never has a chance to re-save a snapshot
+        // older than what this call is about to persist.
+        pendingProgressSaveTask?.cancel()
+        pendingProgressSaveTask = nil
+
         try save(updatedJobs)
 
         jobs = updatedJobs
@@ -3489,6 +3555,69 @@ final class UploadQueueStore: ObservableObject {
         updateContinuedProcessingProgress(
             for: updatedJobs[index]
         )
+    }
+
+    /*
+     * For the handful of call sites that only update transient display
+     * state (which photo/step is currently in progress) rather than
+     * anything the resume logic reads back after a relaunch. Those calls
+     * happen once or more per photo, and re-encoding and rewriting the
+     * whole queue file synchronously for each one is exactly the
+     * quadratic, main-thread cost described in issue #128 finding 4.
+     *
+     * The in-memory jobs array still updates synchronously, so the UI
+     * reflects every tick immediately. Only the disk write is deferred
+     * and coalesced: repeated calls in quick succession collapse into
+     * the single write that fires after the debounce delay elapses. That
+     * write always encodes the live `jobs` array at fire time rather than
+     * a captured snapshot, so it can only ever persist the latest state
+     * -- never overwrite a newer durability checkpoint with something
+     * stale. Losing a pending write to a crash costs nothing but a
+     * momentarily-stale progress label on next launch.
+     */
+    private static let progressSaveCoalesceDelay:
+        Duration = .milliseconds(400)
+
+    private func updateJobProgressOnly(
+        _ jobID: UUID,
+        change: (inout UploadJob) -> Void
+    ) {
+        guard
+            let index = jobs.firstIndex(
+                where: { job in
+                    job.id == jobID
+                }
+            )
+        else {
+            return
+        }
+
+        var updatedJobs = jobs
+        change(&updatedJobs[index])
+        jobs = updatedJobs
+        loadErrorMessage = nil
+
+        updateContinuedProcessingProgress(
+            for: updatedJobs[index]
+        )
+
+        pendingProgressSaveTask?.cancel()
+        pendingProgressSaveTask = Task {
+            [weak self] in
+            try? await Task.sleep(
+                for: Self.progressSaveCoalesceDelay
+            )
+
+            guard
+                !Task.isCancelled,
+                let self
+            else {
+                return
+            }
+
+            self.pendingProgressSaveTask = nil
+            try? self.save(self.jobs)
+        }
     }
 
     private func updateContinuedProcessingProgress(
@@ -3841,7 +3970,8 @@ final class UploadQueueStore: ObservableObject {
                         == .readyToUpload,
                     decodedJobs[index].preparedPhotos
                         .count
-                        != decodedJobs[index].photoCount
+                        != decodedJobs[index]
+                            .photosToConvertCount
                 {
                     let recoveredCount =
                         decodedJobs[index]
@@ -3888,13 +4018,15 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index].photoCount > 0,
                     decodedJobs[index].preparedPhotos
                         .count
-                        == decodedJobs[index].photoCount
+                        == decodedJobs[index]
+                            .photosToConvertCount
                 {
                     decodedJobs[index].stage =
                         .readyToUpload
                     decodedJobs[index]
                         .conversionProcessedCount =
-                            decodedJobs[index].photoCount
+                            decodedJobs[index]
+                                .preparedPhotos.count
                     decodedJobs[index]
                         .conversionCurrentFilename = nil
                     decodedJobs[index]
@@ -4027,13 +4159,13 @@ final class UploadQueueStore: ObservableObject {
             withIntermediateDirectories: true
         )
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [
-            .prettyPrinted,
-            .sortedKeys
-        ]
-
-        let data = try encoder.encode(jobs)
+        /*
+         * upload-queue.json is machine-written and machine-read only.
+         * .prettyPrinted and .sortedKeys added meaningful encode time and
+         * output size for no reader that needs them, on a file rewritten
+         * in full on every queue mutation (see issue #128 finding 4).
+         */
+        let data = try JSONEncoder().encode(jobs)
 
         try data.write(
             to: storageURL,
