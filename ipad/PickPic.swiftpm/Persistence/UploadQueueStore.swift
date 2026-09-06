@@ -513,66 +513,134 @@ final class UploadQueueStore: ObservableObject {
                 }
             }
         } catch {
-            let fallbackMessage =
-                "iPadOS background processing was unavailable, so PickPic will continue while the app remains open. \(error.localizedDescription)"
+            runForegroundFallback(
+                jobID: job.id,
+                identifier: identifier,
+                operation: operation,
+                configuration: configuration,
+                message:
+                    "iPadOS background processing was unavailable, so PickPic will continue while the app remains open. \(error.localizedDescription)"
+            )
+            return
+        }
 
+        /*
+         * BGTaskScheduler.submit(_:) can report success while the daemon
+         * silently never invokes the launch handler (a known iOS 26
+         * BGContinuedProcessingTask issue: submission and dispatch are two
+         * separate steps, and only the first one's failures surface here).
+         * When that happens nothing ever promotes this job past .scheduled,
+         * so fall back to foreground processing if the real handler hasn't
+         * fired within a few seconds -- the pipeline must not silently
+         * stall just because iPadOS dropped the handoff.
+         *
+         * The cancel() below is best-effort only. Once the daemon has
+         * already failed to dispatch, Apple's own guidance is that there
+         * is no API to query or force-dismiss the resulting system
+         * notification -- see the "Known limitation" note in CLAUDE.md.
+         * This does not fix that cosmetic notification; it only makes
+         * sure the actual import/upload work keeps moving.
+         */
+        let jobID = job.id
+
+        Task { @MainActor [weak self, weak configuration] in
             do {
-                try updateJob(job.id) { job in
-                    guard
-                        job.continuedProcessing?
-                            .identifier == identifier
-                    else {
-                        return
-                    }
-
-                    job.continuedProcessing?.status =
-                        .foregroundFallback
-                    job.continuedProcessing?.message =
-                        fallbackMessage
-                    job.updatedAt = Date()
-                }
+                try await Task<Never, Never>.sleep(
+                    for: .seconds(3)
+                )
             } catch {
-                loadErrorMessage =
-                    "PickPic could not save the foreground fallback state: \(error.localizedDescription)"
+                return
             }
 
-            Task { @MainActor [weak self, weak configuration] in
-                guard let self else {
+            guard
+                let self,
+                let currentJob = self.jobs.first(where: { candidate in
+                    candidate.id == jobID
+                }),
+                currentJob.continuedProcessing?.identifier
+                    == identifier,
+                currentJob.continuedProcessing?.status
+                    == .scheduled
+            else {
+                return
+            }
+
+            coordinator.cancel(jobID: jobID)
+
+            self.runForegroundFallback(
+                jobID: jobID,
+                identifier: identifier,
+                operation: operation,
+                configuration: configuration,
+                message:
+                    "iPadOS did not start background processing in time, so PickPic will continue while the app remains open."
+            )
+        }
+    }
+
+    private func runForegroundFallback(
+        jobID: UUID,
+        identifier: String,
+        operation: ContinuedProcessingOperation,
+        configuration: APIConfigurationStore?,
+        message: String
+    ) {
+        do {
+            try updateJob(jobID) { job in
+                guard
+                    job.continuedProcessing?
+                        .identifier == identifier
+                else {
                     return
                 }
 
-                let preparationSucceeded: Bool
+                job.continuedProcessing?.status =
+                    .foregroundFallback
+                job.continuedProcessing?.message =
+                    message
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not save the foreground fallback state: \(error.localizedDescription)"
+        }
 
-                switch operation {
-                case .prepareConvertAndUpload:
-                    preparationSucceeded = await self
-                        .runPreparationAndConversionPipeline(
-                            jobID: job.id,
-                            using: configuration
-                        )
+        Task { @MainActor [weak self, weak configuration] in
+            guard let self else {
+                return
+            }
 
-                case .reconvertOnly:
-                    preparationSucceeded = await self
-                        .runReconversionPipeline(
-                            jobID: job.id
-                        )
-                }
+            let preparationSucceeded: Bool
 
-                self.clearContinuedProcessingState(
-                    jobID: job.id,
-                    identifier: identifier
-                )
-
-                if
-                    preparationSucceeded,
-                    operation == .prepareConvertAndUpload,
-                    let configuration
-                {
-                    await self.runUploadPipeline(
-                        jobID: job.id,
+            switch operation {
+            case .prepareConvertAndUpload:
+                preparationSucceeded = await self
+                    .runPreparationAndConversionPipeline(
+                        jobID: jobID,
                         using: configuration
                     )
-                }
+
+            case .reconvertOnly:
+                preparationSucceeded = await self
+                    .runReconversionPipeline(
+                        jobID: jobID
+                    )
+            }
+
+            self.clearContinuedProcessingState(
+                jobID: jobID,
+                identifier: identifier
+            )
+
+            if
+                preparationSucceeded,
+                operation == .prepareConvertAndUpload,
+                let configuration
+            {
+                await self.runUploadPipeline(
+                    jobID: jobID,
+                    using: configuration
+                )
             }
         }
     }

@@ -82,6 +82,7 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
   This is about reporting, not thinking, and it explicitly does not apply to code. **In-code comments explaining why stay exactly as they are** — they're the house style here and they're load-bearing. Keep design reasoning at the moment a decision is being made, and keep warnings before anything destructive.
 
 - **Nothing is on the sandboxed `PATH`.** `node`, `npm`, and `gh` all resolve to "command not found" until you prepend their directories: `export PATH=/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:$PATH`. Do it in the same call as the command; shell state does not persist between calls.
+- **Fetch and fast-forward local `main` before branching, every time.** This repo sees heavy concurrent session/agent use, so `git status` reporting "up to date with origin/main" only reflects the last fetch — it goes stale the moment another session merges something. Branching from a stale local `main` silently drops recent merges from the new branch and build; this has already shipped a device build missing a just-merged fix. Run `git fetch origin && git merge --ff-only origin/main` (or `git pull --ff-only`) immediately before `git checkout -b`, not just `git status`.
 
 ## Scheduled review job
 
@@ -318,6 +319,8 @@ SwiftUI, iOS 26 deployment target, **Swift 5 language mode with minimal concurre
 **Uploads are progressive**: never require the whole shoot to convert before anything uploads.
 
 Transfers run through `BackgroundUploadSession` to survive suspension. For _recoverable_ failures the system background task is deliberately completed as **successful**, letting the internal queue represent unfinished work — this avoids a permanently stuck iPadOS activity indicator. That's an intentional tradeoff to revisit later in 2026, not a bug.
+
+Photo preparation/conversion requests continuation through `ContinuedProcessingTaskCoordinator` (`BGContinuedProcessingTask`, iOS 26). **Known limitation:** `BGTaskScheduler.submit(_:)` can report success while iPadOS's daemon silently never dispatches the task to the launch handler — submission and dispatch are two separate steps, and only the first one's failures reach our `catch`. `UploadQueueStore.submitContinuedProcessing` falls back to foreground processing if the job hasn't been promoted past `.scheduled` within a few seconds, so the pipeline itself never silently stalls. But per Apple's own guidance (confirmed on the Apple Developer Forums), once the daemon has failed to dispatch, there is no API to query or force-dismiss the resulting system notification — it can persist showing stale state (e.g. "Preparing `<event>`") across foreground/background transitions and even a full app quit. `submitTaskRequest(_:completionHandler:)` reportedly fixes this by surfacing the dispatch failure directly, but it's iOS 27+ and unavailable on this app's iOS 26 target. Don't spend time trying to programmatically dismiss an already-stuck notification — there isn't a hook for it.
 
 The app polls for newly-hearted photos and copies matching RAW files into a local `To Edit` folder through security-scoped bookmarks. Folder access must be re-validated (`FolderBookmarkService.canAccessFolder`) before every sync rather than assumed still valid.
 
