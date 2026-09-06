@@ -264,6 +264,17 @@ struct PickPicApp: App {
                          */
                         finishedEdits.scanNow()
 
+                        /*
+                         * Re-running this (not just at cold launch) lets a
+                         * later successful pass clear storageErrorMessage
+                         * if an earlier one failed — otherwise that banner
+                         * is stuck for the rest of the app session (#132).
+                         */
+                        Task {
+                            await uploadQueue
+                                .performStorageMaintenance()
+                        }
+
                     case .inactive,
                             .background:
                         UIApplication.shared
