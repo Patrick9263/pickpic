@@ -984,6 +984,22 @@
   font-size: 0.7rem;
 }
 
+/*
+ * The gallery's one bare <button>. App.css keeps element-level `button` to
+ * geometry now that its fill is scoped to the dashboard, so the submit button's
+ * colours have to be stated here instead of arriving from dashboard chrome.
+ * These are the values it was already picking up, so it looks unchanged.
+ */
+.comment-form-footer button {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-background);
+}
+
+.comment-form-footer button:hover:not(:disabled) {
+  background: #dfe1e5;
+}
+
 .comments-closed-message {
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border);
