@@ -74,7 +74,15 @@ For each suggestion:
 **Why it matters** — the concrete cost of leaving it.
 **Where** — `path/to/file.ts:123`
 **Size** — trivial / small / medium / large
+**Category** — `security` if this describes a currently-exploitable vulnerability (authn/authz
+bypass, injection, secret exposure, or an access-control bypass a stranger reading this report
+could act on before it's patched). Omit this line for everything else.
 ```
+
+This report is posted publicly. A `security`-tagged finding is instead routed to a private
+tracker, so getting the tag right matters — under-tagging publishes exploit details before the fix
+ships; over-tagging just hides an ordinary bug from the usual public triage. Tag only what a
+stranger could actually exploit, not every bug that happens to live in auth-adjacent code.
 
 Order by value: the thing most worth doing first. Number them so Patrick can reply "file 2, 5, 7".
 
