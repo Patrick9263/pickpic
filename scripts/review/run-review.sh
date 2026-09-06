@@ -40,8 +40,18 @@ if [[ "${REVIEW_SNAPSHOTTED:-}" != "1" ]]; then
 fi
 
 MODE="${1:-daily}"
+shift 2>/dev/null || true
 DRY_RUN="no"
-[[ "${2:-}" == "--dry-run" ]] && DRY_RUN="yes"
+TARGET_OVERRIDE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN="yes"; shift ;;
+    # Run one named area on demand, rather than whatever the weekday rotation would pick. The valid
+    # names are the focus list at the top of prompts/daily.md.
+    --target) TARGET_OVERRIDE="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 
 mkdir -p "$REPORTS_DIR" "$(dirname "$LOG_FILE")"
 
@@ -333,11 +343,42 @@ fi
 #
 # Oldest first, so the backlog drains in the order it was filed rather than newest-first, which is
 # what `gh issue list` returns by default.
+#
+# Issues already covered by an open PR are skipped. An issue stays open until the PR closing it is
+# merged, so without this the next run picks up the same issue it implemented yesterday and opens a
+# duplicate PR against work already awaiting review.
 READY_ISSUE=""
 if [[ "$MODE" == "surplus" ]]; then
-  READY_ISSUE="$(gh issue list --label ready --state open --limit 50 --json number,labels \
-    --jq '[.[] | select(([.labels[].name] | any(. == "review-report" or . == "review-trends")) | not)]
-          | sort_by(.number) | .[0].number // empty' 2>/dev/null || true)"
+  LINKED_ISSUES="$(gh pr list --state open --limit 50 --json body --jq '.[].body // ""' 2>/dev/null \
+    | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
+  for cand in $(gh issue list --label ready --state open --limit 50 --json number,labels \
+      --jq '[.[] | select(([.labels[].name] | any(. == "review-report" or . == "review-trends")) | not)]
+            | sort_by(.number) | .[].number' 2>/dev/null || true); do
+    if printf '%s\n' "$LINKED_ISSUES" | grep -qx "$cand" 2>/dev/null; then
+      log "skipping ready issue #$cand -- already has an open PR"
+      continue
+    fi
+    READY_ISSUE="$cand"
+    break
+  done
+fi
+
+# Unreviewed pull requests are backlog too, and the untriaged-issue count cannot see them.
+#
+# An implementation run produces a PR that needs real human review -- and for anything touching the
+# UI or the iPad, browser or device verification that no unattended run can do. Left unchecked the
+# job would keep opening them at two a week regardless of how many were already waiting. Six is
+# deliberately generous: at the normal rate it takes three weeks of no review at all to reach, so it
+# is a brake against genuine neglect rather than a throttle on ordinary use.
+#
+# This clears READY_ISSUE rather than exiting, so the run falls through to analysis -- a report is
+# far cheaper to skim than a PR is to review, and the backlog guard below still gates that.
+if [[ -n "$READY_ISSUE" ]]; then
+  OPEN_PRS="$(gh pr list --state open --limit 50 --json number --jq 'length' 2>/dev/null || echo 0)"
+  if [[ "$OPEN_PRS" -ge 6 ]]; then
+    log "skipping implement: $OPEN_PRS open PRs already awaiting review"
+    READY_ISSUE=""
+  fi
 fi
 
 # A suggestion generator that outruns triage capacity just creates work, so stand down when the
@@ -420,7 +461,7 @@ elif [[ "$MODE" == "surplus" ]]; then
 else
   RUN_KIND="analyse"
   PROMPT_FILE="$REPO/scripts/review/prompts/daily.md"
-  TARGET="$(rotation_target)"
+  TARGET="${TARGET_OVERRIDE:-$(rotation_target)}"
 fi
 
 log "kind=$RUN_KIND target=$TARGET model=${MODEL} effort=${EFFORT}"
@@ -474,6 +515,7 @@ If this issue requires adding a new Swift file, stop and report that it was defe
   # An array, not a space-separated string: several of these rules contain spaces inside the
   # parentheses, and an unquoted string expansion splits them into fragments the CLI then rejects.
   ALLOWED=(Read Grep Glob Edit Write "Bash(git:*)" "Bash(gh:*)" "Bash(npm:*)" "Bash(xcodebuild:*)")
+  PR_BEFORE="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
 else
   # Analysis gets no Bash at all. `gh` cannot be granted to a headless `-p` run through
   # --allowedTools -- it asks for approval regardless of the rule, and in print mode there is nobody
@@ -579,6 +621,17 @@ log "done: week ${BUDGET_BEFORE_WEEK}% -> ${BUDGET_AFTER_WEEK}% (+${WEEK_DELTA} 
 # ---------------------------------------------------------------------------
 # An implementation run opens its own PR, so there is nothing further to post.
 if [[ "$RUN_KIND" == "implement" ]]; then
+  # Record which PR this produced. The wrapper does not open it -- the model does, as part of the
+  # prompt -- so the only way to know is to look for one that was not there before. Without this the
+  # metrics row has no link to its output, and the trends run cannot measure conversion for
+  # implementation runs at all.
+  PR_AFTER="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+  if [[ -n "$PR_AFTER" && "$PR_AFTER" != "$PR_BEFORE" ]]; then
+    ISSUE_REF="$PR_AFTER"
+    log "opened PR #$PR_AFTER"
+  else
+    log "no new PR detected -- the run may have stopped short; check $REPORT_FILE"
+  fi
   RUN_OUTCOME="ok-implement"
   log "implementation run finished for $TARGET; PR handling was Claude's responsibility"
   exit 0
