@@ -284,7 +284,9 @@ struct EventDetailView: View {
                             for: primaryAction
                         )
                     }
-                    .buttonStyle(.plain)
+                    // Borderless so the button takes the tap without the row's
+                    // gesture recognizer swallowing the first one (see #122).
+                    .buttonStyle(.borderless)
                     .contentShape(Rectangle())
                     .listRowBackground(
                         Color.accentColor
@@ -462,9 +464,11 @@ struct EventDetailView: View {
                         alignment: .leading
                     )
                 }
-                .buttonStyle(.plain)
+                // Borderless so the button takes the tap without the row's
+                // gesture recognizer swallowing the first one (see #122).
+                .buttonStyle(.borderless)
                 .contentShape(Rectangle())
-                
+
                 NavigationLink {
                     UploadQueueView(
                         event: event
