@@ -133,6 +133,14 @@ struct ContentView: View {
                     )
                 },
                 onCreateEvent: { title in
+                    /*
+                     * Selection is what the detail column follows, so
+                     * assigning the new id here is the navigation. The
+                     * event is already in the list by this point, which
+                     * is why the detail resolves it rather than showing
+                     * the placeholder for a frame.
+                     */
+                    selectedEventID =
                     try await viewModel.createEvent(
                         title: title,
                         using: configuration
