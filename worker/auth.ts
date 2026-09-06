@@ -249,13 +249,13 @@ async function matchesInviteCode(
  * every non-GET, including same-origin ones, so its absence means the caller is
  * not a browser doing what we asked.
  */
-function isSameOriginRequest(request: Request): boolean {
+export function isSameOriginRequest(request: Request): boolean {
   const origin = request.headers.get("Origin");
 
   return origin !== null && origin === new URL(request.url).origin;
 }
 
-function isStateChanging(request: Request): boolean {
+export function isStateChanging(request: Request): boolean {
   return request.method !== "GET" && request.method !== "HEAD";
 }
 
@@ -499,7 +499,7 @@ export async function handleAuthRequest(
  * way, and a login that depends on how someone capitalised their own address is
  * a support ticket rather than a security property.
  */
-function normalizeEmail(value: unknown): string | null {
+export function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
