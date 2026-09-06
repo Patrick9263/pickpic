@@ -161,6 +161,11 @@ vite.config.ts.timestamp-*
 .dev.vars*
 !.dev.vars.example
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+
 # Claude Code local settings
 .claude/settings.local.json
 
