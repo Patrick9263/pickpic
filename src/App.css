@@ -35,17 +35,40 @@
 .header-account {
   align-items: center;
   display: flex;
-  gap: 12px;
+  /*
+   * A link, the signed-in address and a button do not fit on one line at phone
+   * widths. With nowrap they were shrunk to fit instead, which is what made the
+   * row look jammed together; wrapping moves an item to a second line and keeps
+   * the full 16px between the ones that remain side by side.
+   */
+  flex-wrap: wrap;
+  gap: 12px 16px;
 }
 
 .header-account span {
   color: #625f58;
   font-size: 0.875rem;
+  /*
+   * Email addresses carry no natural break opportunity, so the span's
+   * min-content width is the whole address and the header pushed the page wider
+   * than the viewport instead of wrapping.
+   */
+  overflow-wrap: anywhere;
 }
 
+/*
+ * Bare text links, so the hit area was only the ~19px line box -- well under
+ * half the 45px of the button sitting beside them, and separated from it by
+ * nothing but the flex gap. inline-flex with a 44px minimum brings them up to
+ * the platform tap-target minimum without moving the text, because the row is
+ * centre-aligned and the extra height is already occupied by that button.
+ */
 .header-account-link,
 .account-back-link {
+  align-items: center;
   color: var(--color-text-muted);
+  display: inline-flex;
+  min-height: 44px;
   text-decoration: underline;
 }
 
@@ -1201,6 +1224,20 @@ input:focus {
 }
 
 @media (max-width: 560px) {
+  /*
+   * The account controls are wider than the wordmark leaves room for on a
+   * phone, and space-between answered that by squeezing them rather than by
+   * giving way. Stacking hands them the full row, so the space between the
+   * link and the button is the gap we chose instead of whatever was left over.
+   * 560px rather than the 720px block below, which only adjusts padding: at
+   * 700px the header still fits comfortably on one line.
+   */
+  .site-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+
   .event-management-actions {
     justify-content: flex-start;
   }
