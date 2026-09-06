@@ -530,11 +530,16 @@ final class UploadQueueStore: ObservableObject {
          * BGContinuedProcessingTask issue: submission and dispatch are two
          * separate steps, and only the first one's failures surface here).
          * When that happens nothing ever promotes this job past .scheduled,
-         * so iPadOS is left showing "Preparing…" with no work underway and
-         * no way for us to update or dismiss it from the failed handler.
-         * Fall back to foreground processing if the real handler hasn't
-         * fired within a few seconds, and cancel the stuck system request
-         * so its notification clears.
+         * so fall back to foreground processing if the real handler hasn't
+         * fired within a few seconds -- the pipeline must not silently
+         * stall just because iPadOS dropped the handoff.
+         *
+         * The cancel() below is best-effort only. Once the daemon has
+         * already failed to dispatch, Apple's own guidance is that there
+         * is no API to query or force-dismiss the resulting system
+         * notification -- see the "Known limitation" note in CLAUDE.md.
+         * This does not fix that cosmetic notification; it only makes
+         * sure the actual import/upload work keeps moving.
          */
         let jobID = job.id
 
