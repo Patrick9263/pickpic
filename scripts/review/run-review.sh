@@ -62,6 +62,22 @@ log() {
   printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
 }
 
+# Invokes claude headlessly against $MODEL/$EFFORT/$ALLOWED, which callers set as globals before
+# calling this. Defined this early so the surplus implement loop -- which runs well before the
+# generic "Run" section further down -- can call it too.
+run_claude() {
+  local prompt="$1" outfile="$2" rc
+  set +e
+  claude -p "$prompt" \
+    --model "$MODEL" \
+    --effort "$EFFORT" \
+    --allowedTools "${ALLOWED[@]}" \
+    >"$outfile" 2>>"$LOG_FILE"
+  rc=$?
+  set -e
+  return "$rc"
+}
+
 # ---------------------------------------------------------------------------
 # Single-instance guard
 # ---------------------------------------------------------------------------
@@ -336,14 +352,17 @@ $ISSUE_HISTORY"
   exit 0
 fi
 
-# Surplus mode prefers shipping an already-triaged issue over generating more triage work. One issue
-# per run only: it fires Friday and Saturday, so two ready issues still become two reviewable PRs.
+# Surplus mode prefers shipping already-triaged issues over generating more triage work. Every
+# eligible `ready` issue is a candidate; how many actually get implemented this run is capped by the
+# open-PR budget below, not by a fixed count -- it fires Friday and Saturday, so an empty PR queue on
+# a Friday can clear most of a backlog in one run instead of trickling out one a week.
 #
 # `review-report` and `review-trends` issues are excluded even when labelled `ready`. Those are
 # containers -- a report holds a numbered list of suggestions, not one implementable change -- and
 # labelling one `ready` is an easy mistake to make while triaging on a phone. Picking one up makes
-# the run implement several unrelated suggestions at once, which is exactly the unreviewable diff
-# the one-issue-per-run rule exists to prevent.
+# the run implement several unrelated suggestions in one diff, which is exactly the unreviewable PR
+# excluding them exists to prevent. (Each *issue* in the queue still becomes its own PR -- see below
+# -- so this exclusion is unrelated to how many issues the run works through.)
 #
 # Oldest first, so the backlog drains in the order it was filed rather than newest-first, which is
 # what `gh issue list` returns by default.
@@ -351,7 +370,7 @@ fi
 # Issues already covered by an open PR are skipped. An issue stays open until the PR closing it is
 # merged, so without this the next run picks up the same issue it implemented yesterday and opens a
 # duplicate PR against work already awaiting review.
-READY_ISSUE=""
+READY_QUEUE=()
 if [[ "$MODE" == "surplus" ]]; then
   LINKED_ISSUES="$(gh pr list --state open --limit 50 --json body --jq '.[].body // ""' 2>/dev/null \
     | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
@@ -362,8 +381,7 @@ if [[ "$MODE" == "surplus" ]]; then
       log "skipping ready issue #$cand -- already has an open PR"
       continue
     fi
-    READY_ISSUE="$cand"
-    break
+    READY_QUEUE+=("$cand")
   done
 fi
 
@@ -371,17 +389,20 @@ fi
 #
 # An implementation run produces a PR that needs real human review -- and for anything touching the
 # UI or the iPad, browser or device verification that no unattended run can do. Left unchecked the
-# job would keep opening them at two a week regardless of how many were already waiting. Six is
-# deliberately generous: at the normal rate it takes three weeks of no review at all to reach, so it
-# is a brake against genuine neglect rather than a throttle on ordinary use.
-#
-# This clears READY_ISSUE rather than exiting, so the run falls through to analysis -- a report is
-# far cheaper to skim than a PR is to review, and the backlog guard below still gates that.
-if [[ -n "$READY_ISSUE" ]]; then
+# job would keep opening them regardless of how many were already waiting. Six is deliberately
+# generous: at the normal one-or-two-a-week rate it took three weeks of no review at all to reach, so
+# it is a brake against genuine neglect rather than a throttle on ordinary use. Trim the queue to
+# however many slots remain under that ceiling rather than an all-or-nothing gate, so a backlog of
+# ready issues drains as fast as review capacity allows instead of one per run.
+if [[ ${#READY_QUEUE[@]} -gt 0 ]]; then
   OPEN_PRS="$(gh pr list --state open --limit 50 --json number --jq 'length' 2>/dev/null || echo 0)"
-  if [[ "$OPEN_PRS" -ge 6 ]]; then
+  SLOTS=$(( 6 - OPEN_PRS ))
+  if [[ "$SLOTS" -le 0 ]]; then
     log "skipping implement: $OPEN_PRS open PRs already awaiting review"
-    READY_ISSUE=""
+    READY_QUEUE=()
+  elif [[ "$SLOTS" -lt "${#READY_QUEUE[@]}" ]]; then
+    log "trimming ready queue to $SLOTS issue(s) -- $OPEN_PRS open PRs already awaiting review"
+    READY_QUEUE=("${READY_QUEUE[@]:0:$SLOTS}")
   fi
 fi
 
@@ -402,17 +423,123 @@ for n in $(gh issue list --label review-report --state open --limit 20 --json nu
 done
 UNTRIAGED=$(( UNTRIAGED + PENDING_IN_REPORTS ))
 log "backlog: $UNTRIAGED untriaged ($PENDING_IN_REPORTS of them inside open reports)"
-if [[ -z "$READY_ISSUE" && "$UNTRIAGED" -gt 15 ]]; then
+if [[ ${#READY_QUEUE[@]} -eq 0 && "$UNTRIAGED" -gt 15 ]]; then
   RUN_OUTCOME="skip-backlog-full"
   log "SKIP: $UNTRIAGED untriaged open issues already -- not adding more"
   exit 0
 fi
 
-if [[ -n "$READY_ISSUE" ]]; then
+# Implement every issue in the queue, one PR each, until the queue is empty, budget runs low, or a PR
+# this run itself opened brings the open-PR count back up to the ceiling. This is a self-contained
+# path with its own exit: it never falls through to the sweep/analysis logic below, which only
+# applies when there was nothing ready to implement.
+if [[ ${#READY_QUEUE[@]} -gt 0 ]]; then
   RUN_KIND="implement"
   PROMPT_FILE="$REPO/scripts/review/prompts/surplus.md"
-  TARGET="issue #$READY_ISSUE"
-elif [[ "$MODE" == "surplus" ]]; then
+  TARGET="issues ${READY_QUEUE[*]}"
+  log "kind=implement queue=${READY_QUEUE[*]} model=${MODEL} effort=${EFFORT}"
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    RUN_OUTCOME="dry-run"
+    log "DRY RUN -- would implement ready issues: ${READY_QUEUE[*]}"
+    exit 0
+  fi
+
+  # Xcode overwrites a disk-edited project.pbxproj from its stale in-memory copy and silently drops
+  # file references (CLAUDE.md trap 4). An unattended run must never risk that. Computed once and
+  # reused for every issue in the queue since Xcode's running state won't change mid-run.
+  XCODE_NOTE=""
+  if pgrep -x Xcode >/dev/null 2>&1; then
+    XCODE_NOTE="
+
+IMPORTANT: Xcode is currently running on this machine. You must NOT edit ipad/PickPic.xcodeproj/project.pbxproj.
+If this issue requires adding a new Swift file, stop and report that it was deferred for that reason."
+  fi
+
+  # An array, not a space-separated string: several of these rules contain spaces inside the
+  # parentheses, and an unquoted string expansion splits them into fragments the CLI then rejects.
+  ALLOWED=(Read Grep Glob Edit Write "Bash(git:*)" "Bash(gh:*)" "Bash(npm:*)" "Bash(xcodebuild:*)")
+
+  STAMP="$(date +%Y-%m-%d)"
+  IMPLEMENTED_ISSUES=()
+  OPENED_PRS=()
+
+  for issue in "${READY_QUEUE[@]}"; do
+    # A PR opened earlier in this same loop counts against the ceiling exactly like one left over
+    # from a previous run -- re-check rather than trusting the count computed before the loop started.
+    OPEN_PRS="$(gh pr list --state open --limit 50 --json number --jq 'length' 2>/dev/null || echo 0)"
+    if [[ "$OPEN_PRS" -ge 6 ]]; then
+      log "stopping implement loop before issue #$issue: $OPEN_PRS open PRs already awaiting review"
+      break
+    fi
+
+    # Re-check budget between issues, same reasoning as the sweep loop below: implementing several
+    # issues can be the longest thing this job does, and an interactive session can move the window
+    # underneath it while it runs.
+    read_usage
+    if [[ -n "${WEEK_PCT:-}" && "$WEEK_PCT" -ge 70 ]]; then
+      log "implement: stopping early at ${WEEK_PCT}% weekly, before issue #$issue"
+      break
+    fi
+
+    # Fetched here, not left for the model to fetch: `gh` cannot be granted to a headless run (see
+    # the "Two things about headless claude -p" note below), so a prompt that told the model to run
+    # `gh issue view` itself stalled on an unanswerable approval prompt roughly half the time. Built
+    # by string concatenation rather than a sed substitution -- an issue body can contain `|`,
+    # backslashes, or newlines that a sed replacement pattern would choke on.
+    ISSUE_BLOCK="$(gh issue view "$issue" --json title,body,labels \
+      --jq '"**Title:** " + .title + "\n**Labels:** " + ([.labels[].name] | join(", ")) + "\n\n" + (.body // "(no body)")' \
+      2>/dev/null || true)"
+    if [[ -z "$ISSUE_BLOCK" ]]; then
+      log "implement: could not fetch issue #$issue from GitHub -- skipping"
+      continue
+    fi
+
+    ISSUE_PROMPT="$(sed -e "s|{{TARGET}}|issue #$issue|g" -e "s|{{ISSUE}}|$issue|g" "$PROMPT_FILE")
+
+## Issue #$issue content
+
+$ISSUE_BLOCK
+$XCODE_NOTE"
+    PR_BEFORE="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+
+    log "implement: issue #$issue"
+    if ! run_claude "$ISSUE_PROMPT" "$REPORTS_DIR/$STAMP-implement-$issue.md"; then
+      log "implement: issue #$issue failed, continuing to the next"
+      continue
+    fi
+    SCANS_DONE=$(( SCANS_DONE + 1 ))
+    IMPLEMENTED_ISSUES+=("$issue")
+
+    # The wrapper does not open the PR -- the model does, as part of the prompt -- so the only way to
+    # know one landed is to look for one that was not there before.
+    PR_AFTER="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+    if [[ -n "$PR_AFTER" && "$PR_AFTER" != "$PR_BEFORE" ]]; then
+      OPENED_PRS+=("$PR_AFTER")
+      log "opened PR #$PR_AFTER for issue #$issue"
+    else
+      log "no new PR detected for issue #$issue -- the run may have stopped short; check $REPORTS_DIR/$STAMP-implement-$issue.md"
+    fi
+
+    # Each issue's prompt starts with `git checkout main && git pull`, so this is a safety net rather
+    # than the only thing putting the tree back -- but it also refuses on a dirty tree (uncommitted
+    # work is worth more than the convenience), which is exactly the state a failed or half-finished
+    # issue could leave behind before the next one starts.
+    restore_branch
+  done
+
+  read_usage
+  BUDGET_AFTER_WEEK="${WEEK_PCT:-?}"
+  BUDGET_AFTER_SESSION="${SESSION_PCT:-?}"
+  # Semicolon-joined, not comma-joined: ISSUE_REF lands in an unquoted field of the metrics CSV
+  # below, and a comma there would be read back as an extra column.
+  ISSUE_REF="$(IFS=';'; echo "${OPENED_PRS[*]:-}")"
+  RUN_OUTCOME="ok-implement"
+  log "implement loop finished: ${#IMPLEMENTED_ISSUES[@]}/${#READY_QUEUE[@]} issue(s) implemented, PRs: ${OPENED_PRS[*]:-none}"
+  exit 0
+fi
+
+if [[ "$MODE" == "surplus" ]]; then
   # Several narrow scans beat one broad one when there is surplus to spend: each spends a full pass
   # of attention on a single surface, and a consolidation step at the end merges and ranks them into
   # one report.
@@ -483,17 +610,18 @@ fi
 STAMP="$(date +%Y-%m-%d)"
 REPORT_FILE="$REPORTS_DIR/$STAMP-$MODE.md"
 
-PROMPT="$(sed -e "s|{{TARGET}}|$TARGET|g" -e "s|{{ISSUE}}|${READY_ISSUE:-}|g" "$PROMPT_FILE")"
+PROMPT="$(sed -e "s|{{TARGET}}|$TARGET|g" -e "s|{{ISSUE}}||g" "$PROMPT_FILE")"
 
 # Deduplication context, gathered here rather than by the model. The wrapper runs in an ordinary
 # shell where `gh` works; an analysis run does not (see the ALLOWED note below), and without this a
 # report happily re-proposes things already filed or already declined.
-CONTEXT_BLOCK=""
-if [[ "$RUN_KIND" != "implement" ]]; then
-  EXISTING_ISSUES="$(gh issue list --state all --limit 200 --json number,title,state \
-    --jq '.[] | "- #\(.number) [\(.state)] \(.title)"' 2>/dev/null || echo '(unavailable)')"
-  RECENT_COMMITS="$(git log --oneline -15 2>/dev/null || echo '(unavailable)')"
-  CONTEXT_BLOCK="
+#
+# RUN_KIND is always "sweep" or "analyse" by this point -- "implement" is handled entirely above,
+# in its own self-contained loop that exits before reaching here.
+EXISTING_ISSUES="$(gh issue list --state all --limit 200 --json number,title,state \
+  --jq '.[] | "- #\(.number) [\(.state)] \(.title)"' 2>/dev/null || echo '(unavailable)')"
+RECENT_COMMITS="$(git log --oneline -15 2>/dev/null || echo '(unavailable)')"
+CONTEXT_BLOCK="
 
 ## Existing issues — never re-propose any of these
 
@@ -504,42 +632,13 @@ $EXISTING_ISSUES
 ## Recent commits
 
 $RECENT_COMMITS"
-  PROMPT="$PROMPT$CONTEXT_BLOCK"
-fi
+PROMPT="$PROMPT$CONTEXT_BLOCK"
 
-if [[ "$RUN_KIND" == "implement" ]]; then
-  # Xcode overwrites a disk-edited project.pbxproj from its stale in-memory copy and silently drops
-  # file references (CLAUDE.md trap 4). An unattended run must never risk that.
-  if pgrep -x Xcode >/dev/null 2>&1; then
-    PROMPT="$PROMPT
-
-IMPORTANT: Xcode is currently running on this machine. You must NOT edit ipad/PickPic.xcodeproj/project.pbxproj.
-If this issue requires adding a new Swift file, stop and report that it was deferred for that reason."
-  fi
-  # An array, not a space-separated string: several of these rules contain spaces inside the
-  # parentheses, and an unquoted string expansion splits them into fragments the CLI then rejects.
-  ALLOWED=(Read Grep Glob Edit Write "Bash(git:*)" "Bash(gh:*)" "Bash(npm:*)" "Bash(xcodebuild:*)")
-  PR_BEFORE="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
-else
-  # Analysis gets no Bash at all. `gh` cannot be granted to a headless `-p` run through
-  # --allowedTools -- it asks for approval regardless of the rule, and in print mode there is nobody
-  # to approve it -- so the wrapper gathers the git and GitHub context itself (just above) and hands
-  # it over in the prompt. That also keeps the analysis run genuinely read-only.
-  ALLOWED=(Read Grep Glob)
-fi
-
-run_claude() {
-  local prompt="$1" outfile="$2" rc
-  set +e
-  claude -p "$prompt" \
-    --model "$MODEL" \
-    --effort "$EFFORT" \
-    --allowedTools "${ALLOWED[@]}" \
-    >"$outfile" 2>>"$LOG_FILE"
-  rc=$?
-  set -e
-  return "$rc"
-}
+# Analysis gets no Bash at all. `gh` cannot be granted to a headless `-p` run through
+# --allowedTools -- it asks for approval regardless of the rule, and in print mode there is nobody
+# to approve it -- so the wrapper gathers the git and GitHub context itself (just above) and hands
+# it over in the prompt. That also keeps the analysis run genuinely read-only.
+ALLOWED=(Read Grep Glob)
 
 # Splits a finished report into a public and a private file by each finding's **Category** tag,
 # so a security-flavored finding never reaches the public gh issue create below. A report with no
@@ -676,23 +775,8 @@ log "done: week ${BUDGET_BEFORE_WEEK}% -> ${BUDGET_AFTER_WEEK}% (+${WEEK_DELTA} 
 # ---------------------------------------------------------------------------
 # Publish
 # ---------------------------------------------------------------------------
-# An implementation run opens its own PR, so there is nothing further to post.
-if [[ "$RUN_KIND" == "implement" ]]; then
-  # Record which PR this produced. The wrapper does not open it -- the model does, as part of the
-  # prompt -- so the only way to know is to look for one that was not there before. Without this the
-  # metrics row has no link to its output, and the trends run cannot measure conversion for
-  # implementation runs at all.
-  PR_AFTER="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
-  if [[ -n "$PR_AFTER" && "$PR_AFTER" != "$PR_BEFORE" ]]; then
-    ISSUE_REF="$PR_AFTER"
-    log "opened PR #$PR_AFTER"
-  else
-    log "no new PR detected -- the run may have stopped short; check $REPORT_FILE"
-  fi
-  RUN_OUTCOME="ok-implement"
-  log "implementation run finished for $TARGET; PR handling was Claude's responsibility"
-  exit 0
-fi
+# RUN_KIND is always "sweep" or "analyse" here -- "implement" opens its own PR(s) and exits from its
+# own loop above, with nothing further to post.
 
 # Split by **Category** before anything gets posted -- this is the only gate between a described,
 # unfixed vulnerability and the public issue tracker. See CLAUDE.md "Scheduled review job".

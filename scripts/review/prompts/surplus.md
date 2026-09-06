@@ -3,7 +3,9 @@ Patrick reviews and merges everything himself, so your job ends at an open pull 
 
 ## The issue
 
-**#{{ISSUE}}** — read it first with `gh issue view {{ISSUE}}`.
+**#{{ISSUE}}** — its title, labels, and body are appended to the end of this prompt under "Issue #{{ISSUE}} content", fetched by the wrapper. Do not run `gh issue view` or any other `gh` read to
+double check it: `gh` cannot be granted to this headless run, so a call like that will stall on an
+approval prompt nobody can answer.
 
 ## Hard rules
 

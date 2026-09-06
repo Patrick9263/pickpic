@@ -123,11 +123,13 @@ simplification:** the untriaged-backlog count, sweep sizing, and the `surplus` m
 auto-implement path all stay scoped to the public repo only — a privately-filed security issue
 won't be auto-implemented and doesn't count against the 15-issue backlog ceiling.
 
-The surplus runs exist to spend a weekly budget window that would otherwise expire unused. If an
-open issue carries the `ready` label, that run implements it and opens a PR; otherwise it runs a
-**sweep** — several independent single-surface scans, then a consolidation pass that merges,
-deduplicates and ranks them into one report of at most 12 entries. Only apply `ready` to work you
-are comfortable being done unattended.
+The surplus runs exist to spend a weekly budget window that would otherwise expire unused. If any
+open issues carry the `ready` label, that run implements them oldest-first, one PR per issue, until
+either the queue is empty or open PRs reach 6 (see the next paragraph) — so a Friday with an empty PR
+queue can clear most of a `ready` backlog in one run instead of trickling out one issue a week.
+Otherwise it runs a **sweep** — several independent single-surface scans, then a consolidation pass
+that merges, deduplicates and ranks them into one report of at most 12 entries. Only apply `ready` to
+work you are comfortable being done unattended.
 
 **A sweep fills the backlog toward a target, rather than running a fixed number of scans.** The
 weekly window expires Sunday whether or not it was used, so an empty backlog with budget left is
@@ -166,11 +168,14 @@ path from that same tree; if it were left on a branch that does not contain the 
 would die with a missing-file error and the job would silently stop. It will not do this if the tree
 is dirty — uncommitted work is worth more than the automatic restore.
 
-**Four rules the unattended implementation run must never break** — it never pushes to `main`,
-merges, or deploys (a `main` push deploys all three workers); it never authors a D1 migration; it
-does one issue per run; and it refuses to touch `project.pbxproj` while Xcode is running, because of
-trap 4 below. It also stands down if more than 15 untriaged issues are already open, since a
-suggestion generator that outruns triage capacity just creates work.
+**Four rules each unattended implementation pass must never break** — it never pushes to `main`,
+merges, or deploys (a `main` push deploys all three workers); it never authors a D1 migration; each
+pass touches only its own assigned issue, never opportunistically fixing other things it notices
+(the surplus job itself may now work through several `ready` issues in one run, but each becomes its
+own isolated pass and its own PR — see "Scheduled review job" above); and it refuses to touch
+`project.pbxproj` while Xcode is running, because of trap 4 below. It also stands down if more than
+15 untriaged issues are already open, since a suggestion generator that outruns triage capacity just
+creates work.
 
 **The Sunday trends run audits the job rather than the code**, posting an issue labelled
 `review-trends`. It runs after the weekly window resets, so it reports on a fully closed week and
