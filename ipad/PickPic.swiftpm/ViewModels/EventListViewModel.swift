@@ -213,12 +213,16 @@ final class EventListViewModel:
      * keep that identity once it syncs. Creation is idempotent server
      * side, so retrying with the same id converges instead of leaving a
      * duplicate.
+     *
+     * It is returned so the caller can select the event it just made,
+     * on both paths — the offline one names an event that is every bit
+     * as usable as a synced one.
      */
     func createEvent(
         title: String,
         using configuration:
         APIConfigurationStore
-    ) async throws {
+    ) async throws -> String {
         let eventID = UUID().uuidString.lowercased()
 
         do {
@@ -256,6 +260,8 @@ final class EventListViewModel:
                 )
             )
         }
+
+        return eventID
     }
 
     /*
