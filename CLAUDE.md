@@ -82,6 +82,7 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
   This is about reporting, not thinking, and it explicitly does not apply to code. **In-code comments explaining why stay exactly as they are** — they're the house style here and they're load-bearing. Keep design reasoning at the moment a decision is being made, and keep warnings before anything destructive.
 
 - **Nothing is on the sandboxed `PATH`.** `node`, `npm`, and `gh` all resolve to "command not found" until you prepend their directories: `export PATH=/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:$PATH`. Do it in the same call as the command; shell state does not persist between calls.
+- **Fetch and fast-forward local `main` before branching, every time.** This repo sees heavy concurrent session/agent use, so `git status` reporting "up to date with origin/main" only reflects the last fetch — it goes stale the moment another session merges something. Branching from a stale local `main` silently drops recent merges from the new branch and build; this has already shipped a device build missing a just-merged fix. Run `git fetch origin && git merge --ff-only origin/main` (or `git pull --ff-only`) immediately before `git checkout -b`, not just `git status`.
 
 ## Scheduled review job
 
