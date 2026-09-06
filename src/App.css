@@ -182,18 +182,36 @@ input:focus {
   outline: none;
 }
 
+/*
+ * One bundle serves both faces of the SPA -- src/App.tsx picks the dashboard or
+ * the public gallery from window.location.pathname, not a build flag -- so a
+ * bare `button` rule reaches gallery controls as well. The element selector
+ * therefore keeps only geometry and pointer behaviour, which both surfaces
+ * want; the fill is dashboard chrome and is scoped to the dashboard/app roots.
+ * Gallery components own their own fills, and used to have to out-specificity
+ * this one rule at a time.
+ *
+ * `:where()` adds nothing to specificity, so the scoped rules weigh exactly
+ * what the bare selectors did and every dashboard button class keeps winning
+ * over them as before. The 1px border stays unscoped because it is box metrics:
+ * scoping it would shift the size of any button that sets its own colours.
+ */
 button {
-  background: #171717;
-  border: 1px solid #171717;
+  border: 1px solid transparent;
   border-radius: 11px;
-  color: #ffffff;
   cursor: pointer;
   font: inherit;
   font-weight: 750;
   padding: 12px 17px;
 }
 
-button:hover:not(:disabled) {
+:where(.app-shell, .home-page) button {
+  background: #171717;
+  border-color: #171717;
+  color: #ffffff;
+}
+
+:where(.app-shell, .home-page) button:hover:not(:disabled) {
   background: #34312d;
 }
 
@@ -892,7 +910,8 @@ input:focus {
   box-shadow: 0 0 0 3px rgb(161 139 245 / 18%);
 }
 
-button,
+/* Scoped for the same reason as the base button rule above. */
+:where(.app-shell, .home-page) button,
 .upload-button,
 .home-admin-link {
   background: var(--color-text);
@@ -900,7 +919,7 @@ button,
   color: var(--color-background);
 }
 
-button:hover:not(:disabled),
+:where(.app-shell, .home-page) button:hover:not(:disabled),
 .upload-button:hover,
 .home-admin-link:hover {
   background: #dfe1e5;
