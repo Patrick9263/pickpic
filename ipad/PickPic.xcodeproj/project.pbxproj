@@ -57,6 +57,11 @@
 		CDFF00010000000000000000 /* PreflightState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00000000000000000000 /* PreflightState.swift */; };
 		CDFF00030000000000000000 /* DuplicatePreflightService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00020000000000000000 /* DuplicatePreflightService.swift */; };
 		CDFF00050000000000000000 /* StorageHeadroomService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00040000000000000000 /* StorageHeadroomService.swift */; };
+		CDFF00120000000000000000 /* UploadStageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00110000000000000000 /* UploadStageTests.swift */; };
+		CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00130000000000000000 /* UploadJobDecodingTests.swift */; };
+		CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00150000000000000000 /* HashingServiceTests.swift */; };
+		CDFF00180000000000000000 /* StorageHeadroomServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */; };
+		CDFF001A0000000000000000 /* PhotoMetadataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -111,7 +116,23 @@
 		CDFF00000000000000000000 /* PreflightState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreflightState.swift; sourceTree = "<group>"; };
 		CDFF00020000000000000000 /* DuplicatePreflightService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DuplicatePreflightService.swift; sourceTree = "<group>"; };
 		CDFF00040000000000000000 /* StorageHeadroomService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageHeadroomService.swift; sourceTree = "<group>"; };
+		CDFF00060000000000000000 /* PickPicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PickPicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CDFF00110000000000000000 /* UploadStageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStageTests.swift; sourceTree = "<group>"; };
+		CDFF00130000000000000000 /* UploadJobDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadJobDecodingTests.swift; sourceTree = "<group>"; };
+		CDFF00150000000000000000 /* HashingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashingServiceTests.swift; sourceTree = "<group>"; };
+		CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageHeadroomServiceTests.swift; sourceTree = "<group>"; };
+		CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXContainerItemProxy section */
+		CDFF00080000000000000000 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CD5F4C65301C6DE20048327C /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CD5F4C6C301C6DE20048327C;
+			remoteInfo = PickPic;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		CDC9476A301EF80A0082FEC4 /* Exceptions for "PickPic" folder in "PickPic" target */ = {
@@ -142,6 +163,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CDFF000B0000000000000000 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -150,6 +178,7 @@
 			children = (
 				CD5F4CE2301C7ECD0048327C /* PickPic Sources */,
 				CD5F4C6F301C6DE20048327C /* PickPic */,
+				CDFF000D0000000000000000 /* PickPicTests */,
 				CD5F4C6E301C6DE20048327C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -158,8 +187,21 @@
 			isa = PBXGroup;
 			children = (
 				CD5F4C6D301C6DE20048327C /* PickPic.app */,
+				CDFF00060000000000000000 /* PickPicTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		CDFF000D0000000000000000 /* PickPicTests */ = {
+			isa = PBXGroup;
+			children = (
+				CDFF00110000000000000000 /* UploadStageTests.swift */,
+				CDFF00130000000000000000 /* UploadJobDecodingTests.swift */,
+				CDFF00150000000000000000 /* HashingServiceTests.swift */,
+				CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */,
+				CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */,
+			);
+			path = PickPicTests;
 			sourceTree = "<group>";
 		};
 		CD5F4CE2301C7ECD0048327C /* PickPic Sources */ = {
@@ -307,7 +349,35 @@
 			productReference = CD5F4C6D301C6DE20048327C /* PickPic.app */;
 			productType = "com.apple.product-type.application";
 		};
+		CDFF00070000000000000000 /* PickPicTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CDFF000E0000000000000000 /* Build configuration list for PBXNativeTarget "PickPicTests" */;
+			buildPhases = (
+				CDFF000A0000000000000000 /* Sources */,
+				CDFF000B0000000000000000 /* Frameworks */,
+				CDFF000C0000000000000000 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CDFF00090000000000000000 /* PBXTargetDependency */,
+			);
+			name = PickPicTests;
+			packageProductDependencies = (
+			);
+			productName = PickPicTests;
+			productReference = CDFF00060000000000000000 /* PickPicTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXTargetDependency section */
+		CDFF00090000000000000000 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CD5F4C6C301C6DE20048327C /* PickPic */;
+			targetProxy = CDFF00080000000000000000 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXProject section */
 		CD5F4C65301C6DE20048327C /* Project object */ = {
@@ -326,6 +396,10 @@
 							};
 						};
 					};
+					CDFF00070000000000000000 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = CD5F4C6C301C6DE20048327C;
+					};
 				};
 			};
 			buildConfigurationList = CD5F4C68301C6DE20048327C /* Build configuration list for PBXProject "PickPic" */;
@@ -343,12 +417,20 @@
 			projectRoot = "";
 			targets = (
 				CD5F4C6C301C6DE20048327C /* PickPic */,
+				CDFF00070000000000000000 /* PickPicTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		CD5F4C6B301C6DE20048327C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CDFF000C0000000000000000 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -412,6 +494,18 @@
 				CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */,
 				CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */,
 				CD5F4D47301C80320048327C /* ContinuedProcessingTaskCoordinator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CDFF000A0000000000000000 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CDFF00120000000000000000 /* UploadStageTests.swift in Sources */,
+				CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */,
+				CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */,
+				CDFF00180000000000000000 /* StorageHeadroomServiceTests.swift in Sources */,
+				CDFF001A0000000000000000 /* PhotoMetadataServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -618,6 +712,56 @@
 			};
 			name = Release;
 		};
+		CDFF000F0000000000000000 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = BQGJZNJFVU;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "photos.pickpic.app.PickPicTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PickPic.app/PickPic";
+			};
+			name = Debug;
+		};
+		CDFF00100000000000000000 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = BQGJZNJFVU;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "photos.pickpic.app.PickPicTests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PickPic.app/PickPic";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -635,6 +779,15 @@
 			buildConfigurations = (
 				CD5F4C79301C6DE30048327C /* Debug */,
 				CD5F4C7A301C6DE30048327C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CDFF000E0000000000000000 /* Build configuration list for PBXNativeTarget "PickPicTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CDFF000F0000000000000000 /* Debug */,
+				CDFF00100000000000000000 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
