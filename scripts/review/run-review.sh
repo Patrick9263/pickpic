@@ -121,62 +121,81 @@ record_metrics() {
     "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" "$ISSUE_REF_PRIVATE" >>"$METRICS_FILE"
 }
 
-# A tiny Unicode bar chart for one numeric column of $METRICS_FILE, so the trends issue carries a
-# visual alongside the table Claude writes from the same data. Deterministic and network-free by
-# design -- it never calls claude or gh, so it stays on the --dry-run path along with the rest of
-# the trends decision (see MODE == trends below) instead of needing a live run to exercise.
+# Renders one row per recorded run for a numeric column of $METRICS_FILE, as a small ASCII gauge:
+# date, a proportional bar, and the value -- rather than packing every run into a single line of
+# Unicode block-height glyphs (▁▂▃▄▅▆▇█). Those eight glyphs differ by only a pixel or two at the
+# font size a phone renders a GitHub issue at, and this report is explicitly meant to be read on one
+# (see prompts/trends.md's opening line); a bar's *length* stays legible at any size, and plain "#"/
+# "." characters hold a fixed width in every monospace font, which the box-drawing glyphs are not
+# guaranteed to. Deterministic and network-free by design -- it never calls claude or gh, so it
+# stays on the --dry-run path along with the rest of the trends decision (see MODE == trends below)
+# instead of needing a live run to exercise.
 #
-# $1 is the column's 1-based position in the CSV (counting from the front, e.g. 11 for week_after) --
-# fixed from the front rather than the end because a live metrics.csv on disk can predate a later
-# column being appended (issue_private was added after some rows were already written) and reading
-# from the front is unaffected by that. $2 is an optional unit suffix (e.g. "%") for the min/max/
-# latest readout. Blank fields (skip rows have no week_after/week_delta) are dropped, not plotted as
-# zero.
+# $1 is the column's 1-based CSV position (counting from the front, e.g. 11 for week_after) -- fixed
+# from the front rather than the end because a live metrics.csv on disk can predate a later column
+# being appended (issue_private was added after some rows were already written), and reading from
+# the front is unaffected by that. $2 is the value's unit suffix (e.g. "%", or "" for a bare count).
+# $3 is the scale to bar against, or 0 to scale against the largest value actually recorded: a
+# percentage has a real, fixed 0-100 ceiling that must not be renormalized away, but an open-ended
+# count (cost, findings) has no natural ceiling to fix in code. Blank fields (skip rows have no
+# week_after/week_delta) are dropped, not plotted as zero.
 #
-# Every plotted run also carries week_before/week_after (columns 10/11) regardless of which column
+# Every plotted row also carries week_before/week_after (columns 10/11) regardless of which column
 # is being charted, purely to detect the weekly reset: when a run's week_before is lower than the
-# previous plotted run's week_after, the budget window rolled over between them. Marking that point
-# with "|" matters because the weekly window is the x-axis every one of these columns moves against
-# -- plotted without the marker, a reset looks identical to the job's own cost suddenly vanishing,
-# which is a misread of the same graph meant to make trends legible, not a subtler one.
-SPARK_BLOCKS=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
+# previous plotted run's week_after, the budget window rolled over between them. Labelling that row
+# matters because the weekly window is the x-axis every one of these columns moves against --
+# unlabelled, a reset reads as the job's own cost collapsing rather than the week rolling over.
+render_bar_chart() {
+  local field="$1" unit="$2" fixed_max="$3"
+  local -a ts=() vals=() is_reset=()
+  local raw_ts wb wa v prev_after=""
 
-render_sparkline() {
-  local field="$1" unit="${2:-}"
-  local -a vals=()
-  local v
-  while IFS= read -r v; do
-    [[ "$v" =~ ^[0-9]+$ ]] && vals+=("$v")
-  done < <(tail -n +2 "$METRICS_FILE" | awk -F',' -v f="$field" '{print $f}')
+  while IFS=',' read -r raw_ts wb wa v; do
+    [[ "$v" =~ ^[0-9]+$ ]] || continue
+    if [[ -n "$prev_after" && "$wb" =~ ^[0-9]+$ && "$wb" -lt "$prev_after" ]]; then
+      is_reset+=(1)
+    else
+      is_reset+=(0)
+    fi
+    ts+=("$raw_ts")
+    vals+=("$v")
+    [[ "$wa" =~ ^[0-9]+$ ]] && prev_after="$wa"
+  done < <(tail -n +2 "$METRICS_FILE" | awk -F',' -v f="$field" '{print $1","$10","$11","$f}')
 
   if [[ ${#vals[@]} -eq 0 ]]; then
-    printf '(no data yet)'
+    printf '(no data yet)\n'
     return 0
   fi
 
-  local min=${vals[0]} max=${vals[0]}
-  for v in "${vals[@]}"; do
-    [[ "$v" -lt "$min" ]] && min=$v
-    [[ "$v" -gt "$max" ]] && max=$v
+  local scale_max="$fixed_max"
+  if [[ "$scale_max" -eq 0 ]]; then
+    scale_max=${vals[0]}
+    for v in "${vals[@]}"; do
+      [[ "$v" -gt "$scale_max" ]] && scale_max=$v
+    done
+  fi
+  [[ "$scale_max" -eq 0 ]] && scale_max=1
+
+  local width=15 i n=${#vals[@]} filled j bar date_part time_part note
+  for (( i = 0; i < n; i++ )); do
+    v="${vals[$i]}"
+    filled=$(( v * width / scale_max ))
+    [[ "$filled" -gt "$width" ]] && filled="$width"
+    bar=""
+    for (( j = 0; j < width; j++ )); do
+      if [[ "$j" -lt "$filled" ]]; then
+        bar+="#"
+      else
+        bar+="."
+      fi
+    done
+    # ISO timestamps look like 2026-09-06T13:54:17-0400 -- chars 5..9 are MM-DD, 11..15 are HH:MM.
+    date_part="${ts[$i]:5:5}"
+    time_part="${ts[$i]:11:5}"
+    note=""
+    [[ "${is_reset[$i]}" -eq 1 ]] && note="  (week reset)"
+    printf '%s %s  %s  %3d%s%s\n' "$date_part" "$time_part" "$bar" "$v" "$unit" "$note"
   done
-
-  local range=$(( max - min ))
-  [[ "$range" -eq 0 ]] && range=1
-  local spark="" idx wb wa prev_after=""
-  while IFS=',' read -r wb wa v; do
-    [[ "$v" =~ ^[0-9]+$ ]] || continue
-    if [[ -n "$prev_after" && "$wb" =~ ^[0-9]+$ && "$wb" -lt "$prev_after" ]]; then
-      spark+="|"
-    fi
-    idx=$(( (v - min) * 7 / range ))
-    spark+="${SPARK_BLOCKS[$idx]}"
-    [[ "$wa" =~ ^[0-9]+$ ]] && prev_after="$wa"
-  done < <(tail -n +2 "$METRICS_FILE" | awk -F',' -v f="$field" '{print $10","$11","$f}')
-
-  # ${vals[-1]} needs bash 4.3+; launchd runs this script through macOS's stock /bin/bash (3.2).
-  local last="${vals[$(( ${#vals[@]} - 1 ))]}"
-  printf '%s  (oldest to newest, min %d%s, max %d%s, latest %d%s)' \
-    "$spark" "$min" "$unit" "$max" "$unit" "$last" "$unit"
 }
 
 # An implementation run checks out main and branches from it, leaving the working tree somewhere
@@ -357,14 +376,16 @@ if [[ "$MODE" == "trends" ]]; then
   METRIC_ROWS="$(( $(wc -l <"$METRICS_FILE") - 1 ))"
   log "trends: $METRIC_ROWS recorded runs"
 
-  BUDGET_SPARK="$(render_sparkline 11 '%')"  # week_after
-  COST_SPARK="$(render_sparkline 12)"        # week_delta
+  BUDGET_CHART="$(render_bar_chart 11 '%' 100)"  # week_after, fixed 0-100% scale
+  COST_CHART="$(render_bar_chart 12 '' 0)"        # week_delta, scaled to its own observed max
 
   if [[ "$DRY_RUN" == "yes" ]]; then
     RUN_OUTCOME="dry-run"
     log "DRY RUN -- would post trends issue covering $METRIC_ROWS runs"
-    log "  weekly budget after each run: $BUDGET_SPARK"
-    log "  weekly cost per run:          $COST_SPARK"
+    log "weekly budget after each run:"
+    log "$BUDGET_CHART"
+    log "weekly cost per run:"
+    log "$COST_CHART"
     exit 0
   fi
 
@@ -409,9 +430,13 @@ $ISSUE_HISTORY"
   {
     printf 'Covering %s recorded runs. Budget for this analysis: weekly %s%% -> %s%%\n\n' \
       "$METRIC_ROWS" "$BUDGET_BEFORE_WEEK" "$BUDGET_AFTER_WEEK"
-    printf "**Weekly budget after each run:** \`%s\`\n\n" "$BUDGET_SPARK"
-    printf "**Weekly cost per run (points spent):** \`%s\`\n\n" "$COST_SPARK"
-    printf -- "*A \`|\` marks where the weekly budget window reset (every Sunday) -- without it, the reset reads as cost collapsing rather than the week rolling over.*\n\n"
+    # $BUDGET_CHART/$COST_CHART lose their trailing newline in command substitution, so the \n
+    # before the closing fence has to be explicit -- without it the closing ``` lands glued to the
+    # last data row instead of on its own line, and GitHub does not treat that as closing the fence.
+    printf '**Weekly budget after each run** (oldest to newest)\n\n'
+    printf "\`\`\`\n%s\n\`\`\`\n\n" "$BUDGET_CHART"
+    printf '**Weekly cost per run, in points spent** (oldest to newest)\n\n'
+    printf "\`\`\`\n%s\n\`\`\`\n\n" "$COST_CHART"
     printf -- '---\n\n'
     cat "$REPORT_FILE"
   } >"$TRENDS_BODY"
