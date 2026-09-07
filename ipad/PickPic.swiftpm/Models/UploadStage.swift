@@ -94,4 +94,50 @@ enum UploadStage:
             return false
         }
     }
+
+    /*
+     * A job can only be reconverted once it has something to convert:
+     * prepared photos, or a batch that already made it all the way to
+     * readyToUpload. A job still queued or failed hasn't been prepared
+     * yet, so there's nothing here to redo.
+     */
+    var isReconvertible: Bool {
+        switch self {
+        case .prepared,
+                .readyToUpload:
+            return true
+
+        case .queued,
+                .preparing,
+                .preflighting,
+                .converting,
+                .uploading,
+                .completed,
+                .failed:
+            return false
+        }
+    }
+
+    /*
+     * A job can enter preparation from its two "not yet prepared" resting
+     * states. Every other stage has either already been prepared or is
+     * mid-operation, so re-preparing it would restart work in progress
+     * or redo work that already succeeded.
+     */
+    var isPreparable: Bool {
+        switch self {
+        case .queued,
+                .failed:
+            return true
+
+        case .preparing,
+                .prepared,
+                .preflighting,
+                .converting,
+                .readyToUpload,
+                .uploading,
+                .completed:
+            return false
+        }
+    }
 }

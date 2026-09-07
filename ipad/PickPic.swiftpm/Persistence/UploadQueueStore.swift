@@ -376,6 +376,13 @@ final class UploadQueueStore: ObservableObject {
             return
         }
 
+        guard
+            !job.stage.isActiveOperation,
+            job.stage != .completed
+        else {
+            return
+        }
+
         if job.stage == .readyToUpload {
             Task {
                 await runUploadPipeline(
@@ -383,14 +390,6 @@ final class UploadQueueStore: ObservableObject {
                     using: configuration
                 )
             }
-            return
-        }
-
-        guard
-            job.stage == .queued
-                || job.stage == .failed
-                || job.stage == .prepared
-        else {
             return
         }
 
@@ -444,8 +443,7 @@ final class UploadQueueStore: ObservableObject {
                     job.id == jobID
                 }
             ),
-            job.stage == .prepared
-                || job.stage == .readyToUpload
+            job.stage.isReconvertible
         else {
             return
         }
@@ -895,10 +893,7 @@ final class UploadQueueStore: ObservableObject {
             .filter { job in
                 job.eventID == eventID
                 && job.stage != .completed
-                && job.stage != .preparing
-                && job.stage != .preflighting
-                && job.stage != .converting
-                && job.stage != .uploading
+                && !job.stage.isActiveOperation
             }
             .sorted { first, second in
                 first.createdAt < second.createdAt
@@ -1431,20 +1426,8 @@ final class UploadQueueStore: ObservableObject {
             throw UploadFolderRelinkError.jobNotFound
         }
 
-        switch currentJob.stage {
-        case .preparing,
-                .preflighting,
-                .converting,
-                .uploading:
-            throw UploadFolderRelinkError
-                .operationInProgress
-
-        case .queued,
-                .prepared,
-                .readyToUpload,
-                .completed,
-                .failed:
-            break
+        if currentJob.stage.isActiveOperation {
+            throw UploadFolderRelinkError.operationInProgress
         }
 
         let relinkedFolder = try await Task.detached(
@@ -1485,8 +1468,7 @@ final class UploadQueueStore: ObservableObject {
                     job.id == jobID
                 }
             ),
-            currentJob.stage == .queued
-                || currentJob.stage == .failed
+            currentJob.stage.isPreparable
         else {
             return
         }

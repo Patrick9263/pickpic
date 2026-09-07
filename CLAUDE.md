@@ -35,6 +35,8 @@ Two vitest projects run as part of `npm run check`, both under `worker/`. `vites
 
 A second vitest suite covers `src/` (`vitest.config.src.ts`, jsdom + `@testing-library/react`), kept as a separate config rather than folded into `vitest.config.ts` so DOM tests never run under the worker suite's plain-Node environment and vice versa. It has two layers: extracted pure helpers — `src/pages/galleryHelpers.ts` and `src/pages/dashboardHelpers.ts`, pulled out of `GalleryPage.tsx`/`DashboardPage.tsx` so formatting/grouping/dedup logic is unit-testable without rendering — plus `src/api.test.ts` for the `fetchJson`/`getErrorMessage` client, and one component-level test (`GalleryPage.heart.test.tsx`) exercising hearting a photo end to end, since a heart being an edit request rather than a social reaction is the load-bearing part of the data model. Neither `DashboardPage.tsx` nor `GalleryPage.tsx` has full component coverage — that's a much heavier lift the same way route-handler coverage is for the worker.
 
+`npm run check` CI-gates every PR and push to `main` (see CI/CD below), so a worker/`src` change that breaks an existing test can't merge — but nothing enforces that _new_ testable logic gets a test. When a change adds a pure helper (the `galleryHelpers.ts`/`dashboardHelpers.ts` pattern above, an auth/request-shape check, a formatter), add its test in the same PR rather than leaving it to a later pass.
+
 The `src` run needs `NODE_OPTIONS=--no-experimental-webstorage`. Node 22+ exposes its own experimental `globalThis.localStorage`, and on vitest 4 (see the vitest-pin note above) that shadows jsdom's implementation instead of being replaced by it — accessing it then throws asking for a `--localstorage-file`. Disabling Node's own version lets vitest's jsdom environment wire up jsdom's `localStorage` as intended.
 
 Use `npm run dev` when testing worker changes, not `npx wrangler dev` — the latter serves the last `npm run build` output from `dist/`, so edits appear to have no effect and stack traces point at `dist/pickpic/index.js`. `npm run dev` also reads `.dev.vars` (git-ignored; see `.dev.vars.example`), which is how `AUTH_MODE` and the magic-link sender are set locally.
@@ -63,6 +65,16 @@ cat /tmp/pickpic-build/Build/Intermediates.noindex/PickPic.build/Debug-iphonesim
 
 It should hold every `.swift` under `PickPic.swiftpm/` plus the generated `GeneratedAssetSymbols.swift`.
 
+`ipad/PickPicTests/` (target `PickPicTests`, Swift Testing) covers pure logic pulled out of `UploadQueueStore` and other iPad services — `UploadStage`'s `isActiveOperation`/`isReconvertible`/`isPreparable`, upload-queue JSON decoding (old-shape compatibility, trap 1), hashing, storage-headroom math, photo metadata. Most of `UploadQueueStore` itself is still untestable as-is (see trap 2's note on `BackgroundUploadSession`/`ContinuedProcessingTaskCoordinator` entanglement), so this target grows by extracting pure pieces out, not by testing the store directly. Run it — `clean build` above does **not** run tests:
+
+```bash
+xcodebuild test -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)' \
+  -derivedDataPath /tmp/pickpic-build
+```
+
+Any `name=` from `xcrun simctl list devices available` works; a booted simulator isn't required. When a change to `ipad/` touches or adds pure logic (a computed property, a decoding path, a standalone calculation), run this and extend `PickPicTests` alongside it in the same PR — don't defer coverage on the assumption the test target doesn't exist yet without checking `ipad/PickPicTests/` and `gh issue view` on whatever issue introduced it first.
+
 D1 migrations are **applied manually and deliberately stay out of CI.** Don't wire them into a workflow.
 
 ## Working sessions
@@ -89,6 +101,7 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
 
 - **Nothing is on the sandboxed `PATH`.** `node`, `npm`, and `gh` all resolve to "command not found" until you prepend their directories: `export PATH=/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:$PATH`. Do it in the same call as the command; shell state does not persist between calls.
 - **Fetch and fast-forward local `main` before branching, every time.** This repo sees heavy concurrent session/agent use, so `git status` reporting "up to date with origin/main" only reflects the last fetch — it goes stale the moment another session merges something. Branching from a stale local `main` silently drops recent merges from the new branch and build; this has already shipped a device build missing a just-merged fix. Run `git fetch origin && git merge --ff-only origin/main` (or `git pull --ff-only`) immediately before `git checkout -b`, not just `git status`.
+- **Run the correctness gate locally before pushing, not after CI fails on it.** For any commit touching `worker/`, `src/`, or a root file `prettier --check .` scans (including this one — `CLAUDE.md` itself has failed `format:check` from an unformatted `*emphasis*` before), run `npm run check`. For `ipad/`, run the `xcodebuild ... clean build` command above, plus `xcodebuild test` (see `PickPicTests` below) if the change touches anything testable. Both are exactly what CI runs — catching a failure locally is one command, catching it after a push is a round trip through Actions.
 
 ## Scheduled review job
 
@@ -339,7 +352,7 @@ The app polls for newly-hearted photos and copies matching RAW files into a loca
 
 ### CI/CD
 
-[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. Pushes to `main` additionally deploy all three workers (`npm run deploy`, then `npm run deploy:admin`, then `npm run deploy:app`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
+[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. A PR that touches `ipad/**` also runs a `macos-latest` job building the app and running `PickPicTests` — gated to only fire on `ipad/` changes, since macOS runners are slower/pricier than the Ubuntu one and most PRs don't touch Swift. Pushes to `main` additionally deploy all three workers (`npm run deploy`, then `npm run deploy:admin`, then `npm run deploy:app`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
 
 ## Conventions
 
