@@ -1,6 +1,5 @@
-import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import DashboardPage from "./DashboardPage";
 import { fetchJson, getErrorMessage } from "../api";
 import {
@@ -10,11 +9,19 @@ import {
 import { makeEvent, makeStorageUsage } from "../testing/factories";
 import {
   stubClipboardWriteText,
-  stubMatchMedia,
   userCancels,
   userConfirms,
 } from "../testing/browserStubs";
 import type { EventRecord, PhotoRecord } from "../types";
+
+function makeReadyTripEvent(overrides: Partial<EventRecord> = {}): EventRecord {
+  return makeEvent({
+    id: "event-1",
+    title: "Trip",
+    status: "ready",
+    ...overrides,
+  });
+}
 
 vi.mock("../api", () => ({
   fetchJson: vi.fn(),
@@ -22,6 +29,10 @@ vi.mock("../api", () => ({
 }));
 
 const fetchJsonMock = vi.mocked(fetchJson);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function setUpDashboard(
   options: {
@@ -37,7 +48,7 @@ function setUpDashboard(
 
   for (const eventRecord of events) {
     router.get<{ photos: PhotoRecord[] }>(
-      new RegExp(`/api/admin/events/${eventRecord.id}/photos$`),
+      new RegExp(`/api/admin/events/${escapeRegExp(eventRecord.id)}/photos$`),
       { photos: photosByEvent[eventRecord.id] ?? [] },
     );
   }
@@ -53,7 +64,6 @@ describe("DashboardPage", () => {
   beforeEach(() => {
     fetchJsonMock.mockReset();
     vi.mocked(getErrorMessage).mockReset();
-    stubMatchMedia();
   });
 
   afterEach(() => {
@@ -106,18 +116,9 @@ describe("DashboardPage", () => {
   });
 
   it("does not archive when the user cancels the confirm", async () => {
-    const readyEvent = makeEvent({
-      id: "event-1",
-      title: "Trip",
-      status: "ready",
-    });
+    const readyEvent = makeReadyTripEvent();
 
     const router = setUpDashboard({ events: [readyEvent] });
-
-    router.put<{ event: EventRecord }>(
-      /\/api\/admin\/events\/event-1\/status$/,
-      { event: { ...readyEvent, status: "archived" } },
-    );
 
     render(<DashboardPage />);
 
@@ -137,11 +138,7 @@ describe("DashboardPage", () => {
   });
 
   it("archives once the user confirms, sending the new status", async () => {
-    const readyEvent = makeEvent({
-      id: "event-1",
-      title: "Trip",
-      status: "ready",
-    });
+    const readyEvent = makeReadyTripEvent();
 
     const router = setUpDashboard({ events: [readyEvent] });
 
@@ -176,12 +173,7 @@ describe("DashboardPage", () => {
   });
 
   it("copies the gallery share link built from VITE_PUBLIC_APP_ORIGIN, then resets the copied indicator", async () => {
-    const readyEvent = makeEvent({
-      id: "event-1",
-      title: "Trip",
-      status: "ready",
-      shareToken: "share-xyz",
-    });
+    const readyEvent = makeReadyTripEvent({ shareToken: "share-xyz" });
 
     setUpDashboard({ events: [readyEvent] });
 
@@ -200,17 +192,29 @@ describe("DashboardPage", () => {
 
     expect(writeText).toHaveBeenCalledWith("https://pickpic.test/g/share-xyz");
 
-    const resetTimer = setTimeoutSpy.mock.calls.find(
+    const resetCallIndex = setTimeoutSpy.mock.calls.findIndex(
       ([, delay]) => delay === 2000,
     );
 
-    const resetCallback = resetTimer?.[0] as (() => void) | undefined;
+    const resetCallback = setTimeoutSpy.mock.calls[resetCallIndex]?.[0] as
+      (() => void) | undefined;
 
     expect(resetCallback).toBeTypeOf("function");
 
     act(() => {
       resetCallback?.();
     });
+
+    /*
+     * vi.spyOn calls through to the real window.setTimeout, so the real
+     * 2000ms timer is still pending underneath the manual invocation above.
+     * Clear it, or it fires ~2s later against an already-unmounted
+     * component in the middle of some later, unrelated test.
+     */
+    const resetTimerId = setTimeoutSpy.mock.results[resetCallIndex]
+      ?.value as number;
+
+    clearTimeout(resetTimerId);
 
     expect(
       screen.getByRole("button", { name: "Copy gallery link" }),
