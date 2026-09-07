@@ -175,3 +175,56 @@ setup() {
   [[ "$output" == *"skipping ready issue #42 -- already has an open PR"* ]]
   [[ "$output" == *"kind=sweep target=sweep of 8 areas"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Trends mode: render_sparkline() and the dry-run gate that stops before the real
+# `claude -p`/`gh issue create` calls (previously trends mode had no such gate at all -- unlike
+# every other mode, `trends --dry-run` fell straight through to a real analysis and a real issue).
+# ---------------------------------------------------------------------------
+
+@test "trends mode: dry run prints sparklines from metrics.csv and never reaches claude or gh issue create" {
+  local metrics_file="/Users/patrick/.claude/pickpic-review/metrics.csv"
+  local backup=""
+  if [[ -f "$metrics_file" ]]; then
+    backup="$(mktemp)"
+    cp "$metrics_file" "$backup"
+  fi
+  mkdir -p "$(dirname "$metrics_file")"
+  {
+    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private\n'
+    printf '2026-09-01T00:00:00-0400,daily,analyse,"a",ok,opus,high,1,3,10,14,4,1,2,100,1,\n'
+    printf '2026-09-02T00:00:00-0400,daily,analyse,"b",ok,opus,high,1,2,14,20,6,1,2,100,2,\n'
+  } >"$metrics_file"
+
+  FAKE_WEEK_PCT=30 run bash "$REVIEW_SCRIPT" trends --dry-run
+
+  if [[ -n "$backup" ]]; then
+    mv "$backup" "$metrics_file"
+  else
+    rm -f "$metrics_file"
+  fi
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DRY RUN -- would post trends issue covering 2 runs"* ]]
+  [[ "$output" == *"weekly budget after each run: "*"(min 14, max 20, latest 20)"* ]]
+  [[ "$output" == *"weekly cost per run:"*"(min 4, max 6, latest 6)"* ]]
+}
+
+@test "trends mode: no recorded metrics stands the run down before touching gh or claude" {
+  local metrics_file="/Users/patrick/.claude/pickpic-review/metrics.csv"
+  local backup=""
+  if [[ -f "$metrics_file" ]]; then
+    backup="$(mktemp)"
+    cp "$metrics_file" "$backup"
+    rm -f "$metrics_file"
+  fi
+
+  FAKE_WEEK_PCT=30 run bash "$REVIEW_SCRIPT" trends --dry-run
+
+  if [[ -n "$backup" ]]; then
+    mv "$backup" "$metrics_file"
+  fi
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SKIP: no metrics recorded yet"* ]]
+}

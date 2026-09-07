@@ -121,6 +121,49 @@ record_metrics() {
     "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" "$ISSUE_REF_PRIVATE" >>"$METRICS_FILE"
 }
 
+# A tiny Unicode bar chart for one numeric column of $METRICS_FILE, so the trends issue carries a
+# visual alongside the table Claude writes from the same data. Deterministic and network-free by
+# design -- it never calls claude or gh, so it stays on the --dry-run path along with the rest of
+# the trends decision (see MODE == trends below) instead of needing a live run to exercise.
+#
+# $1 is the column's 1-based position in the CSV (counting from the front, e.g. 11 for week_after) --
+# fixed from the front rather than the end because a live metrics.csv on disk can predate a later
+# column being appended (issue_private was added after some rows were already written) and reading
+# from the front is unaffected by that. Blank fields (skip rows have no week_after/week_delta) are
+# dropped rather than plotted as zero.
+SPARK_BLOCKS=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
+
+render_sparkline() {
+  local field="$1"
+  local -a vals=()
+  local v
+  while IFS= read -r v; do
+    [[ "$v" =~ ^[0-9]+$ ]] && vals+=("$v")
+  done < <(tail -n +2 "$METRICS_FILE" | awk -F',' -v f="$field" '{print $f}')
+
+  if [[ ${#vals[@]} -eq 0 ]]; then
+    printf '(no data yet)'
+    return 0
+  fi
+
+  local min=${vals[0]} max=${vals[0]}
+  for v in "${vals[@]}"; do
+    [[ "$v" -lt "$min" ]] && min=$v
+    [[ "$v" -gt "$max" ]] && max=$v
+  done
+
+  local range=$(( max - min ))
+  [[ "$range" -eq 0 ]] && range=1
+  local spark="" idx
+  for v in "${vals[@]}"; do
+    idx=$(( (v - min) * 7 / range ))
+    spark+="${SPARK_BLOCKS[$idx]}"
+  done
+  # ${vals[-1]} needs bash 4.3+; launchd runs this script through macOS's stock /bin/bash (3.2).
+  local last="${vals[$(( ${#vals[@]} - 1 ))]}"
+  printf '%s  (min %d, max %d, latest %d)' "$spark" "$min" "$max" "$last"
+}
+
 # An implementation run checks out main and branches from it, leaving the working tree somewhere
 # else when it finishes. Every scheduled run afterwards invokes this script by absolute path from
 # that same tree, so if the branch it lands on does not contain the script, the next run dies with a
@@ -299,6 +342,17 @@ if [[ "$MODE" == "trends" ]]; then
   METRIC_ROWS="$(( $(wc -l <"$METRICS_FILE") - 1 ))"
   log "trends: $METRIC_ROWS recorded runs"
 
+  BUDGET_SPARK="$(render_sparkline 11)"  # week_after
+  COST_SPARK="$(render_sparkline 12)"    # week_delta
+
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    RUN_OUTCOME="dry-run"
+    log "DRY RUN -- would post trends issue covering $METRIC_ROWS runs"
+    log "  weekly budget after each run: $BUDGET_SPARK"
+    log "  weekly cost per run:          $COST_SPARK"
+    exit 0
+  fi
+
   ISSUE_HISTORY="$(gh issue list --state all --limit 300 \
     --json number,title,state,createdAt,closedAt,labels \
     --jq '.[] | "\(.createdAt[0:10]) #\(.number) [\(.state)] {\(.labels | map(.name) | join("|"))} \(.title)"' \
@@ -340,6 +394,8 @@ $ISSUE_HISTORY"
   {
     printf 'Covering %s recorded runs. Budget for this analysis: weekly %s%% -> %s%%\n\n' \
       "$METRIC_ROWS" "$BUDGET_BEFORE_WEEK" "$BUDGET_AFTER_WEEK"
+    printf "**Weekly budget after each run:** \`%s\`\n\n" "$BUDGET_SPARK"
+    printf "**Weekly cost per run (points spent):** \`%s\`\n\n" "$COST_SPARK"
     printf -- '---\n\n'
     cat "$REPORT_FILE"
   } >"$TRENDS_BODY"
