@@ -18,6 +18,25 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      - name: Install shellcheck and bats
+        run: sudo apt-get update && sudo apt-get install -y shellcheck bats
+
+      - name: Lint shell scripts
+        run: find scripts -name '*.sh' -print0 | xargs -0 shellcheck
+
+      - name: Set up fake home for scripts/review/run-review.sh
+        # run-review.sh hardcodes REPO=/Users/patrick/Dev/pickpic and
+        # STATE_DIR=/Users/patrick/.claude/pickpic-review -- it's a personal, locally-scheduled job,
+        # not general-purpose software, so the bats suite exercises the real script by making those
+        # exact paths resolve on this disposable runner rather than by changing its behavior.
+        run: |
+          sudo mkdir -p /Users/patrick/Dev
+          sudo chown -R "$(id -u):$(id -g)" /Users/patrick
+          ln -sfn "$GITHUB_WORKSPACE" /Users/patrick/Dev/pickpic
+
+      - name: Run scripts/review bats tests
+        run: bats scripts/review/tests
+
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
