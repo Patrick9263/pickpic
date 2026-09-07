@@ -129,12 +129,20 @@ record_metrics() {
 # $1 is the column's 1-based position in the CSV (counting from the front, e.g. 11 for week_after) --
 # fixed from the front rather than the end because a live metrics.csv on disk can predate a later
 # column being appended (issue_private was added after some rows were already written) and reading
-# from the front is unaffected by that. Blank fields (skip rows have no week_after/week_delta) are
-# dropped rather than plotted as zero.
+# from the front is unaffected by that. $2 is an optional unit suffix (e.g. "%") for the min/max/
+# latest readout. Blank fields (skip rows have no week_after/week_delta) are dropped, not plotted as
+# zero.
+#
+# Every plotted run also carries week_before/week_after (columns 10/11) regardless of which column
+# is being charted, purely to detect the weekly reset: when a run's week_before is lower than the
+# previous plotted run's week_after, the budget window rolled over between them. Marking that point
+# with "|" matters because the weekly window is the x-axis every one of these columns moves against
+# -- plotted without the marker, a reset looks identical to the job's own cost suddenly vanishing,
+# which is a misread of the same graph meant to make trends legible, not a subtler one.
 SPARK_BLOCKS=(▁ ▂ ▃ ▄ ▅ ▆ ▇ █)
 
 render_sparkline() {
-  local field="$1"
+  local field="$1" unit="${2:-}"
   local -a vals=()
   local v
   while IFS= read -r v; do
@@ -154,14 +162,21 @@ render_sparkline() {
 
   local range=$(( max - min ))
   [[ "$range" -eq 0 ]] && range=1
-  local spark="" idx
-  for v in "${vals[@]}"; do
+  local spark="" idx wb wa prev_after=""
+  while IFS=',' read -r wb wa v; do
+    [[ "$v" =~ ^[0-9]+$ ]] || continue
+    if [[ -n "$prev_after" && "$wb" =~ ^[0-9]+$ && "$wb" -lt "$prev_after" ]]; then
+      spark+="|"
+    fi
     idx=$(( (v - min) * 7 / range ))
     spark+="${SPARK_BLOCKS[$idx]}"
-  done
+    [[ "$wa" =~ ^[0-9]+$ ]] && prev_after="$wa"
+  done < <(tail -n +2 "$METRICS_FILE" | awk -F',' -v f="$field" '{print $10","$11","$f}')
+
   # ${vals[-1]} needs bash 4.3+; launchd runs this script through macOS's stock /bin/bash (3.2).
   local last="${vals[$(( ${#vals[@]} - 1 ))]}"
-  printf '%s  (min %d, max %d, latest %d)' "$spark" "$min" "$max" "$last"
+  printf '%s  (oldest to newest, min %d%s, max %d%s, latest %d%s)' \
+    "$spark" "$min" "$unit" "$max" "$unit" "$last" "$unit"
 }
 
 # An implementation run checks out main and branches from it, leaving the working tree somewhere
@@ -342,8 +357,8 @@ if [[ "$MODE" == "trends" ]]; then
   METRIC_ROWS="$(( $(wc -l <"$METRICS_FILE") - 1 ))"
   log "trends: $METRIC_ROWS recorded runs"
 
-  BUDGET_SPARK="$(render_sparkline 11)"  # week_after
-  COST_SPARK="$(render_sparkline 12)"    # week_delta
+  BUDGET_SPARK="$(render_sparkline 11 '%')"  # week_after
+  COST_SPARK="$(render_sparkline 12)"        # week_delta
 
   if [[ "$DRY_RUN" == "yes" ]]; then
     RUN_OUTCOME="dry-run"
@@ -396,6 +411,7 @@ $ISSUE_HISTORY"
       "$METRIC_ROWS" "$BUDGET_BEFORE_WEEK" "$BUDGET_AFTER_WEEK"
     printf "**Weekly budget after each run:** \`%s\`\n\n" "$BUDGET_SPARK"
     printf "**Weekly cost per run (points spent):** \`%s\`\n\n" "$COST_SPARK"
+    printf -- "*A \`|\` marks where the weekly budget window reset (every Sunday) -- without it, the reset reads as cost collapsing rather than the week rolling over.*\n\n"
     printf -- '---\n\n'
     cat "$REPORT_FILE"
   } >"$TRENDS_BODY"

@@ -194,6 +194,9 @@ setup() {
     printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private\n'
     printf '2026-09-01T00:00:00-0400,daily,analyse,"a",ok,opus,high,1,3,10,14,4,1,2,100,1,\n'
     printf '2026-09-02T00:00:00-0400,daily,analyse,"b",ok,opus,high,1,2,14,20,6,1,2,100,2,\n'
+    # week_before (2) lower than the previous row's week_after (20) -- a weekly reset happened
+    # between these two runs, and the sparkline should mark it rather than plot a silent cliff.
+    printf '2026-09-08T00:00:00-0400,daily,analyse,"c",ok,opus,high,1,1,2,6,4,1,2,100,3,\n'
   } >"$metrics_file"
 
   FAKE_WEEK_PCT=30 run bash "$REVIEW_SCRIPT" trends --dry-run
@@ -205,9 +208,9 @@ setup() {
   fi
 
   [ "$status" -eq 0 ]
-  [[ "$output" == *"DRY RUN -- would post trends issue covering 2 runs"* ]]
-  [[ "$output" == *"weekly budget after each run: "*"(min 14, max 20, latest 20)"* ]]
-  [[ "$output" == *"weekly cost per run:"*"(min 4, max 6, latest 6)"* ]]
+  [[ "$output" == *"DRY RUN -- would post trends issue covering 3 runs"* ]]
+  [[ "$output" == *"weekly budget after each run: "*"|"*"(oldest to newest, min 6%, max 20%, latest 6%)"* ]]
+  [[ "$output" == *"weekly cost per run:"*"|"*"(oldest to newest, min 4, max 6, latest 4)"* ]]
 }
 
 @test "trends mode: no recorded metrics stands the run down before touching gh or claude" {
