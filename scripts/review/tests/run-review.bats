@@ -163,9 +163,8 @@ setup() {
   FAKE_WEEK_PCT=30 FAKE_GH_UNTRIAGED_COUNT=0 FAKE_GH_READY_ISSUES=42 FAKE_GH_OPEN_PR_COUNT=1 \
     run bash "$REVIEW_SCRIPT" surplus --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"kind=implement target=issue #42"* ]]
-  [[ "$output" == *"DRY RUN -- would invoke claude with prompt"* ]]
-  [[ "$output" == *"surplus.md"* ]]
+  [[ "$output" == *"kind=implement queue=42"* ]]
+  [[ "$output" == *"DRY RUN -- would implement ready issues: 42"* ]]
 }
 
 @test "surplus mode skips a ready issue that already has an open PR, falling back to a sweep" {
