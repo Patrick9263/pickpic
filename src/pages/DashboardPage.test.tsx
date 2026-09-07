@@ -221,6 +221,36 @@ describe("DashboardPage", () => {
     ).toBeTruthy();
   });
 
+  it("clears the pending copied-indicator timeout on unmount", async () => {
+    const readyEvent = makeReadyTripEvent({ shareToken: "share-xyz" });
+
+    setUpDashboard({ events: [readyEvent] });
+
+    stubClipboardWriteText();
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
+
+    const { unmount } = render(<DashboardPage />);
+
+    const copyButton = await screen.findByRole("button", {
+      name: "Copy gallery link",
+    });
+
+    fireEvent.click(copyButton);
+
+    await screen.findByRole("button", { name: "Copied!" });
+
+    const resetCallIndex = setTimeoutSpy.mock.calls.findIndex(
+      ([, delay]) => delay === 2000,
+    );
+
+    const resetTimerId = setTimeoutSpy.mock.results[resetCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimerId);
+  });
+
   it("surfaces a rejected mutation as an error and clears the creating spinner", async () => {
     const router = setUpDashboard();
 

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ChangeEvent,
   type FormEvent,
@@ -181,6 +182,7 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
   const [uploadingEventId, setUploadingEventId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
+  const copiedEventTimeoutRef = useRef<number | null>(null);
   const [deletingPhotoId, setDeletingPhotoId] = useState<string | null>(null);
   const [clearingHeartsPhotoId, setClearingHeartsPhotoId] = useState<
     string | null
@@ -278,6 +280,14 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
   useEffect(() => {
     void loadStorageUsage();
   }, [loadStorageUsage]);
+
+  useEffect(() => {
+    return () => {
+      if (copiedEventTimeoutRef.current !== null) {
+        window.clearTimeout(copiedEventTimeoutRef.current);
+      }
+    };
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -585,7 +595,12 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
       await navigator.clipboard.writeText(shareUrl);
       setCopiedEventId(eventRecord.id);
 
-      window.setTimeout(() => {
+      if (copiedEventTimeoutRef.current !== null) {
+        window.clearTimeout(copiedEventTimeoutRef.current);
+      }
+
+      copiedEventTimeoutRef.current = window.setTimeout(() => {
+        copiedEventTimeoutRef.current = null;
         setCopiedEventId((currentId) =>
           currentId === eventRecord.id ? null : currentId,
         );
