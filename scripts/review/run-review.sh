@@ -463,6 +463,11 @@ If this issue requires adding a new Swift file, stop and report that it was defe
   STAMP="$(date +%Y-%m-%d)"
   IMPLEMENTED_ISSUES=()
   OPENED_PRS=()
+  # One entry per issue attempted, "$issue:$pr" or "$issue:no-pr" or "$issue:failed" -- the trends
+  # audit found implement-pass yield was under-logged (issues #129/#145 showed no PR and no way to
+  # tell whether the pass failed or just went unrecorded). This makes every attempt explicit instead
+  # of only listing the PRs that happened to land.
+  ISSUE_OUTCOMES=()
 
   for issue in "${READY_QUEUE[@]}"; do
     # A PR opened earlier in this same loop counts against the ceiling exactly like one left over
@@ -506,6 +511,7 @@ $XCODE_NOTE"
     log "implement: issue #$issue"
     if ! run_claude "$ISSUE_PROMPT" "$REPORTS_DIR/$STAMP-implement-$issue.md"; then
       log "implement: issue #$issue failed, continuing to the next"
+      ISSUE_OUTCOMES+=("$issue:failed")
       continue
     fi
     SCANS_DONE=$(( SCANS_DONE + 1 ))
@@ -516,8 +522,10 @@ $XCODE_NOTE"
     PR_AFTER="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
     if [[ -n "$PR_AFTER" && "$PR_AFTER" != "$PR_BEFORE" ]]; then
       OPENED_PRS+=("$PR_AFTER")
+      ISSUE_OUTCOMES+=("$issue:$PR_AFTER")
       log "opened PR #$PR_AFTER for issue #$issue"
     else
+      ISSUE_OUTCOMES+=("$issue:no-pr")
       log "no new PR detected for issue #$issue -- the run may have stopped short; check $REPORTS_DIR/$STAMP-implement-$issue.md"
     fi
 
@@ -532,8 +540,9 @@ $XCODE_NOTE"
   BUDGET_AFTER_WEEK="${WEEK_PCT:-?}"
   BUDGET_AFTER_SESSION="${SESSION_PCT:-?}"
   # Semicolon-joined, not comma-joined: ISSUE_REF lands in an unquoted field of the metrics CSV
-  # below, and a comma there would be read back as an extra column.
-  ISSUE_REF="$(IFS=';'; echo "${OPENED_PRS[*]:-}")"
+  # below, and a comma there would be read back as an extra column. Per-issue outcomes (not just the
+  # PRs that landed) so a future trends audit can see every attempt, not only the successful ones.
+  ISSUE_REF="$(IFS=';'; echo "${ISSUE_OUTCOMES[*]:-}")"
   RUN_OUTCOME="ok-implement"
   log "implement loop finished: ${#IMPLEMENTED_ISSUES[@]}/${#READY_QUEUE[@]} issue(s) implemented, PRs: ${OPENED_PRS[*]:-none}"
   exit 0
@@ -815,6 +824,16 @@ if [[ -s "$PUBLIC_REPORT" ]]; then
     --assignee @me 2>&1)"
   ISSUE_REF="$(printf '%s' "$ISSUE_URL" | grep -o '[0-9]*$' || true)"
   log "posted: $ISSUE_URL"
+
+  # The trends audit's biggest blind spot: conversion (findings -> filed issues) has to be inferred
+  # from timing and topic alone, because nothing links a filed issue back to the suggestion it came
+  # from. The issue number is only known after creation, so this is a follow-up comment rather than
+  # part of the body.
+  if [[ -n "$ISSUE_REF" ]]; then
+    gh issue comment "$ISSUE_REF" \
+      --body "When filing an issue for one of the findings above, reference this report (e.g. \"from #$ISSUE_REF (3)\") so next Sunday's trends audit can count conversion directly instead of inferring it from timing." \
+      >/dev/null 2>&1 || true
+  fi
 else
   log "nothing public this run -- all findings were security-tagged"
 fi
@@ -840,6 +859,12 @@ if [[ -s "$PRIVATE_REPORT" ]]; then
     --assignee @me 2>&1)"
   ISSUE_REF_PRIVATE="$(printf '%s' "$PRIVATE_ISSUE_URL" | grep -o '[0-9]*$' || true)"
   log "posted (private): $PRIVATE_ISSUE_URL"
+
+  if [[ -n "$ISSUE_REF_PRIVATE" ]]; then
+    gh issue comment "$ISSUE_REF_PRIVATE" --repo "$SECURITY_REPO" \
+      --body "When filing an issue for one of the findings above, reference this report (e.g. \"from #$ISSUE_REF_PRIVATE (2)\") so next Sunday's trends audit can count conversion directly instead of inferring it from timing." \
+      >/dev/null 2>&1 || true
+  fi
 fi
 
 log "findings: ${FINDINGS_COUNT} total (${SCANS_DONE} scan(s))"
