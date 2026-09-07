@@ -1,0 +1,247 @@
+import { act } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import DashboardPage from "./DashboardPage";
+import { fetchJson, getErrorMessage } from "../api";
+import {
+  createFetchJsonRouter,
+  type FetchJsonRouter,
+} from "../testing/fetchJsonRouter";
+import { makeEvent, makeStorageUsage } from "../testing/factories";
+import {
+  stubClipboardWriteText,
+  stubMatchMedia,
+  userCancels,
+  userConfirms,
+} from "../testing/browserStubs";
+import type { EventRecord, PhotoRecord } from "../types";
+
+vi.mock("../api", () => ({
+  fetchJson: vi.fn(),
+  getErrorMessage: vi.fn(),
+}));
+
+const fetchJsonMock = vi.mocked(fetchJson);
+
+function setUpDashboard(
+  options: {
+    events?: EventRecord[];
+    photosByEvent?: Record<string, PhotoRecord[]>;
+  } = {},
+): FetchJsonRouter {
+  const events = options.events ?? [];
+  const photosByEvent = options.photosByEvent ?? {};
+  const router = createFetchJsonRouter();
+
+  router.get<{ events: EventRecord[] }>(/\/api\/admin\/events$/, { events });
+
+  for (const eventRecord of events) {
+    router.get<{ photos: PhotoRecord[] }>(
+      new RegExp(`/api/admin/events/${eventRecord.id}/photos$`),
+      { photos: photosByEvent[eventRecord.id] ?? [] },
+    );
+  }
+
+  router.get(/\/api\/admin\/storage$/, { storage: makeStorageUsage() });
+
+  fetchJsonMock.mockImplementation(router.fetchJson);
+
+  return router;
+}
+
+describe("DashboardPage", () => {
+  beforeEach(() => {
+    fetchJsonMock.mockReset();
+    vi.mocked(getErrorMessage).mockReset();
+    stubMatchMedia();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("adds a newly created event to the top of the list", async () => {
+    const existingEvent = makeEvent({
+      id: "event-existing",
+      title: "Existing Event",
+      status: "ready",
+    });
+
+    const router = setUpDashboard({ events: [existingEvent] });
+
+    const createdEvent = makeEvent({
+      id: "event-new",
+      title: "Summer Barbecue",
+    });
+
+    router.post<{ event: EventRecord }>(/\/api\/admin\/events$/, {
+      event: createdEvent,
+    });
+
+    const { container } = render(<DashboardPage />);
+
+    await screen.findByText("Existing Event");
+
+    const titleInput = screen.getByLabelText("Event title") as HTMLInputElement;
+
+    fireEvent.change(titleInput, { target: { value: "Summer Barbecue" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create event" }));
+
+    await screen.findByText("Summer Barbecue");
+
+    expect(titleInput.value).toBe("");
+
+    const eventTitles = Array.from(
+      container.querySelectorAll(".event-card h3"),
+    ).map((heading) => heading.textContent);
+
+    expect(eventTitles).toEqual(["Summer Barbecue", "Existing Event"]);
+
+    const createCall = router.calls.find(
+      (call) =>
+        call.method === "POST" && call.url.endsWith("/api/admin/events"),
+    );
+
+    expect(createCall?.body).toEqual({ title: "Summer Barbecue" });
+  });
+
+  it("does not archive when the user cancels the confirm", async () => {
+    const readyEvent = makeEvent({
+      id: "event-1",
+      title: "Trip",
+      status: "ready",
+    });
+
+    const router = setUpDashboard({ events: [readyEvent] });
+
+    router.put<{ event: EventRecord }>(
+      /\/api\/admin\/events\/event-1\/status$/,
+      { event: { ...readyEvent, status: "archived" } },
+    );
+
+    render(<DashboardPage />);
+
+    const statusSelect = (await screen.findByLabelText(
+      "Gallery status",
+    )) as HTMLSelectElement;
+
+    userCancels();
+
+    fireEvent.change(statusSelect, { target: { value: "archived" } });
+
+    expect(
+      router.calls.some(
+        (call) => call.method === "PUT" && call.url.includes("/status"),
+      ),
+    ).toBe(false);
+  });
+
+  it("archives once the user confirms, sending the new status", async () => {
+    const readyEvent = makeEvent({
+      id: "event-1",
+      title: "Trip",
+      status: "ready",
+    });
+
+    const router = setUpDashboard({ events: [readyEvent] });
+
+    router.put<{ event: EventRecord }>(
+      /\/api\/admin\/events\/event-1\/status$/,
+      { event: { ...readyEvent, status: "archived" } },
+    );
+
+    render(<DashboardPage />);
+
+    const statusSelect = (await screen.findByLabelText(
+      "Gallery status",
+    )) as HTMLSelectElement;
+
+    userConfirms();
+
+    fireEvent.change(statusSelect, { target: { value: "archived" } });
+
+    /*
+     * Archiving moves the event out of the active list (showArchived
+     * defaults to false), which unmounts its EventCard entirely, so the
+     * only way to observe the update from here is the archived-count
+     * toggle appearing.
+     */
+    await screen.findByRole("button", { name: "Show archived (1)" });
+
+    const statusCall = router.calls.find(
+      (call) => call.method === "PUT" && call.url.includes("/status"),
+    );
+
+    expect(statusCall?.body).toEqual({ status: "archived" });
+  });
+
+  it("copies the gallery share link built from VITE_PUBLIC_APP_ORIGIN, then resets the copied indicator", async () => {
+    const readyEvent = makeEvent({
+      id: "event-1",
+      title: "Trip",
+      status: "ready",
+      shareToken: "share-xyz",
+    });
+
+    setUpDashboard({ events: [readyEvent] });
+
+    const writeText = stubClipboardWriteText();
+    const setTimeoutSpy = vi.spyOn(window, "setTimeout");
+
+    render(<DashboardPage />);
+
+    const copyButton = await screen.findByRole("button", {
+      name: "Copy gallery link",
+    });
+
+    fireEvent.click(copyButton);
+
+    await screen.findByRole("button", { name: "Copied!" });
+
+    expect(writeText).toHaveBeenCalledWith("https://pickpic.test/g/share-xyz");
+
+    const resetTimer = setTimeoutSpy.mock.calls.find(
+      ([, delay]) => delay === 2000,
+    );
+
+    const resetCallback = resetTimer?.[0] as (() => void) | undefined;
+
+    expect(resetCallback).toBeTypeOf("function");
+
+    act(() => {
+      resetCallback?.();
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Copy gallery link" }),
+    ).toBeTruthy();
+  });
+
+  it("surfaces a rejected mutation as an error and clears the creating spinner", async () => {
+    const router = setUpDashboard();
+
+    router.post(/\/api\/admin\/events$/, () => {
+      throw new Error("Titles must be unique.");
+    });
+
+    render(<DashboardPage />);
+
+    await screen.findByText("No events yet");
+
+    const titleInput = screen.getByLabelText("Event title") as HTMLInputElement;
+
+    fireEvent.change(titleInput, { target: { value: "Summer Barbecue" } });
+
+    const submitButton = screen.getByRole("button", {
+      name: "Create event",
+    }) as HTMLButtonElement;
+
+    fireEvent.click(submitButton);
+
+    const alert = await screen.findByRole("alert");
+
+    expect(alert.textContent).toContain("Titles must be unique.");
+    expect(submitButton.disabled).toBe(false);
+    expect(submitButton.textContent).toBe("Create event");
+  });
+});

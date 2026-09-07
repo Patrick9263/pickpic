@@ -14,5 +14,15 @@ export default defineConfig({
     include: ["src/**/*.test.{ts,tsx}"],
     environment: "jsdom",
     setupFiles: ["./src/testSetup.ts"],
+
+    /*
+     * DashboardPage.tsx reads VITE_PUBLIC_APP_ORIGIN at module load to build
+     * gallery share links. It's only set in .env.production, so without this
+     * every test would silently fall back to jsdom's default location
+     * instead of exercising the real code path.
+     */
+    env: {
+      VITE_PUBLIC_APP_ORIGIN: "https://pickpic.test",
+    },
   },
 });
