@@ -42,4 +42,30 @@ struct UploadStageTests {
         #expect(active.union(idle) == Set(Self.allStages))
         #expect(active.isDisjoint(with: idle))
     }
+
+    @Test(arguments: [UploadStage.prepared, .readyToUpload])
+    func reconvertibleStagesReportEligible(stage: UploadStage) {
+        #expect(stage.isReconvertible)
+    }
+
+    @Test(arguments: [
+        UploadStage.queued, .preparing, .preflighting, .converting,
+        .uploading, .completed, .failed,
+    ])
+    func nonReconvertibleStagesReportIneligible(stage: UploadStage) {
+        #expect(!stage.isReconvertible)
+    }
+
+    @Test(arguments: [UploadStage.queued, .failed])
+    func preparableStagesReportEligible(stage: UploadStage) {
+        #expect(stage.isPreparable)
+    }
+
+    @Test(arguments: [
+        UploadStage.preparing, .prepared, .preflighting, .converting,
+        .readyToUpload, .uploading, .completed,
+    ])
+    func nonPreparableStagesReportIneligible(stage: UploadStage) {
+        #expect(!stage.isPreparable)
+    }
 }
