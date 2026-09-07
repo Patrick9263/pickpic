@@ -63,6 +63,16 @@ cat /tmp/pickpic-build/Build/Intermediates.noindex/PickPic.build/Debug-iphonesim
 
 It should hold every `.swift` under `PickPic.swiftpm/` plus the generated `GeneratedAssetSymbols.swift`.
 
+`ipad/PickPicTests/` (target `PickPicTests`, Swift Testing) covers pure logic pulled out of `UploadQueueStore` and other iPad services — `UploadStage`'s `isActiveOperation`/`isReconvertible`/`isPreparable`, upload-queue JSON decoding (old-shape compatibility, trap 1), hashing, storage-headroom math, photo metadata. Most of `UploadQueueStore` itself is still untestable as-is (see trap 2's note on `BackgroundUploadSession`/`ContinuedProcessingTaskCoordinator` entanglement), so this target grows by extracting pure pieces out, not by testing the store directly. Run it — `clean build` above does **not** run tests:
+
+```bash
+xcodebuild test -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPad Pro 13-inch (M5)' \
+  -derivedDataPath /tmp/pickpic-build
+```
+
+Any `name=` from `xcrun simctl list devices available` works; a booted simulator isn't required. When a change to `ipad/` touches or adds pure logic (a computed property, a decoding path, a standalone calculation), run this and extend `PickPicTests` alongside it in the same PR — don't defer coverage on the assumption the test target doesn't exist yet without checking `ipad/PickPicTests/` and `gh issue view` on whatever issue introduced it first.
+
 D1 migrations are **applied manually and deliberately stay out of CI.** Don't wire them into a workflow.
 
 ## Working sessions
