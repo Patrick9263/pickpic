@@ -83,13 +83,23 @@
   padding: 3px;
 }
 
+/*
+ * ~31px tall at 8px vertical padding, under the 44px tap-target minimum.
+ * align-items/justify-content centre the label instead of the padding
+ * setting the height, so min-height can bring the target up to 44px without
+ * shifting the text baseline within the row.
+ */
 .gallery-filter-controls button,
 .gallery-grouping-controls button {
+  align-items: center;
   background: transparent;
   border: 0;
   border-radius: 999px;
   color: var(--color-text-muted);
+  display: inline-flex;
   font-size: 0.78rem;
+  justify-content: center;
+  min-height: 44px;
   padding: 8px 13px;
   transition:
     background-color 140ms ease,

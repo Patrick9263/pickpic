@@ -167,7 +167,11 @@ function SignInPage() {
           so a pushState navigation would change the URL and render nothing. */}
       {!isConsuming && (
         <p>
-          New to PickPic? <a href="/sign-up">Create an account</a>.
+          New to PickPic?{" "}
+          <a className="auth-inline-link" href="/sign-up">
+            Create an account
+          </a>
+          .
         </p>
       )}
 

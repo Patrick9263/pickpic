@@ -210,12 +210,18 @@ function SignUpPage() {
           not started -- has the same next step, and it is not this form. */}
       {consumeFailed ? (
         <p>
-          <a href="/sign-in">Go to sign in</a>
+          <a className="auth-inline-link" href="/sign-in">
+            Go to sign in
+          </a>
         </p>
       ) : (
         !isConsuming && (
           <p>
-            Already have an account? <a href="/sign-in">Sign in</a>.
+            Already have an account?{" "}
+            <a className="auth-inline-link" href="/sign-in">
+              Sign in
+            </a>
+            .
           </p>
         )
       )}
