@@ -824,6 +824,19 @@ button:disabled {
   max-width: 600px;
 }
 
+/*
+ * A bare inline anchor's clickable box is sized to its glyphs, not the
+ * paragraph's line-height -- about 20px tall here despite the 28.56px line
+ * box, matching #156's header-account-link finding. inline-flex with a 44px
+ * minimum brings it up to the platform tap-target size without changing the
+ * surrounding prose's line spacing.
+ */
+.auth-inline-link {
+  align-items: center;
+  display: inline-flex;
+  min-height: 44px;
+}
+
 .home-admin-link {
   background: #171717;
   border-radius: 11px;
