@@ -82,6 +82,34 @@ jobs:
             -derivedDataPath /tmp/pickpic-build clean build \
             | grep -E "error:|warning:|BUILD"
 
+      # `xcodebuild test` needs a concrete simulator, unlike the generic
+      # destination the build step above uses -- and which iPad simulators
+      # ship on a runner's image varies by Xcode version, so pick whichever
+      # one is actually available rather than hardcoding a model name that
+      # could disappear from a future runner image and silently break CI.
+      - name: Find an available iPad simulator
+        id: simulator
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          UDID=$(xcrun simctl list devices available -j \
+            | jq -r '[.devices[][] | select(.name | test("^iPad"))][0].udid')
+
+          if [ -z "$UDID" ] || [ "$UDID" = "null" ]; then
+            echo "::error::No available iPad simulator found on this runner."
+            exit 1
+          fi
+
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Run PickPicTests
+        if: steps.filter.outputs.changed == 'true'
+        run: |
+          set -o pipefail
+          xcodebuild test -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
+            -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
+            -derivedDataPath /tmp/pickpic-build \
+            | grep -E "error:|Test Suite 'All|TEST SUCCEEDED|TEST FAILED"
+
   deploy:
     name: Deploy production
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

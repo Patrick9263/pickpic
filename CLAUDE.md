@@ -35,6 +35,8 @@ Two vitest projects run as part of `npm run check`, both under `worker/`. `vites
 
 A second vitest suite covers `src/` (`vitest.config.src.ts`, jsdom + `@testing-library/react`), kept as a separate config rather than folded into `vitest.config.ts` so DOM tests never run under the worker suite's plain-Node environment and vice versa. It has two layers: extracted pure helpers — `src/pages/galleryHelpers.ts` and `src/pages/dashboardHelpers.ts`, pulled out of `GalleryPage.tsx`/`DashboardPage.tsx` so formatting/grouping/dedup logic is unit-testable without rendering — plus `src/api.test.ts` for the `fetchJson`/`getErrorMessage` client, and one component-level test (`GalleryPage.heart.test.tsx`) exercising hearting a photo end to end, since a heart being an edit request rather than a social reaction is the load-bearing part of the data model. Neither `DashboardPage.tsx` nor `GalleryPage.tsx` has full component coverage — that's a much heavier lift the same way route-handler coverage is for the worker.
 
+`npm run check` CI-gates every PR and push to `main` (see CI/CD below), so a worker/`src` change that breaks an existing test can't merge — but nothing enforces that *new* testable logic gets a test. When a change adds a pure helper (the `galleryHelpers.ts`/`dashboardHelpers.ts` pattern above, an auth/request-shape check, a formatter), add its test in the same PR rather than leaving it to a later pass.
+
 The `src` run needs `NODE_OPTIONS=--no-experimental-webstorage`. Node 22+ exposes its own experimental `globalThis.localStorage`, and on vitest 4 (see the vitest-pin note above) that shadows jsdom's implementation instead of being replaced by it — accessing it then throws asking for a `--localstorage-file`. Disabling Node's own version lets vitest's jsdom environment wire up jsdom's `localStorage` as intended.
 
 Use `npm run dev` when testing worker changes, not `npx wrangler dev` — the latter serves the last `npm run build` output from `dist/`, so edits appear to have no effect and stack traces point at `dist/pickpic/index.js`. `npm run dev` also reads `.dev.vars` (git-ignored; see `.dev.vars.example`), which is how `AUTH_MODE` and the magic-link sender are set locally.
@@ -349,7 +351,7 @@ The app polls for newly-hearted photos and copies matching RAW files into a loca
 
 ### CI/CD
 
-[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. Pushes to `main` additionally deploy all three workers (`npm run deploy`, then `npm run deploy:admin`, then `npm run deploy:app`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
+[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. A PR that touches `ipad/**` also runs a `macos-latest` job building the app and running `PickPicTests` — gated to only fire on `ipad/` changes, since macOS runners are slower/pricier than the Ubuntu one and most PRs don't touch Swift. Pushes to `main` additionally deploy all three workers (`npm run deploy`, then `npm run deploy:admin`, then `npm run deploy:app`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
 
 ## Conventions
 
