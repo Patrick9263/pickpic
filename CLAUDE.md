@@ -83,15 +83,20 @@ Patrick usually drives this repo remotely, so sessions should stay cheap. Every 
 
 - **One PR per session.** A merged, green PR is the point to start a fresh session rather than continuing. Say so out loud when you get there; Patrick shouldn't have to ask.
 - **One surface per session** — `worker/` + `src/` (TypeScript) _or_ `ipad/` (Swift). Each pulls a different set of large files into context, so crossing between them mid-session roughly doubles what gets resent.
-- **Never read these whole.** Grep for the symbol, then read the range around it:
+- **Never read these whole.** Grep for the symbol, then read the range around it. The cut-off is
+  roughly 1,200 lines; these counts drift upward constantly, so re-measure rather than trusting the
+  table (`find worker src ipad/PickPic.swiftpm -type f \( -name "*.ts" -o -name "*.tsx" -o -name "*.swift" \) | xargs wc -l | sort -rn | head`).
 
   | File                                                      | Lines |
   | --------------------------------------------------------- | ----- |
-  | `ipad/PickPic.swiftpm/Persistence/UploadQueueStore.swift` | 3,887 |
-  | `worker/index.ts`                                         | 3,176 |
-  | `ipad/PickPic.swiftpm/Views/UploadQueueView.swift`        | 1,577 |
-  | `ipad/PickPic.swiftpm/Views/EventDetailView.swift`        | 1,368 |
-  | `src/pages/DashboardPage.tsx`                             | 1,241 |
+  | `ipad/PickPic.swiftpm/Persistence/UploadQueueStore.swift` | 4,358 |
+  | `worker/index.ts`                                         | 4,118 |
+  | `worker/auth.ts`                                          | 1,792 |
+  | `ipad/PickPic.swiftpm/Views/UploadQueueView.swift`        | 1,669 |
+  | `ipad/PickPic.swiftpm/Views/EventDetailView.swift`        | 1,603 |
+  | `ipad/PickPic.swiftpm/Networking/APIClient.swift`         | 1,559 |
+  | `src/pages/DashboardPage.tsx`                             | 1,349 |
+  | `ipad/PickPic.swiftpm/Views/EventListView.swift`          | 1,271 |
 
 - **Filter `xcodebuild`.** A full build log is enormous and stays in context for the rest of the session. Append `2>&1 | grep -E "error:|warning:|BUILD" | tail -30`.
 - **Device verification gets its own short session.** It produces no diff, so it shouldn't ride on the back of an implementation session already carrying a large context.
@@ -318,7 +323,7 @@ Because cookies are sent automatically where the Access header pair never was, e
 
 Sign in with Apple (`/api/auth/apple/start` → `/api/auth/apple/callback`, [worker/apple.ts](worker/apple.ts)) **only ever authenticates an existing account, or attaches an Apple identity to one.** It must never create an account: signup is gated behind `SIGNUP_INVITE_CODE` precisely because an account is the one unauthenticated way to start consuming R2, and a provider nearly everyone already has would walk straight through that gate. Linking happens only when Apple supplies an address it has marked verified and an active account already owns that address, which adds a second `account_users` row (`auth_provider = 'apple'`, `auth_subject` = Apple's stable `sub`) against the same account. `account_users` needed no migration for this — 0013 left `auth_provider` free of a CHECK, and 0015's header comment already named `('apple', <Apple sub>)` as the intended second shape. Apple's `client_secret` is an ES256 JWT this worker signs per request from the `.p8` key; `APPLE_CLIENT_ID` and `APPLE_REDIRECT_URI` are vars, while `APPLE_TEAM_ID`, `APPLE_KEY_ID` and `APPLE_PRIVATE_KEY` are secrets. Apple rejects `http://` and `localhost` return URLs, so exercising this locally needs an HTTPS tunnel registered on the Services ID.
 
-Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex matches, each delegating to a dedicated async handler defined in the same 3000-line file. Add endpoints in that style; don't introduce a router library.
+Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex matches, each delegating to a dedicated async handler defined in the same 4,000-line file. Add endpoints in that style; don't introduce a router library.
 
 ### One SPA, two faces
 
@@ -338,7 +343,7 @@ Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex match
 
 SwiftUI, iOS 26 deployment target, **Swift 5 language mode with minimal concurrency checking** (`SWIFT_VERSION = 5.0`). Structure: `Models/`, `Services/` (RAW→JPEG conversion, hashing, duplicate preflight, folder bookmarks, background uploads), `Persistence/` (Keychain API config, on-disk upload queue, event-folder bookmarks), `Networking/` (`APIClient`, `PickPicEnvironment`), and `ViewModels`/`Views` per screen.
 
-`UploadQueueStore` is `@MainActor` and is where the pipeline lives — ~3.8k lines, the single densest file in the project.
+`UploadQueueStore` is `@MainActor` and is where the pipeline lives — ~4.4k lines, the single densest file in the project.
 
 **Uploads are progressive**: never require the whole shoot to convert before anything uploads.
 
