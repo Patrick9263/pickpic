@@ -9,31 +9,7 @@ import {
   getDefaultPreviewUrl,
   sanitizeDownloadFilename,
 } from "./galleryHelpers";
-import type { GalleryPhotoRecord } from "../types";
-
-function makePhoto(
-  overrides: Partial<GalleryPhotoRecord> = {},
-): GalleryPhotoRecord {
-  return {
-    id: "photo-1",
-    eventId: "event-1",
-    originalFilename: "DSC01015.ARW",
-    contentType: "image/jpeg",
-    byteSize: 1_000,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    imageUrl: "https://example.com/photo-1.jpg",
-    heartCount: 0,
-    workflowStatus: "idle",
-    finalPhoto: null,
-    variants: { thumbnail: null, preview: null },
-    capturedAt: null,
-    latitude: null,
-    longitude: null,
-    comments: [],
-    viewerHearted: false,
-    ...overrides,
-  };
-}
+import { makeGalleryPhoto as makePhoto } from "../testing/factories";
 
 describe("sanitizeDownloadFilename", () => {
   it("strips filesystem-unsafe characters", () => {
