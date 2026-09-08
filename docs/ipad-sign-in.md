@@ -4,17 +4,42 @@ Since #188 the iPad app authenticates with a per-account session against
 `app.pickpic.photos` instead of the shared Cloudflare Access service token. This
 is the one-time setup and the recurring routine.
 
-## One-time: give the bootstrap account a user
+## One-time: check which account your sign-in reaches
 
 Every event and photo that existed before migration 0013 was backfilled to the
-**bootstrap account**, `00000000-0000-4000-8000-000000000001`. That account has
-no `account_users` row of its own — the operator reached it through Cloudflare
-Access, which resolves to it without one.
+**bootstrap account**, `00000000-0000-4000-8000-000000000001`. Cloudflare Access
+resolves to that account without an `account_users` row, so the operator reached
+it for a long time without one existing.
 
-A session, by contrast, is only ever as good as the `account_users` row behind
-it. **Signing up through `/sign-up` would create a new, empty account**, and the
-iPad would show an empty event list. So the bootstrap account needs a user
-before the first sign-in:
+A session is different: it is only ever as good as the `account_users` row behind
+it, and the iPad sees exactly the events of the account that row names. So the
+question to settle before the first sign-in is not whether a row exists — one
+usually does by now, created by signing in to the web app — but whether the row
+for your address points at the account that owns your photos:
+
+```bash
+npx wrangler d1 execute pickpic-db --remote --command "
+SELECT u.email, u.auth_provider, u.role, u.account_id, a.name,
+       (SELECT COUNT(*) FROM events e WHERE e.account_id = u.account_id) AS events
+FROM account_users u
+JOIN accounts a ON a.id = u.account_id
+ORDER BY events DESC, u.email;"
+```
+
+Two normal results are worth recognising. **Two rows for one address, one
+`email` and one `apple`, are the same person** — Sign in with Apple attaches a
+second row against the same account rather than replacing the first. And an
+address you do not recognise may be an Apple Hide-My-Email relay from a past web
+sign-in; it is still a full identity on whatever account it names, so treat an
+unexpected `owner` row as something to account for rather than ignore.
+
+The failure to look for is your address naming an account with `events = 0`
+while your photos sit under the bootstrap account. That happens if the row was
+created by **signing up through `/sign-up`, which makes a new, empty account** —
+the iPad would sign in successfully and show nothing. Repoint the row rather
+than signing up again.
+
+If no row exists for your address at all, create one:
 
 ```sql
 INSERT INTO account_users (
@@ -54,6 +79,11 @@ Three details are load-bearing:
 - This is **not** a migration. It names a personal email address and applies to
   one deployment, so it is run by hand against the production D1 database the
   same way migrations are, and deliberately not checked into `migrations/`.
+
+Removing a row is harder than adding one: `auth_sessions` and
+`auth_login_tokens` both reference `account_users` with `ON DELETE RESTRICT`, so
+that user's sessions and unconsumed login tokens have to go first, and doing so
+signs the identity out wherever it is currently in use.
 
 The web app at `app.pickpic.photos` will sign the same address in with the same
 link, which is a useful way to confirm the row is right before touching the
