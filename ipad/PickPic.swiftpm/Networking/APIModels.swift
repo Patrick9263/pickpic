@@ -413,6 +413,14 @@ enum APIClientError: LocalizedError {
         statusCode: Int,
         message: String
     )
+
+    /*
+     * Kept separate from .server so the upload pipeline can tell "sign in
+     * again" apart from every other 4xx. Retrying an unauthorized request
+     * with the same credential can only fail the same way, so the queue has
+     * to stop and ask rather than back off and retry.
+     */
+    case unauthorized(message: String)
     
     case invalidEventData
     case invalidEventMutationResponse
@@ -430,7 +438,7 @@ enum APIClientError: LocalizedError {
         switch self {
         case .notConfigured:
             return """
-            PickPic connection settings have not been configured.
+            This iPad is not signed in to PickPic.
             """
             
         case .invalidResponse:
@@ -440,12 +448,15 @@ enum APIClientError: LocalizedError {
             
         case .unexpectedResponse:
             return """
-            PickPic returned a non-JSON response. Check the \
-            Cloudflare Access credentials and policy.
+            PickPic returned a non-JSON response. Check that the iPad is \
+            signed in to the right PickPic server.
             """
             
         case let .server(statusCode, message):
             return "\(message) (HTTP \(statusCode))"
+
+        case let .unauthorized(message):
+            return message
             
         case .invalidEventData:
             return """
@@ -539,5 +550,58 @@ extension APIClientError {
         This account has reached its storage limit. Delete some photos, \
         or ask for the limit to be raised, before uploading more.
         """
+    }
+
+    /*
+     * One wording for every way a session can stop working -- expired,
+     * revoked from another device, or an account that was deactivated. The
+     * worker distinguishes them in its own message, but the operator's next
+     * action is the same in all three cases, and a queue full of subtly
+     * different failure text is harder to read rather than more informative.
+     */
+    static let signInRequiredMessage = """
+    This iPad's PickPic sign-in is no longer valid. Sign in again to \
+    continue uploading.
+    """
+
+    /*
+     * Takes a bare status code rather than an error so the background-upload
+     * relaunch path can use it too: a 401 arrives there as a completed
+     * transfer carrying a status code and no thrown error at all, which is
+     * the same shape that made the storage-cap message need this treatment.
+     */
+    static func isUnauthorized(statusCode: Int?) -> Bool {
+        statusCode == 401
+    }
+
+    /*
+     * Every non-2xx admin response is funnelled through here rather than
+     * straight into .server, so that no request site can be the one that
+     * forgets to recognise a dead session.
+     */
+    static func forStatus(
+        statusCode: Int,
+        message: String
+    ) -> APIClientError {
+        guard isUnauthorized(statusCode: statusCode) else {
+            return .server(
+                statusCode: statusCode,
+                message: message
+            )
+        }
+
+        return .unauthorized(message: signInRequiredMessage)
+    }
+
+    static func isUnauthorized(_ error: Error) -> Bool {
+        guard let apiError = error as? APIClientError else {
+            return false
+        }
+
+        if case .unauthorized = apiError {
+            return true
+        }
+
+        return false
     }
 }

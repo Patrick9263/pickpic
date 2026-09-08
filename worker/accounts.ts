@@ -75,11 +75,13 @@ export function resolveAccountDatabase(
  * fallback for this branch by design -- defaulting a session to the bootstrap
  * account would hand a stranger the operator's photos.
  *
- * An Access principal has no account_users row to join to. Cloudflare Access
- * admits exactly one operator plus the iPad service token, and their identifiers
- * are Cloudflare configuration that deliberately does not live in this
- * repository, so that branch still resolves to the bootstrap account. It stops
- * doing so when the iPad moves off service tokens (#188).
+ * An Access principal has no account_users row to join to. Since #188 moved the
+ * iPad onto its own session against app.pickpic.photos, Cloudflare Access admits
+ * exactly one identity -- the operator's SSO login on admin.pickpic.photos --
+ * whose identifier is Cloudflare configuration that deliberately does not live
+ * in this repository. Resolving that branch to the bootstrap account is
+ * therefore what it means rather than a stopgap: the operator console and the
+ * account holding every backfilled event are the same thing.
  *
  * This is a real SELECT rather than a hardcoded object so that having run the
  * migration is a hard precondition of serving admin traffic, and so database_id

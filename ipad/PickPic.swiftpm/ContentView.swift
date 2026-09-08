@@ -172,7 +172,7 @@ struct ContentView: View {
                         showingSettings = true
                     } label: {
                         Label(
-                            "Connection Settings",
+                            "PickPic Account",
                             systemImage:
                                 "gearshape"
                         )

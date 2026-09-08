@@ -18,10 +18,16 @@ interface PrincipalIdentity {
 }
 
 /*
- * A request that Cloudflare Access vouched for: the operator's SSO identity on
- * admin.pickpic.photos, or the iPad's service token.
+ * A request that Cloudflare Access vouched for: the operator's own SSO identity
+ * on admin.pickpic.photos.
  *
- * account_users holds no row for either -- their identifiers are Cloudflare
+ * Since #188 that is the only identity this variant describes. The iPad used to
+ * arrive here too, as a shared Access service token, and moved to a per-account
+ * session against app.pickpic.photos -- so an Access principal is now the
+ * operator personally, holding the console for the deployment that owns the
+ * bootstrap account.
+ *
+ * account_users holds no row for it -- the identifier is Cloudflare
  * configuration and deliberately absent from this repository -- so this variant
  * carries no account and resolves to the bootstrap account. See
  * resolveAccountForPrincipal.
@@ -31,7 +37,10 @@ export interface AccessPrincipal extends PrincipalIdentity {
 
   /*
    * 'cloudflare_access' for an SSO identity, or
-   * 'cloudflare_access_service_token' for a machine identity such as the iPad.
+   * 'cloudflare_access_service_token' for a machine identity. No machine
+   * currently authenticates this way; the variant stays because Access can
+   * still be configured to admit one and this worker must not treat an
+   * unexpected service token as the operator by accident.
    */
   provider: "cloudflare_access" | "cloudflare_access_service_token";
 

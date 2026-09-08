@@ -60,7 +60,7 @@ final class EventListViewModel:
             if hasCachedSnapshot {
                 errorMessage = cachedEventsMessage(
                     detail:
-                        "Open Connection Settings to refresh from PickPic."
+                        "Sign in to PickPic to refresh this list."
                 )
             } else {
                 events = []
@@ -69,8 +69,8 @@ final class EventListViewModel:
 
                 errorMessage =
                     """
-                    Open Connection Settings to connect \
-                    to PickPic.
+                    Sign in to PickPic to load \
+                    your events.
                     """
             }
 
