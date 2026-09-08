@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getMissingVariantSources } from "./dashboardHelpers";
-import type { PhotoRecord } from "../types";
+import { makePhoto } from "../testing/factories";
 
 const completeVariantSet = {
   thumbnail: {
@@ -23,30 +23,11 @@ const completeVariantSet = {
 
 const missingVariantSet = { thumbnail: null, preview: null };
 
-function makePhoto(overrides: Partial<PhotoRecord> = {}): PhotoRecord {
-  return {
-    id: "photo-1",
-    eventId: "event-1",
-    originalFilename: "DSC01015.ARW",
-    contentType: "image/jpeg",
-    byteSize: 1_000,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    imageUrl: "https://example.com/photo-1.jpg",
-    heartCount: 0,
-    workflowStatus: "idle",
-    finalPhoto: null,
-    variants: completeVariantSet,
-    capturedAt: null,
-    latitude: null,
-    longitude: null,
-    comments: [],
-    ...overrides,
-  };
-}
-
 describe("getMissingVariantSources", () => {
   it("returns nothing when the original has complete variants and there is no final", () => {
-    expect(getMissingVariantSources(makePhoto())).toEqual([]);
+    expect(
+      getMissingVariantSources(makePhoto({ variants: completeVariantSet })),
+    ).toEqual([]);
   });
 
   it("flags the original when its variants are incomplete", () => {
@@ -57,6 +38,7 @@ describe("getMissingVariantSources", () => {
 
   it("flags the final when it exists with incomplete variants", () => {
     const photo = makePhoto({
+      variants: completeVariantSet,
       finalPhoto: {
         originalFilename: "final.jpg",
         contentType: "image/jpeg",
@@ -88,6 +70,7 @@ describe("getMissingVariantSources", () => {
 
   it("does not flag a final with complete variants", () => {
     const photo = makePhoto({
+      variants: completeVariantSet,
       finalPhoto: {
         originalFilename: "final.jpg",
         contentType: "image/jpeg",

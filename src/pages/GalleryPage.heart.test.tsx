@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import GalleryPage from "./GalleryPage";
 import { fetchJson } from "../api";
-import type { GalleryPhotoRecord } from "../types";
+import { makeGalleryPhoto } from "../testing/factories";
+import { createFetchJsonRouter } from "../testing/fetchJsonRouter";
 
 /*
  * "A heart is an edit request, not a social reaction" (CLAUDE.md) is the
@@ -16,30 +17,6 @@ vi.mock("../api", () => ({
 
 const fetchJsonMock = vi.mocked(fetchJson);
 
-function makePhoto(
-  overrides: Partial<GalleryPhotoRecord> = {},
-): GalleryPhotoRecord {
-  return {
-    id: "photo-1",
-    eventId: "event-1",
-    originalFilename: "DSC01015.ARW",
-    contentType: "image/jpeg",
-    byteSize: 1_000,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    imageUrl: "https://example.com/photo-1.jpg",
-    heartCount: 0,
-    workflowStatus: "idle",
-    finalPhoto: null,
-    variants: { thumbnail: null, preview: null },
-    capturedAt: null,
-    latitude: null,
-    longitude: null,
-    comments: [],
-    viewerHearted: false,
-    ...overrides,
-  };
-}
-
 describe("GalleryPage hearting", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -51,24 +28,19 @@ describe("GalleryPage hearting", () => {
   });
 
   it("lets a viewer heart a photo as an edit request", async () => {
-    const photo = makePhoto();
+    const photo = makeGalleryPhoto();
 
-    fetchJsonMock.mockImplementation(async (input, init) => {
-      const url = String(input);
-
-      if (init?.method === "PUT" && url.includes("/heart")) {
-        return { hearted: true, heartCount: 1 };
-      }
-
-      return {
-        event: {
-          title: "Test Event",
-          status: "ready",
-          createdAt: "2026-01-01T00:00:00.000Z",
-        },
-        photos: [photo],
-      };
-    });
+    const router = createFetchJsonRouter();
+    router.get(/\/api\/galleries\/share-token$/, () => ({
+      event: {
+        title: "Test Event",
+        status: "ready",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      photos: [photo],
+    }));
+    router.put(/\/heart$/, () => ({ hearted: true, heartCount: 1 }));
+    fetchJsonMock.mockImplementation(router.fetchJson);
 
     vi.spyOn(window, "prompt").mockReturnValue("Ada Lovelace");
 
@@ -89,27 +61,29 @@ describe("GalleryPage hearting", () => {
     expect(updatedHeartButton.getAttribute("aria-pressed")).toBe("true");
     expect(updatedHeartButton.textContent).toContain("1");
 
-    const heartRequest = fetchJsonMock.mock.calls.find(([input]) =>
-      String(input).includes("/heart"),
+    const heartRequest = router.calls.find((call) =>
+      call.url.includes("/heart"),
     );
 
-    expect(heartRequest?.[0]).toContain(
+    expect(heartRequest?.url).toContain(
       "/api/galleries/share-token/photos/photo-1/heart",
     );
-    expect(heartRequest?.[1]).toMatchObject({ method: "PUT" });
+    expect(heartRequest?.method).toBe("PUT");
   });
 
   it("does not send a heart request when the gallery is closed", async () => {
-    const photo = makePhoto();
+    const photo = makeGalleryPhoto();
 
-    fetchJsonMock.mockResolvedValue({
+    const router = createFetchJsonRouter();
+    router.get(/\/api\/galleries\/share-token$/, () => ({
       event: {
         title: "Closed Event",
         status: "completed",
         createdAt: "2026-01-01T00:00:00.000Z",
       },
       photos: [photo],
-    });
+    }));
+    fetchJsonMock.mockImplementation(router.fetchJson);
 
     render(<GalleryPage shareToken="share-token" />);
 
