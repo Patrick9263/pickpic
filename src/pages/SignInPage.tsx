@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { fetchJson } from "../api";
 
 function readTokenFromLocation(): string | null {
@@ -36,51 +36,63 @@ function readAppleErrorFromLocation(): string | null {
 
 function SignInPage() {
   const [token, setToken] = useState(readTokenFromLocation);
-  const [isConsuming, setIsConsuming] = useState(token !== null);
+  const [isConsuming, setIsConsuming] = useState(false);
   const [email, setEmail] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(readAppleErrorFromLocation);
-  const consumedTokenRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (token === null || consumedTokenRef.current === token) {
+  /*
+   * Spending the token is behind a press on purpose, and must never move back
+   * into a mount effect. A magic-link token is single-use, and *rendering* this
+   * page is not something only the intended recipient does: Mail's
+   * press-and-hold preview loads the destination to draw its thumbnail, which
+   * spent the token before the recipient had even finished copying the link and
+   * left every later attempt failing as already-used. Link scanners and
+   * prefetchers hit the URL the same way. A page load has to be inert here;
+   * only a person pressing this button may spend the token.
+   *
+   * The isConsuming guard covers the other half of the same rule -- a double
+   * press would otherwise fire two requests, and the second would report the
+   * link as already-used while the first was still in flight.
+   */
+  async function handleConsume() {
+    if (token === null || isConsuming) {
       return;
     }
 
-    // A magic-link token is single-use, so this request must not fire twice
-    // for the same token -- including React StrictMode's dev-only double
-    // effect invocation, which would otherwise burn the token on a request
-    // the UI throws away and surface a false "link expired" error. Because
-    // that guard already makes this a one-shot action, the fetch's own
-    // completion is left unguarded (no per-invocation "cancelled" flag):
-    // StrictMode tears down the effect that started the request before the
-    // request resolves, and gating on that would silently drop a successful
-    // sign-in.
-    consumedTokenRef.current = token;
     setIsConsuming(true);
     setError(null);
 
-    fetchJson("/api/auth/magic-link/consume", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ token }),
-    })
-      .then(() => {
-        window.location.assign("/");
-      })
-      .catch((caughtError: unknown) => {
-        setError(
-          caughtError instanceof Error
-            ? caughtError.message
-            : "This sign-in link is not valid.",
-        );
-        setToken(null);
-        setIsConsuming(false);
+    try {
+      await fetchJson("/api/auth/magic-link/consume", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token }),
       });
-  }, [token]);
+
+      /*
+       * Deliberately leaves isConsuming set: the navigation is already in
+       * flight, and clearing it would flash the request form over a page that
+       * is on its way out.
+       */
+      window.location.assign("/");
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "This sign-in link is not valid.",
+      );
+
+      // Drop the token so the page falls back to the request form. A token the
+      // worker rejected is not going to start working, so the only way forward
+      // is a fresh link.
+      setToken(null);
+      setIsConsuming(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -124,8 +136,14 @@ function SignInPage() {
 
       <h1>Sign in</h1>
 
-      {isConsuming ? (
-        <p>Signing you in…</p>
+      {token !== null ? (
+        <div className="sign-in-confirm">
+          <p>You opened a sign-in link for PickPic.</p>
+
+          <button type="button" onClick={handleConsume} disabled={isConsuming}>
+            {isConsuming ? "Signing you in…" : "Sign in to PickPic"}
+          </button>
+        </div>
       ) : sent ? (
         <p>Check your email — we sent a sign-in link to {email}.</p>
       ) : (
@@ -154,7 +172,7 @@ function SignInPage() {
       {/* A plain link for the same reason as the one below, with the added
           point that Apple's flow is a full cross-origin navigation regardless:
           there is nothing here for fetch to do. */}
-      {!isConsuming && !sent && (
+      {token === null && !sent && (
         <p className="apple-sign-in-row">
           <a className="apple-sign-in-button" href="/api/auth/apple/start">
             Sign in with Apple
@@ -165,7 +183,7 @@ function SignInPage() {
       {/* A plain link, not a click handler: App.tsx reads
           window.location.pathname once at render and has no history listener,
           so a pushState navigation would change the URL and render nothing. */}
-      {!isConsuming && (
+      {token === null && (
         <p>
           New to PickPic?{" "}
           <a className="auth-inline-link" href="/sign-up">
