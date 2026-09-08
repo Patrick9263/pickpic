@@ -21,6 +21,13 @@ enum KeychainStoreError: LocalizedError {
 }
 
 enum KeychainStore {
+    /*
+     * Still named for Cloudflare Access even though the app now stores a
+     * PickPic session here rather than a service token. The string is part of
+     * the Keychain item's primary key: changing it would orphan the
+     * service-token items already on devices instead of letting the sign-in
+     * store clear them.
+     */
     private static let service =
         "photos.pickpic.app.cloudflare-access"
 
@@ -99,6 +106,29 @@ enum KeychainStore {
 
         guard addStatus == errSecSuccess else {
             throw KeychainStoreError.unexpectedStatus(addStatus)
+        }
+    }
+
+    /*
+     * Clearing a credential the device may or may not be holding is the normal
+     * case here -- signing out twice, or purging a legacy item that was never
+     * written -- so errSecItemNotFound is a success rather than something to
+     * report.
+     */
+    static func clear(account: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+
+        let status = SecItemDelete(query as CFDictionary)
+
+        guard
+            status == errSecSuccess
+                || status == errSecItemNotFound
+        else {
+            throw KeychainStoreError.unexpectedStatus(status)
         }
     }
 }

@@ -13,6 +13,7 @@
 		CD5F4D19301C80320048327C /* FinalUploadFileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CFB301C80320048327C /* FinalUploadFileService.swift */; };
 		CD5F4D1A301C80320048327C /* UploadQueueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF7301C80320048327C /* UploadQueueStore.swift */; };
 		CD5F4D1B301C80320048327C /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF0301C80320048327C /* APIClient.swift */; };
+		CDFF001C0000000000000000 /* AuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF001B0000000000000000 /* AuthClient.swift */; };
 		CD5F4D1C301C80320048327C /* PublishGalleryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D09301C80320048327C /* PublishGalleryViewModel.swift */; };
 		CD5F4D1D301C80320048327C /* EventListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D05301C80320048327C /* EventListViewModel.swift */; };
 		CD5F4D1E301C80320048327C /* UploadProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CED301C80320048327C /* UploadProgress.swift */; };
@@ -58,6 +59,7 @@
 		CDFF00030000000000000000 /* DuplicatePreflightService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00020000000000000000 /* DuplicatePreflightService.swift */; };
 		CDFF00050000000000000000 /* StorageHeadroomService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00040000000000000000 /* StorageHeadroomService.swift */; };
 		CDFF00120000000000000000 /* UploadStageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00110000000000000000 /* UploadStageTests.swift */; };
+		CDFF001E0000000000000000 /* SessionCredentialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF001D0000000000000000 /* SessionCredentialTests.swift */; };
 		CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00130000000000000000 /* UploadJobDecodingTests.swift */; };
 		CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00150000000000000000 /* HashingServiceTests.swift */; };
 		CDFF00180000000000000000 /* StorageHeadroomServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */; };
@@ -78,6 +80,7 @@
 		CD5F4CED301C80320048327C /* UploadProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadProgress.swift; sourceTree = "<group>"; };
 		CD5F4CEE301C80320048327C /* UploadStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStage.swift; sourceTree = "<group>"; };
 		CD5F4CF0301C80320048327C /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		CDFF001B0000000000000000 /* AuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthClient.swift; sourceTree = "<group>"; };
 		CD5F4CF1301C80320048327C /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		CD5F4CF2301C80320048327C /* PickPicEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickPicEnvironment.swift; sourceTree = "<group>"; };
 		CD5F4CF4301C80320048327C /* APIConfigurationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfigurationStore.swift; sourceTree = "<group>"; };
@@ -118,6 +121,7 @@
 		CDFF00040000000000000000 /* StorageHeadroomService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageHeadroomService.swift; sourceTree = "<group>"; };
 		CDFF00060000000000000000 /* PickPicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PickPicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CDFF00110000000000000000 /* UploadStageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStageTests.swift; sourceTree = "<group>"; };
+		CDFF001D0000000000000000 /* SessionCredentialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCredentialTests.swift; sourceTree = "<group>"; };
 		CDFF00130000000000000000 /* UploadJobDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadJobDecodingTests.swift; sourceTree = "<group>"; };
 		CDFF00150000000000000000 /* HashingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashingServiceTests.swift; sourceTree = "<group>"; };
 		CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageHeadroomServiceTests.swift; sourceTree = "<group>"; };
@@ -196,6 +200,7 @@
 			isa = PBXGroup;
 			children = (
 				CDFF00110000000000000000 /* UploadStageTests.swift */,
+				CDFF001D0000000000000000 /* SessionCredentialTests.swift */,
 				CDFF00130000000000000000 /* UploadJobDecodingTests.swift */,
 				CDFF00150000000000000000 /* HashingServiceTests.swift */,
 				CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */,
@@ -251,6 +256,7 @@
 			isa = PBXGroup;
 			children = (
 				CD5F4CF0301C80320048327C /* APIClient.swift */,
+				CDFF001B0000000000000000 /* AuthClient.swift */,
 				CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */,
 				CD5F4CF1301C80320048327C /* APIModels.swift */,
 				CD5F4CF2301C80320048327C /* PickPicEnvironment.swift */,
@@ -453,6 +459,7 @@
 				CD5F4D19301C80320048327C /* FinalUploadFileService.swift in Sources */,
 				CD5F4D1A301C80320048327C /* UploadQueueStore.swift in Sources */,
 				CD5F4D1B301C80320048327C /* APIClient.swift in Sources */,
+				CDFF001C0000000000000000 /* AuthClient.swift in Sources */,
 				CD5F4D1C301C80320048327C /* PublishGalleryViewModel.swift in Sources */,
 				CD5F4D1D301C80320048327C /* EventListViewModel.swift in Sources */,
 				CD5F4D1E301C80320048327C /* UploadProgress.swift in Sources */,
@@ -502,6 +509,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CDFF00120000000000000000 /* UploadStageTests.swift in Sources */,
+				CDFF001E0000000000000000 /* SessionCredentialTests.swift in Sources */,
 				CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */,
 				CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */,
 				CDFF00180000000000000000 /* StorageHeadroomServiceTests.swift in Sources */,

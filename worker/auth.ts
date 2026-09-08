@@ -282,11 +282,14 @@ export async function requireAdminPrincipal(
      * CF_Authorization is a cookie at admin.pickpic.photos, so a browser
      * attaches it to a cross-site request the same way it would a session
      * cookie -- this is the other half of the CSRF defence below, gated to
-     * the one Access identity a browser can hold. The iPad's service token
-     * is exempt: it authenticates via header pair, not a cookie, and sends
-     * no Origin at all (URLSession doesn't set one), so it would fail this
-     * check on every request. isLocalDevelopment is exempt for the same
-     * reason wrangler dev has no Access in front of it to begin with.
+     * the one Access identity a browser can hold. A service-token principal
+     * is exempt: it authenticates via header pair, not a cookie, so it draws
+     * no authority a cross-site request could borrow. Since #188 no client
+     * authenticates that way -- the iPad now sends its own session cookie and
+     * a matching Origin through the branch below -- but the exemption stays
+     * correct for any machine identity Access is later configured to admit.
+     * isLocalDevelopment is exempt for the same reason wrangler dev has no
+     * Access in front of it to begin with.
      */
     if (
       result.ok &&

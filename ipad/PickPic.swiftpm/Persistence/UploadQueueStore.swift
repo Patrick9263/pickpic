@@ -1163,6 +1163,22 @@ final class UploadQueueStore: ObservableObject {
         {
             failureMessage =
                 "The background upload lost its internet connection. PickPic will retry when connectivity returns."
+        } else if APIClientError.isUnauthorized(
+            statusCode: completion.statusCode
+        ) {
+            /*
+             * A background transfer can outlive the session that authorised
+             * it: nsurlsessiond will keep a task alive for the seven days
+             * BackgroundUploadSession configures, and a session only lasts
+             * thirty from the moment it was created. Arriving here means one
+             * of those two clocks ran out mid-transfer, so the credential is
+             * cleared for the same reason it is on the foreground path -- no
+             * retry with it can succeed. The job stays at .readyToUpload
+             * below and picks up after the next sign-in.
+             */
+            configuration.handleUnauthorized()
+
+            failureMessage = APIClientError.signInRequiredMessage
         } else if let statusCode = completion.statusCode {
             let serverMessage = completion.errorMessage
 
@@ -2608,6 +2624,14 @@ final class UploadQueueStore: ObservableObject {
                     job.updatedAt = Date()
                 }
             } catch {
+                /*
+                 * A 401 has already cleared the stored session by the time it
+                 * reaches here -- APIClient reports it as it throws -- so
+                 * isConfigured is false and every resume path in App.swift
+                 * stops on its own guard. All this branch has to do is what
+                 * it does for any other failure: leave the job at
+                 * .readyToUpload so it resumes after the next sign-in.
+                 */
                 let failure = makeUploadFailure(
                     error,
                     sourceFilename:
@@ -3207,6 +3231,20 @@ final class UploadQueueStore: ObservableObject {
         isNetworkRelated: Bool,
         retryWhenConnectivityReturns: Bool
     ) {
+        /*
+         * Ahead of every other branch because it is the one failure that is
+         * not about this photo at all. Retrying it, waiting for connectivity,
+         * or blaming the file would all be wrong: the operator has to sign in
+         * again before anything in the queue can move.
+         */
+        if APIClientError.isUnauthorized(error) {
+            return (
+                APIClientError.signInRequiredMessage,
+                false,
+                false
+            )
+        }
+
         if
             let apiError = error as? APIClientError,
             case let .server(statusCode, message) =

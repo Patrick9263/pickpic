@@ -910,7 +910,7 @@ struct StorageUsagePanel: View {
     private func load() async {
         guard configuration.isConfigured else {
             errorMessage = """
-            Open Connection Settings to measure stored photos.
+            Sign in to PickPic to measure stored photos.
             """
 
             return

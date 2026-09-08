@@ -13,8 +13,10 @@ struct StorageHeadroomServiceTests {
     private static func makeUnreachableClient() -> APIClient {
         APIClient(
             baseURL: URL(string: "https://pickpic-tests.invalid")!,
-            clientID: "test",
-            clientSecret: "test"
+            credential: SessionCredential(
+                token: "test",
+                expiresAt: Date.distantFuture
+            )
         )
     }
 

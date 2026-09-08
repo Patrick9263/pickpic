@@ -52,9 +52,9 @@ private final class UploadConnectivityTaskDelegate:
 
 struct APIClient {
     let baseURL: URL
-    let clientID: String
-    let clientSecret: String
-    
+    let credential: SessionCredential
+
+    private let onUnauthorized: (@Sendable () -> Void)?
     private let session: URLSession
     private let uploadSession: URLSession
 
@@ -76,17 +76,85 @@ struct APIClient {
     
     init(
         baseURL: URL,
-        clientID: String,
-        clientSecret: String,
+        credential: SessionCredential,
         session: URLSession = .shared,
-        uploadSession: URLSession? = nil
+        uploadSession: URLSession? = nil,
+        onUnauthorized: (@Sendable () -> Void)? = nil
     ) {
         self.baseURL = baseURL
-        self.clientID = clientID
-        self.clientSecret = clientSecret
+        self.credential = credential
         self.session = session
         self.uploadSession =
             uploadSession ?? Self.defaultUploadSession
+        self.onUnauthorized = onUnauthorized
+    }
+
+    /*
+     * Turns a non-2xx status into an error, and tells the app once when that
+     * status was a 401.
+     *
+     * Every one of this type's ten request sites throws through here rather
+     * than building an APIClientError itself, because a session that has
+     * expired or been revoked has to reach APIConfigurationStore no matter
+     * which call noticed first -- the event list, a photo upload, the
+     * requested-photo sync. Leaving that to each caller's catch block would
+     * be ten chances to forget, and forgetting means the app keeps firing
+     * requests that cannot succeed while showing an error about whichever
+     * photo happened to be next.
+     */
+    private func sessionAwareError(
+        statusCode: Int,
+        message: String
+    ) -> APIClientError {
+        let error = APIClientError.forStatus(
+            statusCode: statusCode,
+            message: message
+        )
+
+        if case .unauthorized = error {
+            onUnauthorized?()
+        }
+
+        return error
+    }
+
+    /*
+     * The single place this app proves who it is, replacing the
+     * CF-Access-Client-Id / CF-Access-Client-Secret pair that used to be
+     * repeated at all ten request sites. One helper rather than ten
+     * copies because a request that silently forgets a credential fails as
+     * an ordinary 401, which reads like an expired session rather than a
+     * missing header.
+     *
+     * Three things have to be set together, and each is load-bearing:
+     *
+     *   * Cookie, because requireAdminPrincipal reads the session from
+     *     __Host-pickpic_session and nothing else.
+     *
+     *   * Origin, because in session mode the worker refuses every
+     *     state-changing admin request whose Origin does not match the one
+     *     it was served from. A browser sets this by itself; URLSession
+     *     never does. It is set on GETs too -- harmless, and cheaper than
+     *     making each call site decide.
+     *
+     *   * httpShouldHandleCookies = false, so URLSession's shared cookie
+     *     jar can neither replace the header above nor quietly supply a
+     *     stale session of its own after the app has signed out. This
+     *     matters most for background uploads, which are dispatched by a
+     *     separate process across app launches.
+     */
+    private func applyCredentials(to request: inout URLRequest) {
+        request.setValue(
+            "\(SessionCredential.cookieName)=\(credential.token)",
+            forHTTPHeaderField: "Cookie"
+        )
+
+        request.setValue(
+            baseURL.originHeaderValue,
+            forHTTPHeaderField: "Origin"
+        )
+
+        request.httpShouldHandleCookies = false
     }
     
     func fetchEvents() async throws -> [PickPicEvent] {
@@ -101,15 +169,9 @@ struct APIClient {
             "application/json",
             forHTTPHeaderField: "Accept"
         )
-        request.setValue(
-            clientID,
-            forHTTPHeaderField: "CF-Access-Client-Id"
-        )
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField: "CF-Access-Client-Secret"
-        )
-        
+
+        applyCredentials(to: &request)
+
         let (data, response) = try await session.data(for: request)
         
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -129,7 +191,7 @@ struct APIClient {
                 forStatusCode: httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode: httpResponse.statusCode,
                 message: serverMessage ?? fallbackMessage
             )
@@ -274,18 +336,8 @@ struct APIClient {
             forHTTPHeaderField: "Accept"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         let (data, response) =
         try await session.data(
             for: request
@@ -379,18 +431,8 @@ struct APIClient {
             forHTTPHeaderField: "Content-Type"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         request.setValue(
             encodedFilename,
             forHTTPHeaderField: "X-File-Name"
@@ -474,7 +516,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
@@ -591,18 +633,8 @@ struct APIClient {
             forHTTPHeaderField: "Content-Type"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         request.setValue(
             encodedFilename,
             forHTTPHeaderField: "X-File-Name"
@@ -650,7 +682,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
@@ -752,18 +784,8 @@ struct APIClient {
             "Content-Type"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         let (data, response) =
         try await uploadFile(
             request: request,
@@ -797,7 +819,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
@@ -966,7 +988,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
 
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
@@ -1025,18 +1047,8 @@ struct APIClient {
             forHTTPHeaderField: "Accept"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         let (data, response) =
         try await session.data(for: request)
         
@@ -1064,7 +1076,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
@@ -1139,18 +1151,8 @@ struct APIClient {
             forHTTPHeaderField: "Content-Type"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         request.httpBody =
         try JSONEncoder().encode(
             SetEventStatusRequest(
@@ -1187,7 +1189,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
@@ -1256,18 +1258,8 @@ struct APIClient {
             forHTTPHeaderField: "Content-Type"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         request.httpBody = try JSONEncoder().encode(
             SetPhotoWorkflowRequest(
                 status: status.rawValue
@@ -1301,7 +1293,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
@@ -1370,17 +1362,7 @@ struct APIClient {
             forHTTPHeaderField: "Accept"
         )
 
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
+        applyCredentials(to: &request)
 
         let (data, response) =
         try await session.data(for: request)
@@ -1397,7 +1379,7 @@ struct APIClient {
                 httpResponse.statusCode
             )
         else {
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode: httpResponse.statusCode,
                 message: HTTPURLResponse
                     .localizedString(
@@ -1426,18 +1408,8 @@ struct APIClient {
             forHTTPHeaderField: "Content-Type"
         )
         
-        request.setValue(
-            clientID,
-            forHTTPHeaderField:
-                "CF-Access-Client-Id"
-        )
-        
-        request.setValue(
-            clientSecret,
-            forHTTPHeaderField:
-                "CF-Access-Client-Secret"
-        )
-        
+        applyCredentials(to: &request)
+
         return request
     }
     
@@ -1499,7 +1471,7 @@ struct APIClient {
                     httpResponse.statusCode
             )
             
-            throw APIClientError.server(
+            throw sessionAwareError(
                 statusCode:
                     httpResponse.statusCode,
                 message:
