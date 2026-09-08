@@ -240,7 +240,9 @@ upload-started notification.
 
 ## What has to be built first
 
-None of this exists today.
+Tracked as individual GitHub issues in #187, which also lists what's already
+shipped. Treat that issue's checklist as the current status; the numbered list
+below is kept for the reasoning behind each step, not as a duplicate tracker.
 
 1. **Metering, cheap enough for the upload path.** `collectEventStorageKeys`
    gathers keys for deletion only; nothing measures account usage. All three write
