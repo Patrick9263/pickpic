@@ -230,6 +230,18 @@ struct ConnectionSettingsView: View {
     }
 
     private func requestLink() async {
+        /*
+         * The whole form carries .disabled(isWorking), but that only takes
+         * effect on the next render -- a second tap landing before SwiftUI
+         * has re-rendered still reaches this action, and two links would go
+         * out with the second invalidating the first. This view is
+         * @MainActor and isWorking is set before the first suspension point
+         * below, so a re-entrant call always observes it.
+         */
+        guard !isWorking else {
+            return
+        }
+
         let trimmed = email.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
@@ -268,6 +280,17 @@ struct ConnectionSettingsView: View {
     }
 
     private func signIn() async {
+        /*
+         * Same re-entrancy window as requestLink() above, and worse here: a
+         * magic link is single-use, so a second redemption of the same token
+         * fails and surfaces as an error on a sign-in that actually worked.
+         * The PasteButton path makes this easy to hit -- pasting already
+         * signs in, so tapping Sign In afterwards is a second attempt.
+         */
+        guard !isWorking else {
+            return
+        }
+
         isWorking = true
         errorMessage = nil
 
