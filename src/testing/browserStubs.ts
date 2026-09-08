@@ -55,3 +55,34 @@ export function stubMatchMedia(matches = false): void {
     })),
   });
 }
+
+/*
+ * jsdom implements neither navigation (window.location.assign logs a "Not
+ * implemented" error) nor a way to set the query string without one, and its
+ * location cannot be spied on a property at a time. Swapping the whole object
+ * is the only route in, which is why this hands back a restore function
+ * instead of leaving it to vi.restoreAllMocks -- a defineProperty is not a
+ * mock and restoreAllMocks will not undo it.
+ */
+export function stubLocation(search: string): {
+  assign: Mock<(url: string) => void>;
+  restore: () => void;
+} {
+  const original = Object.getOwnPropertyDescriptor(window, "location");
+  const assign = vi.fn<(url: string) => void>();
+
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    writable: true,
+    value: { assign, search },
+  });
+
+  return {
+    assign,
+    restore() {
+      if (original) {
+        Object.defineProperty(window, "location", original);
+      }
+    },
+  };
+}
