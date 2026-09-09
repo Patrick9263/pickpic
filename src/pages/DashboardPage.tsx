@@ -1283,7 +1283,13 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
             </div>
           </div>
 
-          <div aria-live="polite">
+          <p className="visually-hidden" aria-live="polite">
+            {isLoading && displayedEvents.length === 0
+              ? "Loading events…"
+              : `${displayedEvents.length} event${displayedEvents.length === 1 ? "" : "s"}`}
+          </p>
+
+          <div>
             {isLoading && displayedEvents.length === 0 ? (
               <div className="empty-state">
                 <h3>Loading events…</h3>
