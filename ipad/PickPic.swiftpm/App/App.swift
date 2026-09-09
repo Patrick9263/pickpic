@@ -121,6 +121,20 @@ final class PickPicAppDelegate:
         completionHandler:
             @escaping () -> Void
     ) {
+        /*
+         * RAW deliveries run on their own background session (see
+         * RawUploadSession), so the relaunch events arrive under a second
+         * identifier. It claims the handler if the identifier is its own.
+         */
+        guard
+            !RawUploadSession.shared.handleEvents(
+                for: identifier,
+                completionHandler: completionHandler
+            )
+        else {
+            return
+        }
+
         BackgroundUploadSession.shared.handleEvents(
             for: identifier,
             completionHandler: completionHandler
@@ -377,6 +391,8 @@ struct PickPicApp: App {
 
         var movedPhotoCount = 0
         var syncedEventCount = 0
+        var uploadedRawCount = 0
+        var uploadedRawBytes: Int64 = 0
 
         for reference in references {
             guard !Task.isCancelled else {
@@ -392,17 +408,54 @@ struct PickPicApp: App {
             }
 
             do {
-                if let result = try await RequestedPhotoSyncService
+                let result = try await RequestedPhotoSyncService
                     .sync(
                         eventID: reference.eventID,
                         reference: reference,
                         using: client
-                    ),
+                    )
+
+                if
+                    let result,
                     result.fileResult.movedPhotoCount > 0
                 {
                     movedPhotoCount +=
                     result.fileResult.movedPhotoCount
                     syncedEventCount += 1
+                }
+
+                /*
+                 * Handed the photos the pass above already fetched, so
+                 * delivering RAWs costs no second round trip per event.
+                 * Nil means that pass was skipped (another sync of the
+                 * same event was already running), in which case this one
+                 * fetches for itself rather than sitting the sweep out.
+                 */
+                if let rawResult = try await RawRequestSyncService
+                    .sync(
+                        eventID: reference.eventID,
+                        reference: reference,
+                        using: client,
+                        photos: result?.photos
+                    )
+                {
+                    uploadedRawCount +=
+                    rawResult.uploadedPhotoCount
+
+                    uploadedRawBytes +=
+                    rawResult.uploadedByteCount
+
+                    for filename in rawResult.failures {
+                        print(
+                            "RAW delivery failed for \(filename) in event \(reference.eventID)."
+                        )
+                    }
+
+                    for filename in rawResult.missingFilenames {
+                        print(
+                            "RAW delivery could not find \(filename) in event \(reference.eventID)."
+                        )
+                    }
                 }
             } catch APIClientError.server(404, _) {
                 /*
@@ -423,6 +476,31 @@ struct PickPicApp: App {
                     error
                 )
             }
+        }
+
+        /*
+         * Reported separately from the To Edit sync above, because they are
+         * different events to the photographer: one moved files around on
+         * the iPad, the other sent originals off it.
+         */
+        if uploadedRawCount > 0 {
+            let rawFileDescription =
+            uploadedRawCount == 1
+            ? "RAW file"
+            : "RAW files"
+
+            let formattedBytes =
+            ByteCountFormatter.string(
+                fromByteCount: uploadedRawBytes,
+                countStyle: .file
+            )
+
+            feedback.show(
+                title: "Requested RAWs delivered",
+                detail:
+                    "Sent \(uploadedRawCount) \(rawFileDescription) (\(formattedBytes)) to viewers who asked for them.",
+                systemImage: "arrow.up.doc.fill"
+            )
         }
 
         guard movedPhotoCount > 0 else {

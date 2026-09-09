@@ -103,6 +103,20 @@ enum AppStorageService {
         )
     }
     
+    /*
+     * Holds RAW files staged for delivery to a gallery viewer who asked
+     * for one. The copy is not optional: a background upload task reads
+     * the file after the app has suspended, by which time the event
+     * folder's security-scoped access is gone and the read silently
+     * returns nothing — the same reason editHandoffStagingURL exists.
+     */
+    static var rawUploadStagingURL: URL {
+        rootURL.appendingPathComponent(
+            "RawUploadStaging",
+            isDirectory: true
+        )
+    }
+
     static var imageVariantStagingURL: URL {
         rootURL.appendingPathComponent(
             "ImageVariantStaging",
@@ -175,6 +189,21 @@ enum AppStorageService {
         )
     }
     
+    /*
+     * A RAW is 10-20x a proof JPEG and is staged whole, so unlike the
+     * final-upload check there is no variant or multipart allowance to
+     * add — nothing further is generated from it.
+     */
+    static func ensureRawUploadCapacity(
+        rawByteSize: Int64
+    ) throws {
+        try ensureCapacity(
+            requiredBytes:
+                max(rawByteSize, 0)
+                + finalProcessingReserve
+        )
+    }
+
     static func cleanup(
         jobs: [UploadJob]
     ) throws -> StorageCleanupResult {
@@ -294,6 +323,28 @@ enum AppStorageService {
 
         reclaimedBytes +=
         editHandoffResult.reclaimedBytes
+
+        /*
+         * Wiped unconditionally even though a RAW transfer can outlive the
+         * process, because losing one costs a retry rather than the
+         * delivery. The server is the durable record here: an interrupted
+         * upload leaves raw_requests.fulfilled_at null, so the next
+         * activation sweep sees the request still pending, stages the file
+         * again and resends it. Keeping a possibly-orphaned RAW on disk to
+         * save that re-copy is the worse trade — these are the largest
+         * files the app ever holds.
+         */
+        let rawStagingResult =
+        try cleanupChildren(
+            inside: rawUploadStagingURL,
+            keepingNames: []
+        )
+
+        removedItemCount +=
+        rawStagingResult.removedItemCount
+
+        reclaimedBytes +=
+        rawStagingResult.reclaimedBytes
 
         return StorageCleanupResult(
             removedItemCount:

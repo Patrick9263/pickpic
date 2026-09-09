@@ -11,6 +11,7 @@
 		CD5F4D17301C80320048327C /* UploadQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D14301C80320048327C /* UploadQueueView.swift */; };
 		CD5F4D18301C80320048327C /* UploadPreparationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D03301C80320048327C /* UploadPreparationService.swift */; };
 		CD5F4D19301C80320048327C /* FinalUploadFileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CFB301C80320048327C /* FinalUploadFileService.swift */; };
+		CDAA00030000000000000000 /* RawUploadFileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAA00040000000000000000 /* RawUploadFileService.swift */; };
 		CD5F4D1A301C80320048327C /* UploadQueueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF7301C80320048327C /* UploadQueueStore.swift */; };
 		CD5F4D1B301C80320048327C /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF0301C80320048327C /* APIClient.swift */; };
 		CDFF001C0000000000000000 /* AuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF001B0000000000000000 /* AuthClient.swift */; };
@@ -45,6 +46,7 @@
 		CD5F4D38301C80320048327C /* HashingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CFD301C80320048327C /* HashingService.swift */; };
 		CD5F4D39301C80320048327C /* ConversionPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CE6301C80320048327C /* ConversionPreview.swift */; };
 		CD5F4D3A301C80320048327C /* ToEditSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D02301C80320048327C /* ToEditSyncService.swift */; };
+		CDAA00050000000000000000 /* RawRequestSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAA00060000000000000000 /* RawRequestSyncService.swift */; };
 		CD5F4D3B301C80320048327C /* AppStorageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF9301C80320048327C /* AppStorageService.swift */; };
 		CD5F4D3C301C80320048327C /* EditedFolderService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CFA301C80320048327C /* EditedFolderService.swift */; };
 		CD5F4D3D301C80320048327C /* ConnectionSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D0B301C80320048327C /* ConnectionSettingsView.swift */; };
@@ -53,12 +55,14 @@
 		CD5F4D40301C80320048327C /* EventListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D0E301C80320048327C /* EventListView.swift */; };
 		CD5F4D41301C80320048327C /* LikedPhotosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D11301C80320048327C /* LikedPhotosView.swift */; };
 		CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */; };
+		CDAA00010000000000000000 /* RawUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAA00020000000000000000 /* RawUploadSession.swift */; };
 		CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */; };
 		CD5F4D47301C80320048327C /* ContinuedProcessingTaskCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */; };
 		CDFF00010000000000000000 /* PreflightState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00000000000000000000 /* PreflightState.swift */; };
 		CDFF00030000000000000000 /* DuplicatePreflightService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00020000000000000000 /* DuplicatePreflightService.swift */; };
 		CDFF00050000000000000000 /* StorageHeadroomService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00040000000000000000 /* StorageHeadroomService.swift */; };
 		CDFF00120000000000000000 /* UploadStageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00110000000000000000 /* UploadStageTests.swift */; };
+		CDAA00070000000000000000 /* RawRequestSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAA00080000000000000000 /* RawRequestSyncTests.swift */; };
 		CDFF001E0000000000000000 /* SessionCredentialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF001D0000000000000000 /* SessionCredentialTests.swift */; };
 		CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00130000000000000000 /* UploadJobDecodingTests.swift */; };
 		CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00150000000000000000 /* HashingServiceTests.swift */; };
@@ -90,6 +94,7 @@
 		CD5F4CF9301C80320048327C /* AppStorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStorageService.swift; sourceTree = "<group>"; };
 		CD5F4CFA301C80320048327C /* EditedFolderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedFolderService.swift; sourceTree = "<group>"; };
 		CD5F4CFB301C80320048327C /* FinalUploadFileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinalUploadFileService.swift; sourceTree = "<group>"; };
+		CDAA00040000000000000000 /* RawUploadFileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawUploadFileService.swift; sourceTree = "<group>"; };
 		CD5F4CFC301C80320048327C /* FolderBookmarkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderBookmarkService.swift; sourceTree = "<group>"; };
 		CD5F4CFD301C80320048327C /* HashingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashingService.swift; sourceTree = "<group>"; };
 		CD5F4CFE301C80320048327C /* ImageConversionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageConversionService.swift; sourceTree = "<group>"; };
@@ -97,6 +102,7 @@
 		CD5F4D00301C80320048327C /* MultipartFormFileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipartFormFileService.swift; sourceTree = "<group>"; };
 		CD5F4D01301C80320048327C /* PhotoMetadataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataService.swift; sourceTree = "<group>"; };
 		CD5F4D02301C80320048327C /* ToEditSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToEditSyncService.swift; sourceTree = "<group>"; };
+		CDAA00060000000000000000 /* RawRequestSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawRequestSyncService.swift; sourceTree = "<group>"; };
 		CD5F4D03301C80320048327C /* UploadPreparationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadPreparationService.swift; sourceTree = "<group>"; };
 		CD5F4D05301C80320048327C /* EventListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventListViewModel.swift; sourceTree = "<group>"; };
 		CD5F4D06301C80320048327C /* FinalUploadsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinalUploadsViewModel.swift; sourceTree = "<group>"; };
@@ -114,6 +120,7 @@
 		CD5F4D13301C80320048327C /* PublishGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishGalleryView.swift; sourceTree = "<group>"; };
 		CD5F4D14301C80320048327C /* UploadQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueView.swift; sourceTree = "<group>"; };
 		CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadSession.swift; sourceTree = "<group>"; };
+		CDAA00020000000000000000 /* RawUploadSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawUploadSession.swift; sourceTree = "<group>"; };
 		CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedProcessingState.swift; sourceTree = "<group>"; };
 		CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinuedProcessingTaskCoordinator.swift; sourceTree = "<group>"; };
 		CDFF00000000000000000000 /* PreflightState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreflightState.swift; sourceTree = "<group>"; };
@@ -121,6 +128,7 @@
 		CDFF00040000000000000000 /* StorageHeadroomService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageHeadroomService.swift; sourceTree = "<group>"; };
 		CDFF00060000000000000000 /* PickPicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PickPicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CDFF00110000000000000000 /* UploadStageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStageTests.swift; sourceTree = "<group>"; };
+		CDAA00080000000000000000 /* RawRequestSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawRequestSyncTests.swift; sourceTree = "<group>"; };
 		CDFF001D0000000000000000 /* SessionCredentialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCredentialTests.swift; sourceTree = "<group>"; };
 		CDFF00130000000000000000 /* UploadJobDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadJobDecodingTests.swift; sourceTree = "<group>"; };
 		CDFF00150000000000000000 /* HashingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashingServiceTests.swift; sourceTree = "<group>"; };
@@ -200,6 +208,7 @@
 			isa = PBXGroup;
 			children = (
 				CDFF00110000000000000000 /* UploadStageTests.swift */,
+				CDAA00080000000000000000 /* RawRequestSyncTests.swift */,
 				CDFF001D0000000000000000 /* SessionCredentialTests.swift */,
 				CDFF00130000000000000000 /* UploadJobDecodingTests.swift */,
 				CDFF00150000000000000000 /* HashingServiceTests.swift */,
@@ -258,6 +267,7 @@
 				CD5F4CF0301C80320048327C /* APIClient.swift */,
 				CDFF001B0000000000000000 /* AuthClient.swift */,
 				CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */,
+				CDAA00020000000000000000 /* RawUploadSession.swift */,
 				CD5F4CF1301C80320048327C /* APIModels.swift */,
 				CD5F4CF2301C80320048327C /* PickPicEnvironment.swift */,
 			);
@@ -286,6 +296,7 @@
 				CD5F4D45301C80320048327C /* ContinuedProcessingTaskCoordinator.swift */,
 				CD5F4CFA301C80320048327C /* EditedFolderService.swift */,
 				CD5F4CFB301C80320048327C /* FinalUploadFileService.swift */,
+				CDAA00040000000000000000 /* RawUploadFileService.swift */,
 				CD5F4CFC301C80320048327C /* FolderBookmarkService.swift */,
 				CD5F4CFD301C80320048327C /* HashingService.swift */,
 				CD5F4CFE301C80320048327C /* ImageConversionService.swift */,
@@ -293,6 +304,7 @@
 				CD5F4D00301C80320048327C /* MultipartFormFileService.swift */,
 				CD5F4D01301C80320048327C /* PhotoMetadataService.swift */,
 				CD5F4D02301C80320048327C /* ToEditSyncService.swift */,
+				CDAA00060000000000000000 /* RawRequestSyncService.swift */,
 				CD5F4D03301C80320048327C /* UploadPreparationService.swift */,
 			);
 			name = Services;
@@ -457,6 +469,7 @@
 				CD5F4D17301C80320048327C /* UploadQueueView.swift in Sources */,
 				CD5F4D18301C80320048327C /* UploadPreparationService.swift in Sources */,
 				CD5F4D19301C80320048327C /* FinalUploadFileService.swift in Sources */,
+				CDAA00030000000000000000 /* RawUploadFileService.swift in Sources */,
 				CD5F4D1A301C80320048327C /* UploadQueueStore.swift in Sources */,
 				CD5F4D1B301C80320048327C /* APIClient.swift in Sources */,
 				CDFF001C0000000000000000 /* AuthClient.swift in Sources */,
@@ -491,6 +504,7 @@
 				CD5F4D38301C80320048327C /* HashingService.swift in Sources */,
 				CD5F4D39301C80320048327C /* ConversionPreview.swift in Sources */,
 				CD5F4D3A301C80320048327C /* ToEditSyncService.swift in Sources */,
+				CDAA00050000000000000000 /* RawRequestSyncService.swift in Sources */,
 				CD5F4D3B301C80320048327C /* AppStorageService.swift in Sources */,
 				CD5F4D3C301C80320048327C /* EditedFolderService.swift in Sources */,
 				CD5F4D3D301C80320048327C /* ConnectionSettingsView.swift in Sources */,
@@ -499,6 +513,7 @@
 				CD5F4D40301C80320048327C /* EventListView.swift in Sources */,
 				CD5F4D41301C80320048327C /* LikedPhotosView.swift in Sources */,
 				CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */,
+				CDAA00010000000000000000 /* RawUploadSession.swift in Sources */,
 				CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */,
 				CD5F4D47301C80320048327C /* ContinuedProcessingTaskCoordinator.swift in Sources */,
 			);
@@ -509,6 +524,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CDFF00120000000000000000 /* UploadStageTests.swift in Sources */,
+				CDAA00070000000000000000 /* RawRequestSyncTests.swift in Sources */,
 				CDFF001E0000000000000000 /* SessionCredentialTests.swift in Sources */,
 				CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */,
 				CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */,
