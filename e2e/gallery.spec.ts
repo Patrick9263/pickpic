@@ -61,6 +61,32 @@ test("hearting a photo persists across reload", async ({ page }) => {
   ).toHaveAttribute("aria-pressed", "true");
 });
 
+test("still renders the gallery when site data/storage is blocked", async ({
+  page,
+}) => {
+  /*
+   * iOS Safari's "Block All Cookies" setting throws a SecurityError on
+   * merely *accessing* window.localStorage, not just on getItem/setItem.
+   * GalleryPage's useState initializers read it during first render, so
+   * before the storage-safe helpers in galleryHelpers.ts this crashed with
+   * no error boundary to catch it, leaving a viewer with a blank page.
+   */
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      get() {
+        throw new DOMException("Blocked", "SecurityError");
+      },
+    });
+  });
+
+  await page.goto(`/g/${fixture.shareToken}`);
+
+  await expect(
+    page.getByRole("button", { name: `Open ${fixture.originalFilename}` }),
+  ).toBeVisible();
+});
+
 test("leaves a comment on a photo", async ({ page }) => {
   await page.goto(`/g/${fixture.shareToken}`);
 
