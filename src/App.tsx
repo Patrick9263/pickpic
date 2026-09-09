@@ -1,5 +1,6 @@
 import "./App.css";
 
+import { safeDecodeShareToken } from "./appHelpers";
 import AccountSettingsPage from "./pages/AccountSettingsPage";
 import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -55,7 +56,7 @@ function App() {
   const galleryMatch = pathname.match(/^\/g\/([^/]+)\/?$/);
 
   if (galleryMatch) {
-    return <GalleryPage shareToken={decodeURIComponent(galleryMatch[1])} />;
+    return <GalleryPage shareToken={safeDecodeShareToken(galleryMatch[1])} />;
   }
 
   if (/^\/sign-in\/?$/.test(pathname)) {

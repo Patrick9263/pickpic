@@ -10,6 +10,55 @@ import type { GalleryPhotoGroup } from "../components/gallery/types";
 
 export type GalleryGrouping = "all" | "day" | "location";
 
+/*
+ * Safari's "Block All Cookies" setting throws a SecurityError on merely
+ * *accessing* window.localStorage, not just on getItem/setItem — so the
+ * access itself has to happen inside the try, which is why these take a
+ * lazy `getStorage` accessor rather than a Storage instance directly.
+ */
+type StorageLike = Pick<Storage, "getItem" | "setItem">;
+
+export function readStorageItem(
+  getStorage: () => Pick<Storage, "getItem">,
+  key: string,
+): string | null {
+  try {
+    return getStorage().getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function writeStorageItem(
+  getStorage: () => Pick<Storage, "setItem">,
+  key: string,
+  value: string,
+): void {
+  try {
+    getStorage().setItem(key, value);
+  } catch {
+    // Storage may be blocked; the value just won't survive a reload.
+  }
+}
+
+export function getOrCreateVisitorToken(
+  getStorage: () => StorageLike,
+  key: string,
+  generateToken: () => string,
+): string {
+  const storedToken = readStorageItem(getStorage, key);
+
+  if (storedToken) {
+    return storedToken;
+  }
+
+  const token = generateToken();
+
+  writeStorageItem(getStorage, key, token);
+
+  return token;
+}
+
 export function sanitizeDownloadFilename(filename: string): string {
   const sanitized = Array.from(filename)
     .filter((character) => {

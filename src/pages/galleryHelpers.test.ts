@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildGalleryGroups,
   comparePhotos,
@@ -7,10 +7,17 @@ import {
   formatApproximateByteSize,
   formatDayGroupLabel,
   getDefaultPreviewUrl,
+  getOrCreateVisitorToken,
+  readStorageItem,
   sanitizeDownloadFilename,
   selectPhotosById,
+  writeStorageItem,
 } from "./galleryHelpers";
 import { makeGalleryPhoto as makePhoto } from "../testing/factories";
+
+function blockedStorageAccess(): never {
+  throw new DOMException("Blocked", "SecurityError");
+}
 
 describe("sanitizeDownloadFilename", () => {
   it("strips filesystem-unsafe characters", () => {
@@ -214,5 +221,95 @@ describe("getDefaultPreviewUrl", () => {
     expect(getDefaultPreviewUrl(photo)).toBe(
       "https://example.com/original.jpg",
     );
+  });
+});
+
+describe("readStorageItem", () => {
+  it("returns the stored value", () => {
+    const storage = { getItem: vi.fn().mockReturnValue("stored") };
+
+    expect(readStorageItem(() => storage, "key")).toBe("stored");
+  });
+
+  it("returns null when merely accessing storage throws", () => {
+    // Mirrors Safari's "Block All Cookies": accessing window.localStorage
+    // itself throws a SecurityError, before any method is even called.
+    expect(readStorageItem(blockedStorageAccess, "key")).toBeNull();
+  });
+
+  it("returns null when getItem throws", () => {
+    const storage = {
+      getItem: vi.fn(() => {
+        throw new DOMException("Blocked", "SecurityError");
+      }),
+    };
+
+    expect(readStorageItem(() => storage, "key")).toBeNull();
+  });
+});
+
+describe("writeStorageItem", () => {
+  it("writes through to storage", () => {
+    const setItem = vi.fn();
+
+    writeStorageItem(() => ({ setItem }), "key", "value");
+
+    expect(setItem).toHaveBeenCalledWith("key", "value");
+  });
+
+  it("silently no-ops when accessing storage throws", () => {
+    expect(() =>
+      writeStorageItem(blockedStorageAccess, "key", "value"),
+    ).not.toThrow();
+  });
+
+  it("silently no-ops when setItem throws", () => {
+    const storage = {
+      setItem: vi.fn(() => {
+        throw new DOMException("Blocked", "SecurityError");
+      }),
+    };
+
+    expect(() => writeStorageItem(() => storage, "key", "value")).not.toThrow();
+  });
+});
+
+describe("getOrCreateVisitorToken", () => {
+  it("returns the stored token without generating a new one", () => {
+    const storage = {
+      getItem: vi.fn().mockReturnValue("existing-token"),
+      setItem: vi.fn(),
+    };
+    const generateToken = vi.fn();
+
+    const token = getOrCreateVisitorToken(() => storage, "key", generateToken);
+
+    expect(token).toBe("existing-token");
+    expect(generateToken).not.toHaveBeenCalled();
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("generates and stores a new token when none exists", () => {
+    const setItem = vi.fn();
+    const storage = { getItem: vi.fn().mockReturnValue(null), setItem };
+
+    const token = getOrCreateVisitorToken(
+      () => storage,
+      "key",
+      () => "new-token",
+    );
+
+    expect(token).toBe("new-token");
+    expect(setItem).toHaveBeenCalledWith("key", "new-token");
+  });
+
+  it("falls back to a session-only token when storage is fully blocked", () => {
+    const token = getOrCreateVisitorToken(
+      blockedStorageAccess,
+      "key",
+      () => "session-token",
+    );
+
+    expect(token).toBe("session-token");
   });
 });

@@ -23,7 +23,10 @@ import {
   createUniqueDownloadNames,
   formatApproximateByteSize,
   getDefaultPreviewUrl,
+  getOrCreateVisitorToken,
+  readStorageItem,
   selectPhotosById,
+  writeStorageItem,
   type GalleryGrouping,
 } from "./galleryHelpers";
 interface GalleryEvent {
@@ -54,24 +57,16 @@ type GalleryFilter = "all" | "liked" | "finals";
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
 
-function getOrCreateVisitorToken(): string {
-  const storedToken = window.localStorage.getItem(VISITOR_TOKEN_KEY);
-
-  if (storedToken) {
-    return storedToken;
-  }
-
-  const token = crypto.randomUUID();
-
-  window.localStorage.setItem(VISITOR_TOKEN_KEY, token);
-
-  return token;
-}
-
 function GalleryPage({ shareToken }: GalleryPageProps) {
-  const [visitorToken] = useState(getOrCreateVisitorToken);
+  const [visitorToken] = useState(() =>
+    getOrCreateVisitorToken(
+      () => window.localStorage,
+      VISITOR_TOKEN_KEY,
+      () => crypto.randomUUID(),
+    ),
+  );
   const [displayName, setDisplayName] = useState(
-    () => window.localStorage.getItem(DISPLAY_NAME_KEY) ?? "",
+    () => readStorageItem(() => window.localStorage, DISPLAY_NAME_KEY) ?? "",
   );
   const [gallery, setGallery] = useState<GalleryResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -335,7 +330,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       return null;
     }
 
-    window.localStorage.setItem(DISPLAY_NAME_KEY, resolvedName);
+    writeStorageItem(() => window.localStorage, DISPLAY_NAME_KEY, resolvedName);
 
     setDisplayName(resolvedName);
 
