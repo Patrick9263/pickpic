@@ -47,6 +47,9 @@ type GalleryLightboxProps = {
   setSelectedVersion: Dispatch<SetStateAction<PhotoVersion>>;
   togglingPhotoId: string | null;
   toggleHeart: (photo: GalleryPhotoRecord) => Promise<void>;
+  togglingRawRequestPhotoId: string | null;
+  toggleRawRequest: (photo: GalleryPhotoRecord) => Promise<void>;
+  rawRequestsEnabled: boolean;
   commentActionId: string | null;
   commentText: string;
   isSubmittingComment: boolean;
@@ -70,6 +73,9 @@ function GalleryLightbox({
   setSelectedVersion,
   togglingPhotoId,
   toggleHeart,
+  togglingRawRequestPhotoId,
+  toggleRawRequest,
+  rawRequestsEnabled,
   commentActionId,
   commentText,
   isSubmittingComment,
@@ -517,6 +523,30 @@ function GalleryLightbox({
 
               <span>{selectedPhoto.heartCount}</span>
             </button>
+            {rawRequestsEnabled && (
+              <button
+                className={`lightbox-raw-request-button ${
+                  selectedPhoto.viewerRequestedRaw
+                    ? "lightbox-raw-request-button-active"
+                    : ""
+                }`}
+                type="button"
+                disabled={
+                  !interactionsEnabled ||
+                  togglingRawRequestPhotoId === selectedPhoto.id
+                }
+                onClick={() => void toggleRawRequest(selectedPhoto)}
+                aria-pressed={selectedPhoto.viewerRequestedRaw}
+              >
+                <span>
+                  {!interactionsEnabled
+                    ? "Gallery closed"
+                    : selectedPhoto.viewerRequestedRaw
+                      ? "RAW file requested"
+                      : "Request RAW file"}
+                </span>
+              </button>
+            )}
           </div>
           <GalleryComments
             selectedPhoto={selectedPhoto}

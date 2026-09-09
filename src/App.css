@@ -1119,6 +1119,14 @@ input:focus {
   color: var(--color-text);
 }
 
+.event-raw-requests-control {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: 0.74rem;
+  gap: 8px;
+}
+
 .event-title-row {
   align-items: stretch;
   display: flex;

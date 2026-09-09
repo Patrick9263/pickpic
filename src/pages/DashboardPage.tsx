@@ -85,6 +85,10 @@ interface SetEventStatusResponse {
   event: EventRecord;
 }
 
+interface SetEventRawRequestsEnabledResponse {
+  event: EventRecord;
+}
+
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
 const PUBLIC_APP_ORIGIN = (
@@ -206,6 +210,9 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
     Record<string, string>
   >({});
   const [updatingEventStatusId, setUpdatingEventStatusId] = useState<
+    string | null
+  >(null);
+  const [updatingEventRawRequestsId, setUpdatingEventRawRequestsId] = useState<
     string | null
   >(null);
   const [updatingEventTitleId, setUpdatingEventTitleId] = useState<
@@ -986,6 +993,43 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
     }
   }
 
+  async function handleSetEventRawRequestsEnabled(
+    eventRecord: EventRecord,
+    enabled: boolean,
+  ): Promise<void> {
+    setUpdatingEventRawRequestsId(eventRecord.id);
+    setError(null);
+
+    try {
+      const response = await fetchJson<SetEventRawRequestsEnabledResponse>(
+        `/api/admin/events/${encodeURIComponent(eventRecord.id)}/raw-requests`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            enabled,
+          }),
+        },
+      );
+
+      setEvents((currentEvents) =>
+        currentEvents.map((currentEvent) =>
+          currentEvent.id === eventRecord.id ? response.event : currentEvent,
+        ),
+      );
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to update RAW file requests.",
+      );
+    } finally {
+      setUpdatingEventRawRequestsId(null);
+    }
+  }
+
   async function handleRenameEvent(
     eventRecord: EventRecord,
     title: string,
@@ -1359,6 +1403,10 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
                       handleRepairPhotoVariants={handleRepairPhotoVariants}
                       updatingEventStatusId={updatingEventStatusId}
                       handleSetEventStatus={handleSetEventStatus}
+                      updatingEventRawRequestsId={updatingEventRawRequestsId}
+                      handleSetEventRawRequestsEnabled={
+                        handleSetEventRawRequestsEnabled
+                      }
                       updatingEventTitleId={updatingEventTitleId}
                       deletingEventId={deletingEventId}
                       clearingEventPhotosId={clearingEventPhotosId}

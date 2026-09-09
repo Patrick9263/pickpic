@@ -10,6 +10,7 @@ import {
   insertEvent,
   insertHeart,
   insertPhoto,
+  insertRawRequest,
 } from "./test-fixtures.ts";
 
 /*
@@ -182,6 +183,57 @@ describe("GET /api/galleries/:shareToken", () => {
     expect(asVisitor.photos[0].viewerHearted).toBe(true);
     expect(asStranger.photos[0].viewerHearted).toBe(false);
     expect(asStranger.photos[0].heartCount).toBe(1);
+  });
+
+  it("omits rawRequestsEnabled photos and viewerRequestedRaw when the event has not opted in", async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      rawRequestsEnabled: false,
+    });
+    await insertPhoto({ id: "photo-plain", eventId: EVENT_ID });
+
+    const response = await fetchGallery(SHARE_TOKEN, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+    const body = (await response.json()) as {
+      event: { rawRequestsEnabled: boolean };
+      photos: { viewerRequestedRaw: boolean }[];
+    };
+
+    expect(body.event.rawRequestsEnabled).toBe(false);
+    expect(body.photos[0].viewerRequestedRaw).toBe(false);
+  });
+
+  it("reports the viewer's own RAW requests only for their visitor token, when enabled", async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      rawRequestsEnabled: true,
+    });
+    await insertPhoto({ id: "photo-raw-requested", eventId: EVENT_ID });
+    await insertRawRequest({
+      photoId: "photo-raw-requested",
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+    });
+
+    const asVisitor = (await (
+      await fetchGallery(SHARE_TOKEN, {
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      })
+    ).json()) as {
+      event: { rawRequestsEnabled: boolean };
+      photos: { viewerRequestedRaw: boolean }[];
+    };
+
+    const asStranger = (await (await fetchGallery(SHARE_TOKEN)).json()) as {
+      photos: { viewerRequestedRaw: boolean }[];
+    };
+
+    expect(asVisitor.event.rawRequestsEnabled).toBe(true);
+    expect(asVisitor.photos[0].viewerRequestedRaw).toBe(true);
+    expect(asStranger.photos[0].viewerRequestedRaw).toBe(false);
   });
 
   it("405s on a non-GET method", async () => {

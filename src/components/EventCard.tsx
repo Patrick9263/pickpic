@@ -115,6 +115,7 @@ type EventCardProps = {
   repairingVariantsPhotoId: string | null;
   variantRepairWarnings: Record<string, string>;
   updatingEventStatusId: string | null;
+  updatingEventRawRequestsId: string | null;
   updatingEventTitleId: string | null;
   deletingEventId: string | null;
   clearingEventPhotosId: string | null;
@@ -125,6 +126,10 @@ type EventCardProps = {
   handleSetEventStatus(
     eventRecord: EventRecord,
     status: GalleryStatus,
+  ): Promise<void>;
+  handleSetEventRawRequestsEnabled(
+    eventRecord: EventRecord,
+    enabled: boolean,
   ): Promise<void>;
   handleRepairPhotoVariants(eventId: string, photo: PhotoRecord): Promise<void>;
   handleFinalPhotoSelection(
@@ -161,6 +166,8 @@ function EventCard(props: EventCardProps) {
     updatingWorkflowPhotoId,
     updatingEventStatusId,
     handleSetEventStatus,
+    updatingEventRawRequestsId,
+    handleSetEventRawRequestsEnabled,
     handleSetPhotoWorkflowStatus,
     handlePhotoSelection,
     handleDeletePhoto,
@@ -194,6 +201,8 @@ function EventCard(props: EventCardProps) {
   );
   const isAnyVariantRepairRunning = repairingVariantsPhotoId !== null;
   const isUpdatingEventStatus = updatingEventStatusId === eventRecord.id;
+  const isUpdatingEventRawRequests =
+    updatingEventRawRequestsId === eventRecord.id;
   const galleryIsAvailable =
     eventRecord.status === "ready" || eventRecord.status === "completed";
   const isUpdatingEventTitle = updatingEventTitleId === eventRecord.id;
@@ -361,6 +370,21 @@ function EventCard(props: EventCardProps) {
           {" — "}
           {getEventStatusDescription(eventRecord.status)}
         </p>
+
+        <label className="event-raw-requests-control">
+          <input
+            type="checkbox"
+            checked={eventRecord.rawRequestsEnabled}
+            disabled={isUpdatingEventRawRequests}
+            onChange={(changeEvent) =>
+              void handleSetEventRawRequestsEnabled(
+                eventRecord,
+                changeEvent.target.checked,
+              )
+            }
+          />
+          <span>Allow viewers to request original RAW files</span>
+        </label>
 
         <div className="event-title-row">
           {isRenamingEvent ? (

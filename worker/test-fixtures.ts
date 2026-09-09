@@ -17,6 +17,7 @@ interface EventSeed {
   title?: string;
   status?: string;
   createdAt?: string;
+  rawRequestsEnabled?: boolean;
 }
 
 interface PhotoSeed {
@@ -41,6 +42,7 @@ interface PhotoSeed {
 export async function clearTestData(): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM hearts"),
+    env.DB.prepare("DELETE FROM raw_requests"),
     env.DB.prepare("DELETE FROM comments"),
     env.DB.prepare("DELETE FROM photo_variants"),
     env.DB.prepare("DELETE FROM gallery_visitors"),
@@ -94,9 +96,10 @@ export async function insertEvent(seed: EventSeed): Promise<void> {
         status,
         created_at,
         updated_at,
-        account_id
+        account_id,
+        raw_requests_enabled
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -107,6 +110,7 @@ export async function insertEvent(seed: EventSeed): Promise<void> {
       createdAt,
       createdAt,
       BOOTSTRAP_ACCOUNT_ID,
+      seed.rawRequestsEnabled ? 1 : 0,
     )
     .run();
 }
@@ -187,6 +191,45 @@ export async function insertHeart(seed: {
   await env.DB.prepare(
     `
       INSERT INTO hearts (photo_id, visitor_id, created_at)
+      VALUES (?, ?, ?)
+    `,
+  )
+    .bind(seed.photoId, visitorId, now)
+    .run();
+}
+
+/*
+ * Mirrors insertHeart: a RAW request needs the same gallery_visitors row to
+ * hang off.
+ */
+export async function insertRawRequest(seed: {
+  photoId: string;
+  eventId: string;
+  visitorToken: string;
+}): Promise<void> {
+  const visitorId = `visitor-${seed.eventId}-${seed.visitorToken}`;
+  const now = new Date().toISOString();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO gallery_visitors (
+        id,
+        event_id,
+        visitor_token,
+        display_name,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (event_id, visitor_token) DO NOTHING
+    `,
+  )
+    .bind(visitorId, seed.eventId, seed.visitorToken, "Test visitor", now, now)
+    .run();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO raw_requests (photo_id, visitor_id, created_at)
       VALUES (?, ?, ?)
     `,
   )

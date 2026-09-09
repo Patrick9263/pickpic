@@ -9,6 +9,7 @@ export interface EventRecord {
   status: GalleryStatus;
   createdAt: string;
   updatedAt: string;
+  rawRequestsEnabled: boolean;
 }
 
 export interface PhotoCommentRecord {
@@ -58,6 +59,7 @@ export interface PhotoRecord {
 export interface GalleryPhotoRecord extends Omit<PhotoRecord, "comments"> {
   comments: ViewerPhotoCommentRecord[];
   viewerHearted: boolean;
+  viewerRequestedRaw: boolean;
 }
 
 export interface UploadBatchProgress {
