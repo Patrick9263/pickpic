@@ -49,6 +49,13 @@ export async function clearTestData(): Promise<void> {
     env.DB.prepare("DELETE FROM event_notifications"),
     env.DB.prepare("DELETE FROM photos"),
     env.DB.prepare("DELETE FROM events"),
+
+    /*
+     * The running counter the upload paths maintain incrementally. Deleting
+     * the photos does not touch it, so a test that actually uploads would
+     * otherwise leave every later test's cap check starting from its bytes.
+     */
+    env.DB.prepare("UPDATE accounts SET storage_bytes = 0"),
   ]);
 }
 
@@ -206,6 +213,12 @@ export async function insertRawRequest(seed: {
   photoId: string;
   eventId: string;
   visitorToken: string;
+
+  /*
+   * Seeds a request that has already been satisfied, which is what
+   * uploadRawPhoto stamps and what the iPad's pending count must exclude.
+   */
+  fulfilledAt?: string;
 }): Promise<void> {
   const visitorId = `visitor-${seed.eventId}-${seed.visitorToken}`;
   const now = new Date().toISOString();
@@ -229,12 +242,50 @@ export async function insertRawRequest(seed: {
 
   await env.DB.prepare(
     `
-      INSERT INTO raw_requests (photo_id, visitor_id, created_at)
-      VALUES (?, ?, ?)
+      INSERT INTO raw_requests (
+        photo_id,
+        visitor_id,
+        created_at,
+        fulfilled_at
+      )
+      VALUES (?, ?, ?, ?)
     `,
   )
-    .bind(seed.photoId, visitorId, now)
+    .bind(seed.photoId, visitorId, now, seed.fulfilledAt ?? null)
     .run();
+}
+
+/*
+ * Points the bootstrap account's cap at a chosen value, for the upload paths
+ * that reject against it. The cap migrations set is 1 TB, which no test can
+ * realistically fill with a body it has to construct in memory.
+ *
+ * clearTestData resets storage_bytes but deliberately not the cap, so a test
+ * that lowers it has to put it back -- which is why this returns the previous
+ * value rather than making the caller go and read it.
+ */
+export async function setAccountStorageCap(capBytes: number): Promise<number> {
+  const previous = await env.DB.prepare(
+    `
+      SELECT storage_cap_bytes AS storageCapBytes
+      FROM accounts
+      WHERE id = ?
+    `,
+  )
+    .bind(BOOTSTRAP_ACCOUNT_ID)
+    .first<{ storageCapBytes: number }>();
+
+  await env.DB.prepare(
+    `
+      UPDATE accounts
+      SET storage_cap_bytes = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(capBytes, BOOTSTRAP_ACCOUNT_ID)
+    .run();
+
+  return previous?.storageCapBytes ?? 0;
 }
 
 /*

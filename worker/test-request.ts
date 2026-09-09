@@ -34,6 +34,14 @@ const GALLERY_ORIGIN = "https://pickpic.photos";
 export interface RequestOptions {
   json?: unknown;
   formData?: FormData;
+
+  /*
+   * A raw body, for the upload routes that take bytes rather than JSON or a
+   * form. The caller sets its own Content-Type through `headers`, because
+   * those routes dispatch on it.
+   */
+  body?: BodyInit;
+
   headers?: HeadersInit;
 }
 
@@ -49,8 +57,12 @@ async function driveRequest<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<DrivenResponse<T>> {
-  if (options.json !== undefined && options.formData !== undefined) {
-    throw new Error("Pass at most one of json or formData.");
+  const bodyCount = [options.json, options.formData, options.body].filter(
+    (candidate) => candidate !== undefined,
+  ).length;
+
+  if (bodyCount > 1) {
+    throw new Error("Pass at most one of json, formData or body.");
   }
 
   const headers = new Headers(options.headers);
@@ -62,6 +74,8 @@ async function driveRequest<T>(
   } else if (options.formData) {
     /* No Content-Type here -- FormData needs to set its own boundary. */
     body = options.formData;
+  } else if (options.body !== undefined) {
+    body = options.body;
   }
 
   const ctx = createExecutionContext();
