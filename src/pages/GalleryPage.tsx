@@ -23,6 +23,7 @@ import {
   createUniqueDownloadNames,
   formatApproximateByteSize,
   getDefaultPreviewUrl,
+  selectPhotosById,
   type GalleryGrouping,
 } from "./galleryHelpers";
 interface GalleryEvent {
@@ -131,14 +132,12 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     downloadableVisiblePhotos.every((photo) => selectedPhotoIds.has(photo.id));
   const selectedDownloadByteSize = useMemo(
     () =>
-      visiblePhotos.reduce((totalByteSize, photo) => {
-        if (!selectedPhotoIds.has(photo.id)) {
-          return totalByteSize;
-        }
-
-        return totalByteSize + (photo.finalPhoto?.byteSize ?? photo.byteSize);
-      }, 0),
-    [selectedPhotoIds, visiblePhotos],
+      selectPhotosById(gallery?.photos ?? [], selectedPhotoIds).reduce(
+        (totalByteSize, photo) =>
+          totalByteSize + (photo.finalPhoto?.byteSize ?? photo.byteSize),
+        0,
+      ),
+    [selectedPhotoIds, gallery],
   );
 
   const priorityPhotoIds = useMemo(
@@ -727,9 +726,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
       return;
     }
-    const selectedPhotos = visiblePhotos.filter((photo) =>
-      selectedPhotoIds.has(photo.id),
-    );
+    const selectedPhotos = selectPhotosById(gallery.photos, selectedPhotoIds);
 
     if (selectedPhotos.length === 0) {
       setActionError("The selected photos are no longer available.");

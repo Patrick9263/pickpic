@@ -8,6 +8,7 @@ import {
   formatDayGroupLabel,
   getDefaultPreviewUrl,
   sanitizeDownloadFilename,
+  selectPhotosById,
 } from "./galleryHelpers";
 import { makeGalleryPhoto as makePhoto } from "../testing/factories";
 
@@ -148,6 +149,33 @@ describe("buildGalleryGroups", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].key).toBe("40.71,-74.01");
     expect(groups[0].mapUrl).toContain("google.com/maps");
+  });
+});
+
+describe("selectPhotosById", () => {
+  it("resolves selection against the full photo list, ignoring the current filter", () => {
+    const photos = [
+      makePhoto({ id: "photo-1" }),
+      makePhoto({ id: "photo-2" }),
+      makePhoto({ id: "photo-3" }),
+    ];
+    const selectedIds = new Set(["photo-1", "photo-2", "photo-3"]);
+
+    // Simulates selecting all photos, then narrowing to a filter that only
+    // shows one of them (e.g. "Liked") before downloading.
+    const narrowedView = photos.filter((photo) => photo.id === "photo-2");
+
+    expect(selectPhotosById(narrowedView, selectedIds)).toHaveLength(1);
+    expect(selectPhotosById(photos, selectedIds)).toHaveLength(3);
+  });
+
+  it("drops ids for photos no longer in the gallery", () => {
+    const photos = [makePhoto({ id: "photo-1" })];
+    const selectedIds = new Set(["photo-1", "deleted-photo"]);
+
+    expect(
+      selectPhotosById(photos, selectedIds).map((photo) => photo.id),
+    ).toEqual(["photo-1"]);
   });
 });
 
