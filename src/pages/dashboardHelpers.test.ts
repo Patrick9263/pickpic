@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectFulfilledPhotoEntries,
   getMissingVariantSources,
   getQueueDisplayImage,
 } from "./dashboardHelpers";
 import { makePhoto } from "../testing/factories";
+import type { PhotoRecord } from "../types";
 
 const completeVariantSet = {
   thumbnail: {
@@ -163,5 +165,47 @@ describe("getQueueDisplayImage", () => {
       height: 10,
       fullImageUrl: "https://example.com/proof.jpg",
     });
+  });
+});
+
+describe("collectFulfilledPhotoEntries", () => {
+  it("collects every entry when all requests succeed", () => {
+    const photoA = [makePhoto({ id: "photo-a" })];
+    const photoB = [makePhoto({ id: "photo-b" })];
+
+    const { entries, hasFailure } = collectFulfilledPhotoEntries([
+      { status: "fulfilled", value: ["event-a", photoA] },
+      { status: "fulfilled", value: ["event-b", photoB] },
+    ]);
+
+    expect(entries).toEqual([
+      ["event-a", photoA],
+      ["event-b", photoB],
+    ]);
+    expect(hasFailure).toBe(false);
+  });
+
+  it("keeps the successful entries and flags the failure when one request rejects", () => {
+    const photoA = [makePhoto({ id: "photo-a" })];
+
+    const { entries, hasFailure } = collectFulfilledPhotoEntries([
+      { status: "fulfilled", value: ["event-a", photoA] },
+      { status: "rejected", reason: new Error("network error") },
+    ]);
+
+    expect(entries).toEqual([["event-a", photoA]]);
+    expect(hasFailure).toBe(true);
+  });
+
+  it("returns no entries and flags the failure when every request rejects", () => {
+    const results: PromiseSettledResult<readonly [string, PhotoRecord[]]>[] = [
+      { status: "rejected", reason: new Error("network error") },
+      { status: "rejected", reason: new Error("timeout") },
+    ];
+
+    const { entries, hasFailure } = collectFulfilledPhotoEntries(results);
+
+    expect(entries).toEqual([]);
+    expect(hasFailure).toBe(true);
   });
 });
