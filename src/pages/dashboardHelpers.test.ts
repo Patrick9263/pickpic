@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { getMissingVariantSources } from "./dashboardHelpers";
+import {
+  getMissingVariantSources,
+  getQueueDisplayImage,
+} from "./dashboardHelpers";
 import { makePhoto } from "../testing/factories";
 
 const completeVariantSet = {
@@ -82,5 +85,83 @@ describe("getMissingVariantSources", () => {
     });
 
     expect(getMissingVariantSources(photo)).toEqual([]);
+  });
+});
+
+describe("getQueueDisplayImage", () => {
+  it("uses the original's thumbnail when not showing the final", () => {
+    const photo = makePhoto({
+      imageUrl: "https://example.com/proof.jpg",
+      variants: completeVariantSet,
+    });
+
+    expect(getQueueDisplayImage(photo, false)).toEqual({
+      thumbnailUrl: "https://example.com/thumb.jpg",
+      width: 10,
+      height: 10,
+      fullImageUrl: "https://example.com/proof.jpg",
+    });
+  });
+
+  it("falls back to the full proof when no thumbnail variant exists", () => {
+    const photo = makePhoto({
+      imageUrl: "https://example.com/proof.jpg",
+      variants: missingVariantSet,
+    });
+
+    expect(getQueueDisplayImage(photo, false)).toEqual({
+      thumbnailUrl: "https://example.com/proof.jpg",
+      width: undefined,
+      height: undefined,
+      fullImageUrl: "https://example.com/proof.jpg",
+    });
+  });
+
+  it("shows the delivered final, not the pre-edit proof, for a revision request", () => {
+    const photo = makePhoto({
+      imageUrl: "https://example.com/proof.jpg",
+      variants: completeVariantSet,
+      workflowStatus: "final",
+      finalPhoto: {
+        originalFilename: "final.jpg",
+        contentType: "image/jpeg",
+        byteSize: 2_000,
+        uploadedAt: "2026-01-01T00:00:00.000Z",
+        imageUrl: "https://example.com/final.jpg",
+        variants: {
+          thumbnail: {
+            imageUrl: "https://example.com/final-thumb.jpg",
+            contentType: "image/jpeg",
+            byteSize: 150,
+            width: 15,
+            height: 15,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          preview: null,
+        },
+      },
+    });
+
+    expect(getQueueDisplayImage(photo, true)).toEqual({
+      thumbnailUrl: "https://example.com/final-thumb.jpg",
+      width: 15,
+      height: 15,
+      fullImageUrl: "https://example.com/final.jpg",
+    });
+  });
+
+  it("falls back to the proof if a revision is requested but no final exists", () => {
+    const photo = makePhoto({
+      imageUrl: "https://example.com/proof.jpg",
+      variants: completeVariantSet,
+      finalPhoto: null,
+    });
+
+    expect(getQueueDisplayImage(photo, true)).toEqual({
+      thumbnailUrl: "https://example.com/thumb.jpg",
+      width: 10,
+      height: 10,
+      fullImageUrl: "https://example.com/proof.jpg",
+    });
   });
 });
