@@ -194,6 +194,19 @@ export function buildGalleryGroups(
   });
 }
 
+/*
+ * Selection must resolve against the gallery's full photo list, not
+ * whatever the current filter happens to show — narrowing the filter
+ * after selecting must never silently drop photos from a download.
+ * Ids for photos no longer in the gallery (e.g. deleted) are dropped.
+ */
+export function selectPhotosById(
+  photos: GalleryPhotoRecord[],
+  selectedIds: Set<string>,
+): GalleryPhotoRecord[] {
+  return photos.filter((photo) => selectedIds.has(photo.id));
+}
+
 export function getDefaultPreviewUrl(photo: GalleryPhotoRecord): string {
   if (photo.finalPhoto) {
     return (
