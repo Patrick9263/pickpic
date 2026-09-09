@@ -19,6 +19,7 @@ export function makeEvent(overrides: Partial<EventRecord> = {}): EventRecord {
     status: "draft",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
+    rawRequestsEnabled: false,
     ...overrides,
   };
 }
@@ -57,6 +58,7 @@ export function makeGalleryPhoto(
     ...makeBasePhotoFields(),
     comments: [],
     viewerHearted: false,
+    viewerRequestedRaw: false,
     ...overrides,
   };
 }

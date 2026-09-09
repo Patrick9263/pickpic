@@ -21,7 +21,12 @@ const CLOSED_GALLERY_ERROR =
   "This gallery is closed and no longer accepts edit requests or comments.";
 
 async function seedGallery(status: string): Promise<void> {
-  await insertEvent({ id: EVENT_ID, shareToken: SHARE_TOKEN, status });
+  await insertEvent({
+    id: EVENT_ID,
+    shareToken: SHARE_TOKEN,
+    status,
+    rawRequestsEnabled: true,
+  });
   await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
 }
 
@@ -35,6 +40,12 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
       label: "PUT .../heart",
       method: "PUT",
       path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/heart`,
+      json: { displayName: "Guest" },
+    },
+    {
+      label: "PUT .../raw-request",
+      method: "PUT",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
       json: { displayName: "Guest" },
     },
     {
@@ -62,6 +73,12 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
       label: "PUT .../heart",
       method: "PUT",
       path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/heart`,
+      json: { displayName: "Guest" },
+    },
+    {
+      label: "PUT .../raw-request",
+      method: "PUT",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
       json: { displayName: "Guest" },
     },
     {
@@ -112,5 +129,47 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
     );
 
     expectError(result, 405, "Method not allowed.");
+  });
+});
+
+describe("PUT/DELETE .../raw-request", () => {
+  const RAW_REQUEST_PATH = `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`;
+
+  it("404s when the event has not opted in to RAW requests", async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      status: "ready",
+      rawRequestsEnabled: false,
+    });
+    await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
+
+    const result = await galleryRequest("PUT", RAW_REQUEST_PATH, {
+      json: { displayName: "Guest" },
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    expectError(result, 404, "RAW requests are not enabled for this gallery.");
+  });
+
+  it("is idempotent and can be undone once enabled", async () => {
+    await seedGallery("ready");
+
+    const first = await galleryRequest("PUT", RAW_REQUEST_PATH, {
+      json: { displayName: "Guest" },
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+    expect(first.body).toEqual({ requested: true });
+
+    const second = await galleryRequest("PUT", RAW_REQUEST_PATH, {
+      json: { displayName: "Guest" },
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+    expect(second.body).toEqual({ requested: true });
+
+    const removed = await galleryRequest("DELETE", RAW_REQUEST_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+    expect(removed.body).toEqual({ requested: false });
   });
 });

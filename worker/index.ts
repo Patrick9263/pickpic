@@ -9,7 +9,10 @@ import {
   type AccountRecord,
 } from "./accounts.ts";
 import { requireOwnerRole, type AdminPrincipal } from "./access.ts";
-import { scheduleUploadStartedNotification } from "./telegram.ts";
+import {
+  scheduleUploadStartedNotification,
+  scheduleRawRequestNotification,
+} from "./telegram.ts";
 import {
   createAccountScope,
   type AccountScope,
@@ -41,7 +44,7 @@ interface SetEventStatusBody {
   status?: unknown;
 }
 
-interface EventStatusRow extends EventRecord {
+interface EventStatusRow extends EventQueryRow {
   status: string;
 }
 
@@ -53,6 +56,10 @@ interface HeartRequestBody {
   displayName?: unknown;
 }
 
+interface RawRequestRequestBody {
+  displayName?: unknown;
+}
+
 interface EventRecord {
   id: string;
   title: string;
@@ -60,6 +67,25 @@ interface EventRecord {
   status: string;
   createdAt: string;
   updatedAt: string;
+  rawRequestsEnabled: boolean;
+}
+
+/*
+ * D1 has no boolean column type -- raw_requests_enabled comes back as 0/1.
+ * Every SELECT that builds an EventRecord reads into this shape first, then
+ * converts through toEventRecord() so a real JS boolean is what ever reaches
+ * a JSON response.
+ */
+type EventQueryRow = Omit<EventRecord, "rawRequestsEnabled"> & {
+  rawRequestsEnabled: number;
+};
+
+function toEventRecord(row: EventQueryRow): EventRecord {
+  return { ...row, rawRequestsEnabled: Boolean(row.rawRequestsEnabled) };
+}
+
+interface SetEventRawRequestsEnabledBody {
+  enabled?: unknown;
 }
 
 interface EventStorageRow {
@@ -157,15 +183,21 @@ interface PublicGalleryEvent {
   title: string;
   status: string;
   createdAt: string;
+  rawRequestsEnabled: boolean;
 }
 
-interface PublicGalleryEventRow extends PublicGalleryEvent {
+interface PublicGalleryEventRow extends Omit<
+  PublicGalleryEvent,
+  "rawRequestsEnabled"
+> {
   id: string;
+  rawRequestsEnabled: number;
 }
 
 interface PublicPhotoRecord extends Omit<PhotoRecord, "comments"> {
   comments: PublicPhotoCommentRecord[];
   viewerHearted: boolean;
+  viewerRequestedRaw: boolean;
 }
 
 interface PublicGalleryResponse {
@@ -178,6 +210,10 @@ interface GalleryPhotoRow {
   eventId: string;
   storageKey: string;
   finalStorageKey: string | null;
+  originalFilename: string;
+  eventTitle: string;
+  shareToken: string;
+  rawRequestsEnabled: number;
 }
 
 interface VisitorRow {
@@ -190,6 +226,10 @@ interface HeartedPhotoRow {
 
 interface HeartCountRow {
   heartCount: number;
+}
+
+interface RawRequestedPhotoRow {
+  photoId: string;
 }
 
 interface CommentRequestBody {
@@ -725,7 +765,7 @@ async function findEventById(
   scope: AccountScope,
   eventId: string,
 ): Promise<EventRecord | null> {
-  return scope
+  const event = await scope
     .prepare(
       `
       SELECT
@@ -734,7 +774,8 @@ async function findEventById(
         share_token AS shareToken,
         status,
         created_at AS createdAt,
-        updated_at AS updatedAt
+        updated_at AS updatedAt,
+        raw_requests_enabled AS rawRequestsEnabled
       FROM events
       WHERE
         id = ?
@@ -742,7 +783,9 @@ async function findEventById(
     `,
       eventId,
     )
-    .first<EventRecord>();
+    .first<EventQueryRow>();
+
+  return event ? toEventRecord(event) : null;
 }
 
 function isGalleryStatus(value: unknown): value is GalleryStatus {
@@ -790,7 +833,8 @@ async function setEventStatus(
         share_token AS shareToken,
         status,
         created_at AS createdAt,
-        updated_at AS updatedAt
+        updated_at AS updatedAt,
+        raw_requests_enabled AS rawRequestsEnabled
       FROM events
       WHERE
         id = ?
@@ -821,8 +865,87 @@ async function setEventStatus(
 
   return jsonResponse({
     event: {
-      ...existingEvent,
+      ...toEventRecord(existingEvent),
       status: body.status,
+      updatedAt,
+    },
+  });
+}
+
+async function setEventRawRequestsEnabled(
+  request: Request,
+  scope: AccountScope,
+  eventId: string,
+): Promise<Response> {
+  let body: SetEventRawRequestsEnabledBody;
+
+  try {
+    body = await request.json<SetEventRawRequestsEnabledBody>();
+  } catch {
+    return jsonResponse(
+      {
+        error: "The request body must be valid JSON.",
+      },
+      400,
+    );
+  }
+
+  if (typeof body.enabled !== "boolean") {
+    return jsonResponse(
+      {
+        error: "The enabled flag must be a boolean.",
+      },
+      400,
+    );
+  }
+
+  const existingEvent = await scope
+    .prepare(
+      `
+      SELECT
+        id,
+        title,
+        share_token AS shareToken,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        raw_requests_enabled AS rawRequestsEnabled
+      FROM events
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      eventId,
+    )
+    .first<EventQueryRow>();
+
+  if (!existingEvent) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  if (Boolean(existingEvent.rawRequestsEnabled) === body.enabled) {
+    return jsonResponse({ event: toEventRecord(existingEvent) });
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  await scope.database
+    .prepare(
+      `
+      UPDATE events
+      SET
+        raw_requests_enabled = ?,
+        updated_at = ?
+      WHERE id = ?
+    `,
+    )
+    .bind(body.enabled ? 1 : 0, updatedAt, eventId)
+    .run();
+
+  return jsonResponse({
+    event: {
+      ...toEventRecord(existingEvent),
+      rawRequestsEnabled: body.enabled,
       updatedAt,
     },
   });
@@ -915,6 +1038,7 @@ async function createEvent(
     status: "draft",
     createdAt: now,
     updatedAt: now,
+    rawRequestsEnabled: false,
   };
 
   try {
@@ -1071,7 +1195,8 @@ async function updateEvent(
         share_token AS shareToken,
         status,
         created_at AS createdAt,
-        updated_at AS updatedAt
+        updated_at AS updatedAt,
+        raw_requests_enabled AS rawRequestsEnabled
       FROM events
       WHERE
         id = ?
@@ -1079,7 +1204,7 @@ async function updateEvent(
     `,
       eventId,
     )
-    .first<EventRecord>();
+    .first<EventQueryRow>();
 
   if (!existingEvent) {
     return jsonResponse({ error: "Event not found." }, 404);
@@ -1087,7 +1212,7 @@ async function updateEvent(
 
   if (title === existingEvent.title) {
     return jsonResponse({
-      event: existingEvent,
+      event: toEventRecord(existingEvent),
     });
   }
 
@@ -1108,7 +1233,7 @@ async function updateEvent(
 
   return jsonResponse({
     event: {
-      ...existingEvent,
+      ...toEventRecord(existingEvent),
       title,
       updatedAt,
     },
@@ -2007,7 +2132,8 @@ async function getPublicGallery(
         id,
         title,
         status,
-        created_at AS createdAt
+        created_at AS createdAt,
+        raw_requests_enabled AS rawRequestsEnabled
       FROM events
       WHERE share_token = ?
     `,
@@ -2077,6 +2203,8 @@ async function getPublicGallery(
   );
   const visitorToken = getVisitorToken(request);
   const heartedPhotoIds = new Set<string>();
+  const rawRequestedPhotoIds = new Set<string>();
+  const rawRequestsEnabled = Boolean(event.rawRequestsEnabled);
 
   if (visitorToken) {
     const heartResult = await env.DB.prepare(
@@ -2096,6 +2224,26 @@ async function getPublicGallery(
     for (const row of heartResult.results) {
       heartedPhotoIds.add(row.photoId);
     }
+
+    if (rawRequestsEnabled) {
+      const rawRequestResult = await env.DB.prepare(
+        `
+          SELECT r.photo_id AS photoId
+          FROM raw_requests r
+          INNER JOIN gallery_visitors v
+            ON v.id = r.visitor_id
+          WHERE
+            v.event_id = ?
+            AND v.visitor_token = ?
+        `,
+      )
+        .bind(event.id, visitorToken)
+        .all<RawRequestedPhotoRow>();
+
+      for (const row of rawRequestResult.results) {
+        rawRequestedPhotoIds.add(row.photoId);
+      }
+    }
   }
 
   const response: PublicGalleryResponse = {
@@ -2103,6 +2251,7 @@ async function getPublicGallery(
       title: event.title,
       status: event.status,
       createdAt: event.createdAt,
+      rawRequestsEnabled,
     },
     photos: photoResult.results.map((row) => {
       const commentRows = commentsByPhoto.get(row.id) ?? [];
@@ -2129,6 +2278,7 @@ async function getPublicGallery(
         })),
 
         viewerHearted: heartedPhotoIds.has(photo.id),
+        viewerRequestedRaw: rawRequestedPhotoIds.has(photo.id),
       };
     }),
   };
@@ -2164,7 +2314,11 @@ async function findPhotoInShare(
         p.id AS photoId,
         p.event_id AS eventId,
         p.storage_key AS storageKey,
-        p.final_storage_key AS finalStorageKey
+        p.final_storage_key AS finalStorageKey,
+        p.original_filename AS originalFilename,
+        e.title AS eventTitle,
+        e.share_token AS shareToken,
+        e.raw_requests_enabled AS rawRequestsEnabled
       FROM photos p
       INNER JOIN events e
         ON e.id = p.event_id
@@ -2321,6 +2475,144 @@ async function removeHeart(
   return jsonResponse({
     hearted: false,
     heartCount: await getHeartCount(env.DB, photoId),
+  });
+}
+
+async function addRawRequest(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  let body: RawRequestRequestBody;
+
+  try {
+    body = await request.json<RawRequestRequestBody>();
+  } catch {
+    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  }
+
+  if (typeof body.displayName !== "string") {
+    return jsonResponse(
+      { error: "Enter your name before requesting the RAW file." },
+      400,
+    );
+  }
+
+  const displayName = body.displayName.trim();
+
+  if (displayName.length === 0 || displayName.length > 80) {
+    return jsonResponse(
+      { error: "Your name must be between 1 and 80 characters." },
+      400,
+    );
+  }
+
+  const galleryPhoto = await findPhotoInShare(env, shareToken, photoId);
+
+  if (!galleryPhoto) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  if (!galleryPhoto.rawRequestsEnabled) {
+    return jsonResponse(
+      { error: "RAW requests are not enabled for this gallery." },
+      404,
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  const visitor = await upsertGalleryVisitor(
+    env,
+    galleryPhoto.eventId,
+    visitorToken,
+    displayName,
+  );
+
+  if (!visitor) {
+    return jsonResponse(
+      { error: "The visitor identity could not be saved." },
+      500,
+    );
+  }
+
+  const insertResult = await env.DB.prepare(
+    `
+      INSERT INTO raw_requests (
+        photo_id,
+        visitor_id,
+        created_at
+      )
+      VALUES (?, ?, ?)
+      ON CONFLICT(photo_id, visitor_id)
+      DO NOTHING
+    `,
+  )
+    .bind(photoId, visitor.id, now)
+    .run();
+
+  if (insertResult.meta.changes === 1) {
+    scheduleRawRequestNotification(env.DB, env, ctx, photoId, visitor.id);
+  }
+
+  return jsonResponse({
+    requested: true,
+  });
+}
+
+async function removeRawRequest(
+  request: Request,
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  const galleryPhoto = await findPhotoInShare(env, shareToken, photoId);
+
+  if (!galleryPhoto) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const visitor = await env.DB.prepare(
+    `
+      SELECT id
+      FROM gallery_visitors
+      WHERE
+        event_id = ?
+        AND visitor_token = ?
+    `,
+  )
+    .bind(galleryPhoto.eventId, visitorToken)
+    .first<VisitorRow>();
+
+  if (visitor) {
+    await env.DB.prepare(
+      `
+        DELETE FROM raw_requests
+        WHERE
+          photo_id = ?
+          AND visitor_id = ?
+      `,
+    )
+      .bind(photoId, visitor.id)
+      .run();
+  }
+
+  return jsonResponse({
+    requested: false,
   });
 }
 
@@ -3745,6 +4037,20 @@ async function handleAdminRequest(
     return setEventStatus(request, scope, eventId);
   }
 
+  const adminEventRawRequestsMatch = url.pathname.match(
+    /^\/api\/admin\/events\/([^/]+)\/raw-requests$/,
+  );
+
+  if (adminEventRawRequestsMatch) {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const eventId = decodeURIComponent(adminEventRawRequestsMatch[1]);
+
+    return setEventRawRequestsEnabled(request, scope, eventId);
+  }
+
   const eventPhotosPreflightMatch = url.pathname.match(
     /^\/api\/admin\/events\/([^/]+)\/photos\/preflight$/,
   );
@@ -4031,7 +4337,7 @@ async function routeRequest(
    * already told the viewer was closed.
    */
   const galleryMutationMatch = url.pathname.match(
-    /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|comments(?:\/[^/]+)?)$/,
+    /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|raw-request|comments(?:\/[^/]+)?)$/,
   );
 
   if (galleryMutationMatch && request.method !== "GET") {
@@ -4058,6 +4364,25 @@ async function routeRequest(
 
     if (request.method === "DELETE") {
       return removeHeart(request, env, shareToken, photoId);
+    }
+
+    return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  const galleryRawRequestMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/raw-request$/,
+  );
+
+  if (galleryRawRequestMatch) {
+    const shareToken = decodeURIComponent(galleryRawRequestMatch[1]);
+    const photoId = decodeURIComponent(galleryRawRequestMatch[2]);
+
+    if (request.method === "PUT") {
+      return addRawRequest(request, env, ctx, shareToken, photoId);
+    }
+
+    if (request.method === "DELETE") {
+      return removeRawRequest(request, env, shareToken, photoId);
     }
 
     return jsonResponse({ error: "Method not allowed." }, 405);

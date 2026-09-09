@@ -17,6 +17,15 @@ interface TelegramEventRow {
   lastAttemptAt: string | null;
 }
 
+interface TelegramRawRequestRow {
+  eventTitle: string;
+  shareToken: string;
+  originalFilename: string;
+  displayName: string;
+  notificationStatus: "pending" | "sending" | "sent" | "failed";
+  lastAttemptAt: string | null;
+}
+
 interface TelegramAPIResponse {
   ok: boolean;
   description?: string;
@@ -28,6 +37,7 @@ const RETRY_DELAYS_MS = [0, 1000, 3000] as const;
 const PUBLIC_GALLERY_BASE_URL = "https://pickpic.photos/g";
 
 let didWarnAboutMissingConfiguration = false;
+let didWarnAboutMissingConfigurationForRawRequests = false;
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -272,4 +282,191 @@ export function scheduleUploadStartedNotification(
   }
 
   ctx.waitUntil(notifyUploadStarted(database, eventId, botToken, chatId));
+}
+
+/*
+ * Unlike upload-start, this lease/retry state lives directly on the
+ * raw_requests row (migration 0019) rather than in event_notifications --
+ * that table's PRIMARY KEY (event_id, notification_type) is a one-row-per-event
+ * singleton and can't represent many independent RAW requests per event. The
+ * (photo_id, visitor_id) row created by addRawRequest already exists by the
+ * time this runs, so there is no bootstrap INSERT step here.
+ */
+async function notifyRawRequested(
+  database: D1Database,
+  photoId: string,
+  visitorId: string,
+  botToken: string,
+  chatId: string,
+): Promise<void> {
+  try {
+    const rawRequest = await database
+      .prepare(
+        `
+        SELECT
+          e.title AS eventTitle,
+          e.share_token AS shareToken,
+          p.original_filename AS originalFilename,
+          v.display_name AS displayName,
+          r.notification_status AS notificationStatus,
+          r.notification_last_attempt_at AS lastAttemptAt
+        FROM raw_requests r
+        INNER JOIN photos p
+          ON p.id = r.photo_id
+        INNER JOIN events e
+          ON e.id = p.event_id
+        INNER JOIN gallery_visitors v
+          ON v.id = r.visitor_id
+        WHERE
+          r.photo_id = ?
+          AND r.visitor_id = ?
+      `,
+      )
+      .bind(photoId, visitorId)
+      .first<TelegramRawRequestRow>();
+
+    if (!rawRequest) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const staleBefore = new Date(
+      Date.now() - NOTIFICATION_LEASE_MS,
+    ).toISOString();
+
+    if (rawRequest.notificationStatus === "sent") {
+      return;
+    }
+
+    if (
+      rawRequest.notificationStatus === "sending" &&
+      rawRequest.lastAttemptAt !== null &&
+      rawRequest.lastAttemptAt >= staleBefore
+    ) {
+      return;
+    }
+
+    const claimResult = await database
+      .prepare(
+        `
+        UPDATE raw_requests
+        SET
+          notification_status = 'sending',
+          notification_attempt_count = notification_attempt_count + 1,
+          notification_last_attempt_at = ?,
+          notification_last_error = NULL
+        WHERE
+          photo_id = ?
+          AND visitor_id = ?
+          AND (
+            notification_status IN ('pending', 'failed')
+            OR (
+              notification_status = 'sending'
+              AND (
+                notification_last_attempt_at IS NULL
+                OR notification_last_attempt_at < ?
+              )
+            )
+          )
+      `,
+      )
+      .bind(now, photoId, visitorId, staleBefore)
+      .run();
+
+    if (claimResult.meta.changes !== 1) {
+      return;
+    }
+
+    const galleryUrl =
+      `${PUBLIC_GALLERY_BASE_URL}/` + encodeURIComponent(rawRequest.shareToken);
+    const message = [
+      "📥 RAW file requested",
+      "",
+      `${rawRequest.eventTitle} — ${rawRequest.originalFilename}`,
+      `Requested by ${rawRequest.displayName}`,
+      galleryUrl,
+    ].join("\n");
+
+    let lastError = "The Telegram notification could not be sent.";
+
+    for (const retryDelay of RETRY_DELAYS_MS) {
+      if (retryDelay > 0) {
+        await wait(retryDelay);
+      }
+
+      try {
+        await sendTelegramMessage(botToken, chatId, message);
+
+        const sentAt = new Date().toISOString();
+        await database
+          .prepare(
+            `
+            UPDATE raw_requests
+            SET
+              notification_status = 'sent',
+              notification_sent_at = ?,
+              notification_last_error = NULL
+            WHERE
+              photo_id = ?
+              AND visitor_id = ?
+              AND notification_status = 'sending'
+          `,
+          )
+          .bind(sentAt, photoId, visitorId)
+          .run();
+
+        return;
+      } catch (error) {
+        lastError = getErrorMessage(error);
+      }
+    }
+
+    await database
+      .prepare(
+        `
+        UPDATE raw_requests
+        SET
+          notification_status = 'failed',
+          notification_last_error = ?
+        WHERE
+          photo_id = ?
+          AND visitor_id = ?
+          AND notification_status = 'sending'
+      `,
+      )
+      .bind(lastError, photoId, visitorId)
+      .run();
+
+    console.error("Telegram RAW-request notification failed:", lastError);
+  } catch (error) {
+    console.error(
+      "Unable to process Telegram RAW-request notification:",
+      getErrorMessage(error),
+    );
+  }
+}
+
+export function scheduleRawRequestNotification(
+  database: D1Database,
+  env: TenantEnv,
+  ctx: ExecutionContext,
+  photoId: string,
+  visitorId: string,
+): void {
+  const telegramEnv = env as TelegramEnvironment;
+  const botToken = telegramEnv.TELEGRAM_BOT_TOKEN?.trim();
+  const chatId = telegramEnv.TELEGRAM_CHAT_ID?.trim();
+
+  if (!botToken || !chatId) {
+    if (!didWarnAboutMissingConfigurationForRawRequests) {
+      console.warn("Telegram RAW-request notification is not configured.");
+      didWarnAboutMissingConfigurationForRawRequests = true;
+    }
+
+    return;
+  }
+
+  ctx.waitUntil(
+    notifyRawRequested(database, photoId, visitorId, botToken, chatId),
+  );
 }

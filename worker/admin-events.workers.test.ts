@@ -7,7 +7,12 @@ import {
 } from "./test-request.ts";
 
 interface EventBody {
-  event: { id: string; title: string; status: string };
+  event: {
+    id: string;
+    title: string;
+    status: string;
+    rawRequestsEnabled: boolean;
+  };
 }
 
 beforeEach(async () => {
@@ -174,6 +179,67 @@ describe("PUT /api/admin/events/:id/status", () => {
     const result = await adminRequest(
       "GET",
       `/api/admin/events/${EVENT_ID}/status`,
+    );
+
+    expectMethodNotAllowed(result);
+  });
+});
+
+describe("PUT /api/admin/events/:id/raw-requests", () => {
+  const EVENT_ID = "event-raw-requests";
+
+  beforeEach(async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: "share-raw-requests",
+      status: "draft",
+    });
+  });
+
+  it("enables and disables RAW requests", async () => {
+    const enabled = await adminRequest<EventBody>(
+      "PUT",
+      `/api/admin/events/${EVENT_ID}/raw-requests`,
+      { json: { enabled: true } },
+    );
+
+    expect(enabled.status).toBe(200);
+    expect(enabled.body.event.rawRequestsEnabled).toBe(true);
+
+    const disabled = await adminRequest<EventBody>(
+      "PUT",
+      `/api/admin/events/${EVENT_ID}/raw-requests`,
+      { json: { enabled: false } },
+    );
+
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.event.rawRequestsEnabled).toBe(false);
+  });
+
+  it("400s on a non-boolean enabled value", async () => {
+    const result = await adminRequest(
+      "PUT",
+      `/api/admin/events/${EVENT_ID}/raw-requests`,
+      { json: { enabled: "yes" } },
+    );
+
+    expectError(result, 400, "The enabled flag must be a boolean.");
+  });
+
+  it("404s for an event that doesn't exist", async () => {
+    const result = await adminRequest(
+      "PUT",
+      "/api/admin/events/no-such-event/raw-requests",
+      { json: { enabled: true } },
+    );
+
+    expectError(result, 404, "Event not found.");
+  });
+
+  it("405s on a non-PUT method", async () => {
+    const result = await adminRequest(
+      "GET",
+      `/api/admin/events/${EVENT_ID}/raw-requests`,
     );
 
     expectMethodNotAllowed(result);

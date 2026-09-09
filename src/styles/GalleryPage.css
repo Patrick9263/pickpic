@@ -549,6 +549,41 @@
   background: #f59ab1;
 }
 
+.gallery-raw-request-button {
+  align-items: center;
+  backdrop-filter: blur(8px);
+  background: rgb(10 12 15 / 76%);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  bottom: 10px;
+  color: var(--color-text);
+  display: flex;
+  font-size: 0.68rem;
+  font-weight: 750;
+  gap: 5px;
+  left: 10px;
+  padding: 8px 11px;
+  position: absolute;
+}
+
+.gallery-raw-request-button:hover:not(:disabled) {
+  background: rgb(10 12 15 / 92%);
+}
+
+.gallery-raw-request-button:disabled {
+  cursor: not-allowed;
+}
+
+.gallery-raw-request-button-active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #14101f;
+}
+
+.gallery-raw-request-button-active:hover:not(:disabled) {
+  background: #b3a0f7;
+}
+
 .gallery-final-badge {
   background: rgb(15 18 23 / 86%);
   border: 1px solid var(--color-border-strong);
@@ -802,7 +837,8 @@
   text-align: left;
 }
 
-.lightbox-heart-button {
+.lightbox-heart-button,
+.lightbox-raw-request-button {
   align-items: center;
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border-strong);
@@ -817,7 +853,10 @@
   white-space: nowrap;
 }
 
-.lightbox-heart-button:not(.lightbox-heart-button-active):hover:not(:disabled) {
+.lightbox-heart-button:not(.lightbox-heart-button-active):hover:not(:disabled),
+.lightbox-raw-request-button:not(.lightbox-raw-request-button-active):hover:not(
+    :disabled
+  ) {
   background: var(--color-surface-hover);
   border-color: var(--color-accent);
   color: var(--color-text);
@@ -833,6 +872,18 @@
   background: #f59ab1;
   border-color: #f59ab1;
   color: #17070d;
+}
+
+.lightbox-raw-request-button-active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #14101f;
+}
+
+.lightbox-raw-request-button-active:hover:not(:disabled) {
+  background: #b3a0f7;
+  border-color: #b3a0f7;
+  color: #14101f;
 }
 
 .photo-version-controls {
@@ -1156,6 +1207,11 @@
     right: 7px;
   }
 
+  .gallery-raw-request-button {
+    bottom: 7px;
+    left: 7px;
+  }
+
   .lightbox {
     align-items: stretch;
     padding: 0;
@@ -1212,7 +1268,8 @@
     flex-direction: column;
   }
 
-  .lightbox-heart-button {
+  .lightbox-heart-button,
+  .lightbox-raw-request-button {
     justify-content: center;
     width: 100%;
   }
@@ -1239,9 +1296,11 @@
 .lightbox-close,
 .lightbox-nav,
 .lightbox-heart-button,
+.lightbox-raw-request-button,
 .photo-version-toggle button,
 .gallery-photo-button,
-.gallery-heart-button {
+.gallery-heart-button,
+.gallery-raw-request-button {
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
@@ -1365,7 +1424,8 @@
     margin-top: 12px;
   }
 
-  .lightbox-heart-button {
+  .lightbox-heart-button,
+  .lightbox-raw-request-button {
     min-height: 48px;
     padding: 11px 16px;
   }
@@ -1412,6 +1472,13 @@
     right: 7px;
   }
 
+  .gallery-raw-request-button {
+    bottom: 7px;
+    left: 7px;
+    min-height: 44px;
+    padding: 8px 12px;
+  }
+
   .lightbox-image-stage {
     flex-basis: clamp(300px, 60dvh, 620px);
   }
@@ -1426,7 +1493,8 @@
     flex-direction: column;
   }
 
-  .lightbox-heart-button {
+  .lightbox-heart-button,
+  .lightbox-raw-request-button {
     justify-content: center;
     width: 100%;
   }
@@ -1468,7 +1536,8 @@
     flex-direction: column;
   }
 
-  .lightbox-heart-button {
+  .lightbox-heart-button,
+  .lightbox-raw-request-button {
     justify-content: center;
     width: 100%;
   }

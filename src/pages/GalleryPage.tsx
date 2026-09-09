@@ -33,6 +33,7 @@ interface GalleryEvent {
   title: string;
   status: GalleryStatus;
   createdAt: string;
+  rawRequestsEnabled: boolean;
 }
 
 interface GalleryResponse {
@@ -43,6 +44,10 @@ interface GalleryResponse {
 interface HeartResponse {
   hearted: boolean;
   heartCount: number;
+}
+
+interface RawRequestResponse {
+  requested: boolean;
 }
 
 interface CommentResponse {
@@ -78,6 +83,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   } | null>(null);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
+  const [togglingRawRequestPhotoId, setTogglingRawRequestPhotoId] = useState<
+    string | null
+  >(null);
   const [commentText, setCommentText] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
   const [commentActionId, setCommentActionId] = useState<string | null>(null);
@@ -140,6 +148,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     [visiblePhotos],
   );
   const interactionsEnabled = gallery?.event.status === "ready";
+  const rawRequestsEnabled = gallery?.event.rawRequestsEnabled ?? false;
   const selectedPhotoIndex =
     selectedPhotoId === null
       ? -1
@@ -417,6 +426,79 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       );
     } finally {
       setTogglingPhotoId(null);
+    }
+  }
+
+  async function toggleRawRequest(photo: GalleryPhotoRecord): Promise<void> {
+    if (!interactionsEnabled) {
+      setActionError(
+        "This gallery is closed and no longer accepts RAW file requests.",
+      );
+      return;
+    }
+    let resolvedDisplayName = displayName.trim();
+    if (!photo.viewerRequestedRaw) {
+      const resolvedName = await resolveDisplayName();
+
+      if (!resolvedName) {
+        return;
+      }
+
+      resolvedDisplayName = resolvedName;
+    }
+
+    setTogglingRawRequestPhotoId(photo.id);
+    setActionError(null);
+
+    try {
+      const method = photo.viewerRequestedRaw ? "DELETE" : "PUT";
+      const body = await fetchJson<RawRequestResponse>(
+        `/api/galleries/${encodeURIComponent(
+          shareToken,
+        )}/photos/${encodeURIComponent(photo.id)}/raw-request`,
+        {
+          method,
+          headers: {
+            "X-PickPic-Visitor": visitorToken,
+            ...(method === "PUT"
+              ? {
+                  "Content-Type": "application/json",
+                }
+              : {}),
+          },
+          body:
+            method === "PUT"
+              ? JSON.stringify({
+                  displayName: resolvedDisplayName,
+                })
+              : undefined,
+        },
+      );
+
+      setGallery((currentGallery) => {
+        if (!currentGallery) {
+          return currentGallery;
+        }
+        return {
+          ...currentGallery,
+          photos: currentGallery.photos.map((currentPhoto) =>
+            currentPhoto.id === photo.id
+              ? {
+                  ...currentPhoto,
+                  viewerRequestedRaw: body.requested,
+                }
+              : currentPhoto,
+          ),
+        };
+      });
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to update this RAW file request.",
+      );
+    } finally {
+      setTogglingRawRequestPhotoId(null);
     }
   }
   async function submitComment(
@@ -1020,6 +1102,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   togglingPhotoId={togglingPhotoId}
                   openPhoto={openPhoto}
                   toggleHeart={toggleHeart}
+                  togglingRawRequestPhotoId={togglingRawRequestPhotoId}
+                  toggleRawRequest={toggleRawRequest}
+                  rawRequestsEnabled={rawRequestsEnabled}
                   priorityPhotoIds={priorityPhotoIds}
                   interactionsEnabled={interactionsEnabled}
                   isSelecting={isSelecting}
@@ -1040,6 +1125,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           setSelectedVersion={setSelectedVersion}
           togglingPhotoId={togglingPhotoId}
           toggleHeart={toggleHeart}
+          togglingRawRequestPhotoId={togglingRawRequestPhotoId}
+          toggleRawRequest={toggleRawRequest}
+          rawRequestsEnabled={rawRequestsEnabled}
           commentActionId={commentActionId}
           commentText={commentText}
           isSubmittingComment={isSubmittingComment}

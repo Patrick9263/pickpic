@@ -6,6 +6,9 @@ type GalleryGridProps = {
   togglingPhotoId: string | null;
   openPhoto(photo: GalleryPhotoRecord): void;
   toggleHeart(photo: GalleryPhotoRecord): Promise<void>;
+  togglingRawRequestPhotoId: string | null;
+  toggleRawRequest(photo: GalleryPhotoRecord): Promise<void>;
+  rawRequestsEnabled: boolean;
   priorityPhotoIds: Set<string>;
   interactionsEnabled: boolean;
   isSelecting: boolean;
@@ -17,6 +20,9 @@ function GalleryGrid({
   togglingPhotoId,
   openPhoto,
   toggleHeart,
+  togglingRawRequestPhotoId,
+  toggleRawRequest,
+  rawRequestsEnabled,
   priorityPhotoIds,
   interactionsEnabled,
   isSelecting,
@@ -34,6 +40,7 @@ function GalleryGrid({
     <div className="gallery-grid">
       {group.photos.map((photo) => {
         const isToggling = togglingPhotoId === photo.id;
+        const isTogglingRawRequest = togglingRawRequestPhotoId === photo.id;
         const isPriority = priorityPhotoIds.has(photo.id);
         const isSelected = selectedPhotoIds.has(photo.id);
         const displayedThumbnail = photo.finalPhoto
@@ -195,6 +202,31 @@ function GalleryGrid({
               >
                 <span aria-hidden="true">♥</span>
                 <span>{photo.heartCount}</span>
+              </button>
+            )}
+            {!isSelecting && rawRequestsEnabled && (
+              <button
+                className={`gallery-raw-request-button ${
+                  photo.viewerRequestedRaw
+                    ? "gallery-raw-request-button-active"
+                    : ""
+                }`}
+                type="button"
+                disabled={!interactionsEnabled || isTogglingRawRequest}
+                onClick={() => void toggleRawRequest(photo)}
+                aria-pressed={photo.viewerRequestedRaw}
+                aria-label={
+                  !interactionsEnabled
+                    ? `Gallery closed; cannot request the RAW file for ${photo.originalFilename}`
+                    : photo.viewerRequestedRaw
+                      ? `Cancel RAW file request for ${photo.originalFilename}`
+                      : `Request the original RAW file for ${photo.originalFilename}`
+                }
+                title={
+                  interactionsEnabled ? undefined : "This gallery is closed"
+                }
+              >
+                <span aria-hidden="true">RAW</span>
               </button>
             )}
           </article>
