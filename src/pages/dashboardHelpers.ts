@@ -22,6 +22,28 @@ export function getMissingVariantSources(
   return sources;
 }
 
+/*
+ * Splits a Promise.allSettled result into the entries that succeeded and
+ * whether anything failed, so a single dropped per-event photo request
+ * doesn't erase the photos that did load for every other event.
+ */
+export function collectFulfilledPhotoEntries(
+  results: readonly PromiseSettledResult<readonly [string, PhotoRecord[]]>[],
+): { entries: [string, PhotoRecord[]][]; hasFailure: boolean } {
+  const entries: [string, PhotoRecord[]][] = [];
+  let hasFailure = false;
+
+  for (const result of results) {
+    if (result.status === "fulfilled") {
+      entries.push([...result.value]);
+    } else {
+      hasFailure = true;
+    }
+  }
+
+  return { entries, hasFailure };
+}
+
 export interface QueueDisplayImage {
   thumbnailUrl: string;
   width: number | undefined;

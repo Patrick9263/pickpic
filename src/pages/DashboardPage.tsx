@@ -26,7 +26,10 @@ import {
   generateImageVariants,
   type GeneratedImageVariants,
 } from "../imageVariants";
-import { getMissingVariantSources } from "./dashboardHelpers";
+import {
+  collectFulfilledPhotoEntries,
+  getMissingVariantSources,
+} from "./dashboardHelpers";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -229,16 +232,24 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
 
     try {
       const body = await fetchJson<EventsResponse>("/api/admin/events");
+      setEvents(body.events);
 
-      const photoEntries = await Promise.all(
+      const results = await Promise.allSettled(
         body.events.map(async (eventRecord) => {
           const photos = await loadPhotos(eventRecord.id);
           return [eventRecord.id, photos] as const;
         }),
       );
+      const { entries, hasFailure } = collectFulfilledPhotoEntries(results);
 
-      setEvents(body.events);
-      setPhotosByEvent(Object.fromEntries(photoEntries));
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        ...Object.fromEntries(entries),
+      }));
+
+      if (hasFailure) {
+        setError("Some events' photos couldn't be loaded. Try refreshing.");
+      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
