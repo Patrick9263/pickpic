@@ -1,5 +1,6 @@
 import type { ChangeEvent } from "react";
 import type { EventRecord, PhotoRecord, PhotoWorkflowStatus } from "../types";
+import { getQueueDisplayImage } from "../pages/dashboardHelpers";
 import "../styles/EditingQueue.css";
 
 interface EditingQueueProps {
@@ -101,19 +102,26 @@ function EditingQueue({
             const isUpdating = updatingWorkflowPhotoId === photo.id;
             const isClearing = clearingHeartsPhotoId === photo.id;
             const isUploadingFinal = uploadingFinalPhotoId === photo.id;
+            const displayImage = getQueueDisplayImage(
+              photo,
+              kind === "revision",
+            );
 
             return (
               <article className="editing-queue-item" key={photo.id}>
                 <a
                   className="queue-thumbnail-link"
-                  href={photo.imageUrl}
+                  href={displayImage.fullImageUrl}
                   target="_blank"
                   rel="noreferrer"
                 >
                   <img
-                    src={photo.imageUrl}
+                    src={displayImage.thumbnailUrl}
                     alt={photo.originalFilename}
+                    width={displayImage.width}
+                    height={displayImage.height}
                     loading="lazy"
+                    decoding="async"
                   />
                 </a>
 

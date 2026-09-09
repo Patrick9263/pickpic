@@ -21,3 +21,30 @@ export function getMissingVariantSources(
 
   return sources;
 }
+
+export interface QueueDisplayImage {
+  thumbnailUrl: string;
+  width: number | undefined;
+  height: number | undefined;
+  fullImageUrl: string;
+}
+
+/*
+ * A revision request is a final photo hearted again, so the queue must show
+ * the delivered final (what the viewer is reacting to), not the pre-edit
+ * proof — falls back to the proof if a final somehow isn't present yet.
+ */
+export function getQueueDisplayImage(
+  photo: PhotoRecord,
+  showFinal: boolean,
+): QueueDisplayImage {
+  const source = showFinal && photo.finalPhoto ? photo.finalPhoto : photo;
+  const thumbnail = source.variants.thumbnail;
+
+  return {
+    thumbnailUrl: thumbnail?.imageUrl ?? source.imageUrl,
+    width: thumbnail?.width,
+    height: thumbnail?.height,
+    fullImageUrl: source.imageUrl,
+  };
+}
