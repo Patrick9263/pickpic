@@ -476,6 +476,7 @@ describe("reclaiming a delivered RAW", () => {
   async function seedForSweep(request: {
     fulfilledAt: string;
     downloadedAt?: string;
+    releasedAt?: string;
   }): Promise<string> {
     await insertEvent({
       id: EVENT_ID,
@@ -495,6 +496,7 @@ describe("reclaiming a delivered RAW", () => {
       visitorToken: VISITOR_TOKEN,
       fulfilledAt: request.fulfilledAt,
       downloadedAt: request.downloadedAt,
+      releasedAt: request.releasedAt,
     });
 
     return storageKey;
@@ -548,6 +550,53 @@ describe("reclaiming a delivered RAW", () => {
   it("keeps an uncollected RAW while its TTL is still running", async () => {
     const storageKey = await seedForSweep({
       fulfilledAt: agoIso(13 * ONE_DAY_MS),
+    });
+
+    await adminRequest("GET", PHOTOS_PATH);
+
+    expect((await readRawPhotoState(PHOTO_ID, storageKey)).objectExists).toBe(
+      true,
+    );
+  });
+
+  /*
+   * The manual release (#219). Same seed as "keeps a collected RAW inside the
+   * grace period" above, minute-old download and all -- the only difference is
+   * the marker, so a pass here can only come from the marker being honoured
+   * ahead of RAW_DOWNLOAD_GRACE_MS.
+   */
+  it("reclaims a released RAW without waiting out the grace period", async () => {
+    const storageKey = await seedForSweep({
+      fulfilledAt: agoIso(2 * ONE_DAY_MS),
+      downloadedAt: agoIso(60 * 1000),
+      releasedAt: new Date().toISOString(),
+    });
+
+    await adminRequest("GET", PHOTOS_PATH);
+
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.objectExists).toBe(false);
+    expect(state.rawStorageKey).toBeNull();
+    expect(state.accountStorageBytes).toBe(0);
+  });
+
+  /*
+   * A release is a statement about the requests that existed when it was made.
+   * The second visitor here asked afterwards and has not collected anything, so
+   * the earlier release must not hand their bytes away underneath them.
+   */
+  it("keeps a released RAW once a later visitor has asked for it", async () => {
+    const storageKey = await seedForSweep({
+      fulfilledAt: agoIso(2 * ONE_DAY_MS),
+      downloadedAt: agoIso(2 * ONE_DAY_MS),
+      releasedAt: agoIso(ONE_DAY_MS),
+    });
+
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-second",
+      fulfilledAt: agoIso(60 * 1000),
     });
 
     await adminRequest("GET", PHOTOS_PATH);

@@ -1,0 +1,29 @@
+-- Migration number: 0022 	 2026-09-10T12:00:00.000Z
+--
+-- Lets the photographer end a delivered RAW's life early instead of waiting out
+-- RAW_DOWNLOAD_GRACE_MS (issue #219). Migration 0019 recorded the request, 0020
+-- the delivery, 0021 the collection; this records the photographer's decision
+-- that the collection is confirmed and the bytes can go now.
+--
+-- The grace period exists only because the download route cannot observe a
+-- *completed* transfer (see 0021). A requester who tells the photographer out
+-- of band that they have the file supplies exactly the fact the timer stands in
+-- for, so honouring it is better evidence than the timer, not a bypass of it.
+--
+-- Per *request*, not per photo, even though the RAW object is per photo (0020)
+-- and the reclaim frees it per photo. Two properties come free from that choice
+-- and neither does from a photos.raw_released_at column:
+--
+--   * A release is a statement about the requests that existed when it was
+--     made. A visitor who asks afterwards inserts a row with released_at NULL,
+--     which vetoes the reclaim on its own -- so a later requester cannot have
+--     the bytes pulled out from under them by a decision made before they
+--     appeared, with no invalidation code to forget to write.
+--   * It stays history. Which requests the photographer confirmed collected
+--     sits next to downloaded_at on the same row, rather than being a single
+--     photo-level flag that the next delivery would have to reset.
+--
+-- Deliberately no index. Every read of this column is inside the reclaim's
+-- existing GROUP BY over one photo or one event's photos, which is already
+-- driven by the photo_id join.
+ALTER TABLE raw_requests ADD COLUMN released_at TEXT;

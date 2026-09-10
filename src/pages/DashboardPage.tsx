@@ -30,6 +30,7 @@ import {
   collectFulfilledPhotoEntries,
   getMissingVariantSources,
 } from "./dashboardHelpers";
+import { describeRawRelease } from "../appHelpers";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -87,6 +88,11 @@ interface SetEventStatusResponse {
 
 interface SetEventRawRequestsEnabledResponse {
   event: EventRecord;
+}
+
+interface ReleaseCollectedRawsResponse {
+  releasedPhotoCount: number;
+  awaitingPhotoCount: number;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
@@ -215,6 +221,12 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
   const [updatingEventRawRequestsId, setUpdatingEventRawRequestsId] = useState<
     string | null
   >(null);
+  const [releasingEventRawsId, setReleasingEventRawsId] = useState<
+    string | null
+  >(null);
+  const [rawReleaseSummaries, setRawReleaseSummaries] = useState<
+    Record<string, string>
+  >({});
   const [updatingEventTitleId, setUpdatingEventTitleId] = useState<
     string | null
   >(null);
@@ -1030,6 +1042,50 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
     }
   }
 
+  async function handleReleaseCollectedRaws(
+    eventRecord: EventRecord,
+  ): Promise<void> {
+    setReleasingEventRawsId(eventRecord.id);
+    setError(null);
+    setRawReleaseSummaries((currentSummaries) => {
+      const nextSummaries = {
+        ...currentSummaries,
+      };
+
+      delete nextSummaries[eventRecord.id];
+
+      return nextSummaries;
+    });
+
+    try {
+      const response = await fetchJson<ReleaseCollectedRawsResponse>(
+        `/api/admin/events/${encodeURIComponent(eventRecord.id)}/raw-releases`,
+        {
+          method: "POST",
+        },
+      );
+
+      setRawReleaseSummaries((currentSummaries) => ({
+        ...currentSummaries,
+        [eventRecord.id]: describeRawRelease(response),
+      }));
+
+      /*
+       * The release route reclaims before it answers, so the freed bytes are
+       * already off the account by the time this runs.
+       */
+      void loadStorageUsage();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to release the collected RAW files.",
+      );
+    } finally {
+      setReleasingEventRawsId(null);
+    }
+  }
+
   async function handleRenameEvent(
     eventRecord: EventRecord,
     title: string,
@@ -1404,6 +1460,11 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
                       updatingEventStatusId={updatingEventStatusId}
                       handleSetEventStatus={handleSetEventStatus}
                       updatingEventRawRequestsId={updatingEventRawRequestsId}
+                      releasingEventRawsId={releasingEventRawsId}
+                      rawReleaseSummary={
+                        rawReleaseSummaries[eventRecord.id] ?? null
+                      }
+                      handleReleaseCollectedRaws={handleReleaseCollectedRaws}
                       handleSetEventRawRequestsEnabled={
                         handleSetEventRawRequestsEnabled
                       }

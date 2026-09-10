@@ -116,6 +116,8 @@ type EventCardProps = {
   variantRepairWarnings: Record<string, string>;
   updatingEventStatusId: string | null;
   updatingEventRawRequestsId: string | null;
+  releasingEventRawsId: string | null;
+  rawReleaseSummary: string | null;
   updatingEventTitleId: string | null;
   deletingEventId: string | null;
   clearingEventPhotosId: string | null;
@@ -131,6 +133,7 @@ type EventCardProps = {
     eventRecord: EventRecord,
     enabled: boolean,
   ): Promise<void>;
+  handleReleaseCollectedRaws(eventRecord: EventRecord): Promise<void>;
   handleRepairPhotoVariants(eventId: string, photo: PhotoRecord): Promise<void>;
   handleFinalPhotoSelection(
     eventId: string,
@@ -168,6 +171,9 @@ function EventCard(props: EventCardProps) {
     handleSetEventStatus,
     updatingEventRawRequestsId,
     handleSetEventRawRequestsEnabled,
+    releasingEventRawsId,
+    rawReleaseSummary,
+    handleReleaseCollectedRaws,
     handleSetPhotoWorkflowStatus,
     handlePhotoSelection,
     handleDeletePhoto,
@@ -385,6 +391,29 @@ function EventCard(props: EventCardProps) {
           />
           <span>Allow viewers to request original RAW files</span>
         </label>
+
+        {/*
+          Not gated on rawRequestsEnabled. Turning the toggle off does not
+          reclaim anything already delivered, so hiding this with it would
+          withdraw the control at exactly the moment storage is stuck.
+        */}
+        <div className="event-raw-release-control">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={releasingEventRawsId === eventRecord.id}
+            onClick={() => void handleReleaseCollectedRaws(eventRecord)}
+          >
+            {releasingEventRawsId === eventRecord.id
+              ? "Releasing…"
+              : "Release collected RAW files"}
+          </button>
+
+          <p className="event-raw-release-hint">
+            {rawReleaseSummary ??
+              "Frees the storage for every RAW in this event that all of its requesters have already downloaded, instead of waiting out the 24-hour grace period."}
+          </p>
+        </div>
 
         <div className="event-title-row">
           {isRenamingEvent ? (

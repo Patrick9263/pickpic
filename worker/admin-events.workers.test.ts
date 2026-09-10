@@ -1,5 +1,13 @@
+import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearTestData, insertEvent } from "./test-fixtures.ts";
+import {
+  clearTestData,
+  deliverRawPhoto,
+  insertEvent,
+  insertPhoto,
+  insertRawRequest,
+  readRawPhotoState,
+} from "./test-fixtures.ts";
 import {
   adminRequest,
   expectError,
@@ -243,5 +251,209 @@ describe("PUT /api/admin/events/:id/raw-requests", () => {
     );
 
     expectMethodNotAllowed(result);
+  });
+});
+
+/*
+ * The manual release (#219). These assert the eligibility rule rather than the
+ * reclaim itself -- gallery.workers.test.ts already drives the sweep -- because
+ * the rule is the whole safety argument: a RAW somebody is still waiting on
+ * must survive a release aimed at the event it sits in.
+ */
+describe("POST /api/admin/events/:id/raw-releases", () => {
+  const EVENT_ID = "event-raw-releases";
+  const SHARE_TOKEN = "share-raw-releases";
+  const RELEASES_PATH = `/api/admin/events/${EVENT_ID}/raw-releases`;
+
+  interface ReleaseBody {
+    releasedPhotoCount: number;
+    awaitingPhotoCount: number;
+  }
+
+  function agoIso(milliseconds: number): string {
+    return new Date(Date.now() - milliseconds).toISOString();
+  }
+
+  async function seedRequestedRaw(
+    photoId: string,
+    request: { fulfilledAt?: string; downloadedAt?: string },
+  ): Promise<string> {
+    await insertPhoto({ id: photoId, eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({ photoId, eventId: EVENT_ID });
+
+    await insertRawRequest({
+      photoId,
+      eventId: EVENT_ID,
+      visitorToken: `visitor-${photoId}`,
+      fulfilledAt: request.fulfilledAt,
+      downloadedAt: request.downloadedAt,
+    });
+
+    return storageKey;
+  }
+
+  beforeEach(async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      rawRequestsEnabled: true,
+    });
+  });
+
+  it("releases a collected RAW and frees its bytes in the same request", async () => {
+    const storageKey = await seedRequestedRaw("photo-collected", {
+      fulfilledAt: agoIso(60 * 60 * 1000),
+      downloadedAt: agoIso(60 * 1000),
+    });
+
+    const result = await adminRequest<ReleaseBody>("POST", RELEASES_PATH);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({
+      releasedPhotoCount: 1,
+      awaitingPhotoCount: 0,
+    });
+
+    const state = await readRawPhotoState("photo-collected", storageKey);
+    expect(state.objectExists).toBe(false);
+    expect(state.rawStorageKey).toBeNull();
+    expect(state.accountStorageBytes).toBe(0);
+  });
+
+  /*
+   * Releasing an undownloaded RAW would be "cancel this delivery", which is a
+   * different feature and deliberately not this one.
+   */
+  it("leaves a delivered but uncollected RAW alone", async () => {
+    const storageKey = await seedRequestedRaw("photo-uncollected", {
+      fulfilledAt: agoIso(60 * 60 * 1000),
+    });
+
+    const result = await adminRequest<ReleaseBody>("POST", RELEASES_PATH);
+
+    expect(result.body).toEqual({
+      releasedPhotoCount: 0,
+      awaitingPhotoCount: 1,
+    });
+    expect(
+      (await readRawPhotoState("photo-uncollected", storageKey)).objectExists,
+    ).toBe(true);
+  });
+
+  /*
+   * One release covers the shoot, and each photo is judged on its own
+   * requests -- the point of the per-event granularity.
+   */
+  it("releases only the collected photos in the event", async () => {
+    const collectedKey = await seedRequestedRaw("photo-both-collected", {
+      fulfilledAt: agoIso(60 * 60 * 1000),
+      downloadedAt: agoIso(60 * 1000),
+    });
+    const waitingKey = await seedRequestedRaw("photo-still-waiting", {
+      fulfilledAt: agoIso(60 * 60 * 1000),
+    });
+
+    const result = await adminRequest<ReleaseBody>("POST", RELEASES_PATH);
+
+    expect(result.body).toEqual({
+      releasedPhotoCount: 1,
+      awaitingPhotoCount: 1,
+    });
+    expect(
+      (await readRawPhotoState("photo-both-collected", collectedKey))
+        .objectExists,
+    ).toBe(false);
+    expect(
+      (await readRawPhotoState("photo-still-waiting", waitingKey)).objectExists,
+    ).toBe(true);
+  });
+
+  /*
+   * Two requesters, one collected. Reclaiming on the first download alone is
+   * exactly what migration 0021 says must not happen, and a per-event release
+   * is the easiest way to reintroduce it.
+   */
+  it("holds a photo whose second requester has not collected", async () => {
+    await insertPhoto({ id: "photo-two-visitors", eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: "photo-two-visitors",
+      eventId: EVENT_ID,
+    });
+
+    await insertRawRequest({
+      photoId: "photo-two-visitors",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-two-visitors-collected",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+      downloadedAt: agoIso(60 * 1000),
+    });
+    await insertRawRequest({
+      photoId: "photo-two-visitors",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-two-visitors-still-waiting",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+    });
+
+    const result = await adminRequest<ReleaseBody>("POST", RELEASES_PATH);
+
+    expect(result.body).toEqual({
+      releasedPhotoCount: 0,
+      awaitingPhotoCount: 1,
+    });
+    expect(
+      (await readRawPhotoState("photo-two-visitors", storageKey)).objectExists,
+    ).toBe(true);
+  });
+
+  /*
+   * The record of who collected what is the reason this is a marker rather
+   * than a row deletion. Freeing storage must not cost that history.
+   */
+  it("keeps the request rows and their downloaded_at", async () => {
+    await seedRequestedRaw("photo-history", {
+      fulfilledAt: agoIso(60 * 60 * 1000),
+      downloadedAt: agoIso(60 * 1000),
+    });
+
+    await adminRequest("POST", RELEASES_PATH);
+
+    const row = await env.DB.prepare(
+      `
+        SELECT downloaded_at AS downloadedAt, released_at AS releasedAt
+        FROM raw_requests
+        WHERE photo_id = ?
+      `,
+    )
+      .bind("photo-history")
+      .first<{ downloadedAt: string | null; releasedAt: string | null }>();
+
+    expect(row?.downloadedAt).not.toBeNull();
+    expect(row?.releasedAt).not.toBeNull();
+  });
+
+  it("reports nothing to do for an event with no delivered RAWs", async () => {
+    await insertPhoto({ id: "photo-no-raw", eventId: EVENT_ID });
+
+    const result = await adminRequest<ReleaseBody>("POST", RELEASES_PATH);
+
+    expect(result.body).toEqual({
+      releasedPhotoCount: 0,
+      awaitingPhotoCount: 0,
+    });
+  });
+
+  it("404s for an event that doesn't exist", async () => {
+    const result = await adminRequest(
+      "POST",
+      "/api/admin/events/no-such-event/raw-releases",
+    );
+
+    expectError(result, 404, "Event not found.");
+  });
+
+  it("405s on a non-POST method", async () => {
+    expectMethodNotAllowed(await adminRequest("GET", RELEASES_PATH));
   });
 });
