@@ -9,6 +9,11 @@
 # access and are out of scope (see issue #150) -- this only exercises the pure arithmetic and
 # threshold checks that decide what a run *would* do.
 #
+# CI runs this under bash 5; macOS ships bash 3.2, and `set -u` is stricter on the newer one --
+# `${unset_var//a/b}` aborts the script on bash 4.2+ but is silently empty on 3.2. A stub that reads
+# an unset FAKE_* variable therefore passes locally and fails only in CI (it already has once), so
+# default every one of them with `${VAR:-}` rather than trusting a local green run.
+#
 # run-review.sh hardcodes REPO=/Users/patrick/Dev/pickpic and STATE_DIR=/Users/patrick/.claude/pickpic-review
 # (by design -- it's a personal, locally-scheduled job, not general-purpose software). Exercising
 # the real script therefore means those exact paths have to exist; the CI workflow makes
@@ -64,10 +69,13 @@ setup() {
           # depth labels existed) and FAKE_GH_ISSUE_LABELS optionally supplies each one's labels as
           # "42=ready,model:sonnet;43=ready,effort:low". An issue absent from the map yields no
           # labels, which is the "unlabelled ready issue" case worth exercising in its own right.
-          local n entry
+          # The `:-` is load-bearing: run-review.sh runs under `set -u`, and a pattern substitution
+          # on an unset variable is an unbound-variable error on bash 4.2+ (though not on macOS's
+          # bash 3.2, which is why this passed locally and failed in CI).
+          local n e entry map="${FAKE_GH_ISSUE_LABELS:-}"
           for n in ${FAKE_GH_READY_ISSUES:-}; do
             entry=""
-            for e in ${FAKE_GH_ISSUE_LABELS//;/ }; do
+            for e in ${map//;/ }; do
               [[ "${e%%=*}" == "$n" ]] && entry="${e#*=}"
             done
             printf '%s %s\n' "$n" "$entry"
