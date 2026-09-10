@@ -88,14 +88,27 @@ async function driveRequest<T>(
   await waitOnExecutionContext(ctx);
 
   /*
-   * Every response in the admin/gallery API surface this harness targets is
-   * JSON (jsonResponse / Response.json). The catch only guards against a
-   * future route this harness reaches that isn't.
+   * Nearly every response in the admin/gallery API surface this harness
+   * targets is JSON (jsonResponse / Response.json), and the error shapes the
+   * assertions read certainly are. The RAW download route is the exception --
+   * it streams bytes -- and workerd logs a loud warning when a body is decoded
+   * as text against an octet-stream Content-Type, so the type is checked
+   * rather than parsed-and-caught. Callers reading a binary response use
+   * `result.response` directly.
    */
-  const parsedBody = (await response
-    .clone()
-    .json()
-    .catch(() => null)) as T;
+  const isJson = response.headers
+    .get("Content-Type")
+    ?.toLowerCase()
+    .includes("json");
+
+  const parsedBody = (
+    isJson
+      ? await response
+          .clone()
+          .json()
+          .catch(() => null)
+      : null
+  ) as T;
 
   return { response, status: response.status, body: parsedBody };
 }

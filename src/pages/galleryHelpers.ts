@@ -111,6 +111,41 @@ export function formatApproximateByteSize(byteSize: number): string {
   }).format(byteSize / 1_000_000_000)} GB`;
 }
 
+/*
+ * The RAW request button's four states, derived in one place because three
+ * call sites need them to agree: GalleryPage picks the HTTP method from this,
+ * and GalleryGrid and GalleryLightbox each render their own button from it.
+ *
+ * "collected" is the state that only exists because the RAW gets reclaimed
+ * after download (#209). Without it, a viewer whose file has been deleted
+ * again shows as "requested" -- indistinguishable from someone still waiting
+ * for a RAW that is on its way.
+ */
+export type RawRequestState = "none" | "waiting" | "ready" | "collected";
+
+export function getRawRequestState(
+  photo: Pick<
+    GalleryPhotoRecord,
+    "viewerRequestedRaw" | "viewerRawDownload" | "viewerRawDownloadedAt"
+  >,
+): RawRequestState {
+  /*
+   * Checked before viewerRequestedRaw, because a download that is still
+   * collectable outranks everything else the viewer could do with the button
+   * -- including during the grace window after they have already taken it
+   * once, when both this and viewerRawDownloadedAt are set.
+   */
+  if (photo.viewerRawDownload !== null) {
+    return "ready";
+  }
+
+  if (!photo.viewerRequestedRaw) {
+    return "none";
+  }
+
+  return photo.viewerRawDownloadedAt === null ? "waiting" : "collected";
+}
+
 export function createArchiveFilename(title: string): string {
   const sanitizedTitle = title
     .replace(/[^a-z0-9]+/gi, "-")

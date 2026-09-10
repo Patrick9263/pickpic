@@ -219,6 +219,14 @@ export async function insertRawRequest(seed: {
    * uploadRawPhoto stamps and what the iPad's pending count must exclude.
    */
   fulfilledAt?: string;
+
+  /*
+   * Seeds a request whose RAW has already been collected. Both this and
+   * fulfilledAt are passed as literal timestamps rather than offsets so a
+   * reclaim test can backdate them past RAW_DOWNLOAD_GRACE_MS or
+   * RAW_DELIVERY_TTL_MS without waiting or faking a clock.
+   */
+  downloadedAt?: string;
 }): Promise<void> {
   const visitorId = `visitor-${seed.eventId}-${seed.visitorToken}`;
   const now = new Date().toISOString();
@@ -246,13 +254,135 @@ export async function insertRawRequest(seed: {
         photo_id,
         visitor_id,
         created_at,
-        fulfilled_at
+        fulfilled_at,
+        downloaded_at
       )
-      VALUES (?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?)
     `,
   )
-    .bind(seed.photoId, visitorId, now, seed.fulfilledAt ?? null)
+    .bind(
+      seed.photoId,
+      visitorId,
+      now,
+      seed.fulfilledAt ?? null,
+      seed.downloadedAt ?? null,
+    )
     .run();
+}
+
+/*
+ * Puts a delivered RAW where uploadRawPhoto would have left one: bytes in R2,
+ * the six raw_* columns on the photo, and the account's running storage
+ * counter moved. Going through the real upload route instead would need a
+ * ~120 MB body and an admin principal, which is exactly the chain the header
+ * comment above warns against making a test depend on.
+ */
+export async function deliverRawPhoto(seed: {
+  photoId: string;
+  eventId: string;
+  originalFilename?: string;
+  uploadedAt?: string;
+  bytes?: Uint8Array;
+}): Promise<string> {
+  const bytes = seed.bytes ?? new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+  /*
+   * Unique per delivery, matching uploadRawPhoto's own uuid-based key. Test
+   * files share one R2 bucket for the whole run with no reset between them, so
+   * a deterministic key would let a previous test's object answer a later
+   * test's "was this reclaimed?" with a false yes.
+   */
+  const storageKey =
+    `events/${seed.eventId}/photos/${seed.photoId}` +
+    `/raw/${crypto.randomUUID()}.raw`;
+  const originalFilename = seed.originalFilename ?? `${seed.photoId}.ARW`;
+
+  await env.pickpic_photos.put(storageKey, bytes, {
+    httpMetadata: { contentType: "application/octet-stream" },
+  });
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `
+        UPDATE photos
+        SET
+          raw_storage_key = ?,
+          raw_original_filename = ?,
+          raw_content_type = 'application/octet-stream',
+          raw_byte_size = ?,
+          raw_sha256 = ?,
+          raw_uploaded_at = ?
+        WHERE id = ?
+      `,
+    ).bind(
+      storageKey,
+      originalFilename,
+      bytes.byteLength,
+      testSha256(seed.photoId),
+      seed.uploadedAt ?? new Date().toISOString(),
+      seed.photoId,
+    ),
+
+    env.DB.prepare(
+      `
+        UPDATE accounts
+        SET storage_bytes = storage_bytes + ?
+        WHERE id = ?
+      `,
+    ).bind(bytes.byteLength, BOOTSTRAP_ACCOUNT_ID),
+  ]);
+
+  return storageKey;
+}
+
+/*
+ * What the reclaim is asserted against: whether the object is still in R2 and
+ * whether the photo row still claims it. The two can only disagree if a
+ * reclaim half-failed, which is itself worth failing a test over.
+ */
+export async function readRawPhotoState(
+  photoId: string,
+  storageKey: string,
+): Promise<{
+  rawStorageKey: string | null;
+  rawByteSize: number | null;
+  rawUploadedAt: string | null;
+  objectExists: boolean;
+  accountStorageBytes: number;
+}> {
+  const photo = await env.DB.prepare(
+    `
+      SELECT
+        raw_storage_key AS rawStorageKey,
+        raw_byte_size AS rawByteSize,
+        raw_uploaded_at AS rawUploadedAt
+      FROM photos
+      WHERE id = ?
+    `,
+  )
+    .bind(photoId)
+    .first<{
+      rawStorageKey: string | null;
+      rawByteSize: number | null;
+      rawUploadedAt: string | null;
+    }>();
+
+  const account = await env.DB.prepare(
+    `
+      SELECT storage_bytes AS storageBytes
+      FROM accounts
+      WHERE id = ?
+    `,
+  )
+    .bind(BOOTSTRAP_ACCOUNT_ID)
+    .first<{ storageBytes: number }>();
+
+  return {
+    rawStorageKey: photo?.rawStorageKey ?? null,
+    rawByteSize: photo?.rawByteSize ?? null,
+    rawUploadedAt: photo?.rawUploadedAt ?? null,
+    objectExists: (await env.pickpic_photos.head(storageKey)) !== null,
+    accountStorageBytes: account?.storageBytes ?? 0,
+  };
 }
 
 /*

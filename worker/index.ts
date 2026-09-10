@@ -234,10 +234,37 @@ interface PublicGalleryEventRow extends Omit<
   rawRequestsEnabled: number;
 }
 
+/*
+ * What a gallery visitor is told about a RAW that is sitting in R2 waiting for
+ * them. Only ever populated for the visitor whose own raw_requests row was
+ * fulfilled -- it is built in getPublicGallery's mapper from a visitor-scoped
+ * query, never in toPhotoRecord, for the reason spelled out above
+ * AdminPhotoRecord.
+ *
+ * byteSize is here because the gallery is mobile-first and this is the one
+ * download in the product measured in hundreds of megabytes: "Download RAW"
+ * and "Download RAW (118 MB)" are different decisions on cellular.
+ */
+interface ViewerRawDownloadRecord {
+  filename: string;
+  byteSize: number;
+  expiresAt: string;
+}
+
 interface PublicPhotoRecord extends Omit<PhotoRecord, "comments"> {
   comments: PublicPhotoCommentRecord[];
   viewerHearted: boolean;
   viewerRequestedRaw: boolean;
+
+  /*
+   * Null both before the RAW arrives and after it has been reclaimed, which is
+   * why viewerRawDownloadedAt has to exist separately: without it those two
+   * states are indistinguishable and a collected download renders as "still
+   * waiting". No aggregate is exposed here -- a viewer sees their own request
+   * state and nothing about anyone else's (#206).
+   */
+  viewerRawDownload: ViewerRawDownloadRecord | null;
+  viewerRawDownloadedAt: string | null;
 }
 
 interface PublicGalleryResponse {
@@ -254,6 +281,10 @@ interface GalleryPhotoRow {
   eventTitle: string;
   shareToken: string;
   rawRequestsEnabled: number;
+  rawStorageKey: string | null;
+  rawOriginalFilename: string | null;
+  rawContentType: string | null;
+  rawByteSize: number | null;
 }
 
 interface VisitorRow {
@@ -270,6 +301,47 @@ interface HeartCountRow {
 
 interface RawRequestedPhotoRow {
   photoId: string;
+  fulfilledAt: string | null;
+  downloadedAt: string | null;
+  rawStorageKey: string | null;
+  rawOriginalFilename: string | null;
+  rawByteSize: number | null;
+}
+
+/*
+ * Everything the reclaim decision needs about one photo's RAW, folded into a
+ * single row so the check is one query rather than one per requester.
+ * liveRequestCount counts rows that still exist -- a visitor who withdraws is
+ * DELETEd outright (removeRawRequest), so "withdrew" and "never asked" are the
+ * same state here, which is exactly what makes the zero-requester case
+ * reclaimable immediately.
+ */
+/*
+ * The subset toViewerRawDownload needs, structural rather than nominal so the
+ * two callers can pass what they already have -- findPhotoInShare's row on the
+ * request path, and the visitor-scoped raw_requests join on the gallery path.
+ */
+interface RawDownloadSource {
+  originalFilename: string;
+  rawStorageKey: string | null;
+  rawOriginalFilename: string | null;
+  rawByteSize: number | null;
+}
+
+interface RawRequestOwnerRow {
+  visitorId: string;
+  fulfilledAt: string | null;
+}
+
+interface RawReclaimRow {
+  photoId: string;
+  accountId: string;
+  rawStorageKey: string;
+  rawByteSize: number | null;
+  liveRequestCount: number;
+  awaitingCount: number;
+  lastFulfilledAt: string | null;
+  lastDownloadedAt: string | null;
 }
 
 interface CommentRequestBody {
@@ -429,6 +501,33 @@ const RAW_CONTENT_TYPE = "application/octet-stream";
  * shows it verbatim.
  */
 const RAW_TOO_LARGE_MESSAGE = "The RAW file must be 128 MB or smaller.";
+
+/*
+ * The two halves of the reclaim policy (#209). A delivered RAW is the single
+ * largest thing this system stores -- 10-20x the proof JPEG -- so it is held
+ * only as long as somebody is plausibly still going to collect it, and neither
+ * half alone gives that.
+ *
+ * Reclaiming purely on "everyone downloaded it" is unbounded: one visitor who
+ * requests a RAW and never opens the gallery again pins ~120 MB against the
+ * account's cap forever. Reclaiming purely on a TTL wastes the common case,
+ * where the only requester collects within minutes and the bytes then sit for
+ * the full window. So both run, whichever fires first.
+ *
+ * The grace period exists because the download route cannot observe a
+ * *completed* transfer, only a started one (see migration 0021). A visitor
+ * whose download dies partway has until the next day to retry before the
+ * object goes; without it, a dropped connection on a phone would cost a fresh
+ * upload of the original from the iPad.
+ *
+ * The TTL is measured from the newest fulfilled_at rather than from
+ * raw_uploaded_at so that a visitor who requests a photo whose RAW is already
+ * sitting there gets a full window of their own, instead of inheriting the
+ * tail of someone else's.
+ */
+const RAW_DOWNLOAD_GRACE_MS = 24 * 60 * 60 * 1000;
+const RAW_DELIVERY_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
 const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 const CAPTURED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
@@ -2059,12 +2158,29 @@ async function createPhoto(
 }
 
 async function listPhotos(
+  env: TenantEnv,
+  ctx: ExecutionContext,
   scope: AccountScope,
   eventId: string,
 ): Promise<Response> {
   if (!(await eventExists(scope, eventId))) {
     return jsonResponse({ error: "Event not found." }, 404);
   }
+
+  /*
+   * The only heartbeat this project has. There is no cron (CLAUDE.md keeps
+   * scheduled work out of the deployment), so the TTL half of the RAW reclaim
+   * policy needs some request to advance it -- and the iPad polls this route
+   * for every event on each activation sweep, which is the one thing that
+   * keeps happening whether or not anybody opens the gallery. A shoot whose
+   * requester never came back is collected here.
+   *
+   * Off the response path: the poll already runs a correlated subquery per
+   * photo and should not also wait on R2 deletes.
+   */
+  ctx.waitUntil(
+    reclaimRawPhotos(scope.database, env, "p.event_id = ?", eventId),
+  );
 
   const result = await scope.database
     .prepare(
@@ -2367,6 +2483,7 @@ async function getPublicGallery(
   const visitorToken = getVisitorToken(request);
   const heartedPhotoIds = new Set<string>();
   const rawRequestedPhotoIds = new Set<string>();
+  const rawRequestsByPhotoId = new Map<string, RawRequestedPhotoRow>();
   const rawRequestsEnabled = Boolean(event.rawRequestsEnabled);
 
   if (visitorToken) {
@@ -2389,12 +2506,27 @@ async function getPublicGallery(
     }
 
     if (rawRequestsEnabled) {
+      /*
+       * Joined to photos rather than read off the main photo query, so every
+       * RAW field stays behind this visitor-scoped WHERE. The main query feeds
+       * toPhotoRecord, which builds the admin dashboard's records too -- a RAW
+       * column added there would reach every visitor for every photo, which is
+       * the trap migration 0020's own comment left standing for #209.
+       */
       const rawRequestResult = await env.DB.prepare(
         `
-          SELECT r.photo_id AS photoId
+          SELECT
+            r.photo_id AS photoId,
+            r.fulfilled_at AS fulfilledAt,
+            r.downloaded_at AS downloadedAt,
+            p.raw_storage_key AS rawStorageKey,
+            p.raw_original_filename AS rawOriginalFilename,
+            p.raw_byte_size AS rawByteSize
           FROM raw_requests r
           INNER JOIN gallery_visitors v
             ON v.id = r.visitor_id
+          INNER JOIN photos p
+            ON p.id = r.photo_id
           WHERE
             v.event_id = ?
             AND v.visitor_token = ?
@@ -2405,6 +2537,7 @@ async function getPublicGallery(
 
       for (const row of rawRequestResult.results) {
         rawRequestedPhotoIds.add(row.photoId);
+        rawRequestsByPhotoId.set(row.photoId, row);
       }
     }
   }
@@ -2418,6 +2551,7 @@ async function getPublicGallery(
     },
     photos: photoResult.results.map((row) => {
       const commentRows = commentsByPhoto.get(row.id) ?? [];
+      const rawRequest = rawRequestsByPhotoId.get(row.id);
       const photo = toPhotoRecord(
         row,
         imageBasePath,
@@ -2442,6 +2576,16 @@ async function getPublicGallery(
 
         viewerHearted: heartedPhotoIds.has(photo.id),
         viewerRequestedRaw: rawRequestedPhotoIds.has(photo.id),
+        viewerRawDownload: toViewerRawDownload(
+          {
+            originalFilename: photo.originalFilename,
+            rawStorageKey: rawRequest?.rawStorageKey ?? null,
+            rawOriginalFilename: rawRequest?.rawOriginalFilename ?? null,
+            rawByteSize: rawRequest?.rawByteSize ?? null,
+          },
+          rawRequest?.fulfilledAt ?? null,
+        ),
+        viewerRawDownloadedAt: rawRequest?.downloadedAt ?? null,
       };
     }),
   };
@@ -2479,6 +2623,10 @@ async function findPhotoInShare(
         p.storage_key AS storageKey,
         p.final_storage_key AS finalStorageKey,
         p.original_filename AS originalFilename,
+        p.raw_storage_key AS rawStorageKey,
+        p.raw_original_filename AS rawOriginalFilename,
+        p.raw_content_type AS rawContentType,
+        p.raw_byte_size AS rawByteSize,
         e.title AS eventTitle,
         e.share_token AS shareToken,
         e.raw_requests_enabled AS rawRequestsEnabled
@@ -2707,28 +2855,88 @@ async function addRawRequest(
     );
   }
 
+  /*
+   * A request for a photo whose RAW is already sitting in R2 is fulfilled the
+   * moment it is made -- the same object serves every requester (migration
+   * 0020), so there is nothing for the iPad to send.
+   *
+   * Getting this wrong is not merely wasteful. Before #209 the insert always
+   * left fulfilled_at NULL, which meant a second visitor's request was never
+   * stamped, listPhotos reported a pending count that could never reach zero,
+   * and -- once there is a download route to reach -- that visitor would have
+   * waited forever for a file that was already there.
+   */
+  const fulfilledAt = galleryPhoto.rawStorageKey === null ? null : now;
+
   const insertResult = await env.DB.prepare(
     `
       INSERT INTO raw_requests (
         photo_id,
         visitor_id,
-        created_at
+        created_at,
+        fulfilled_at
       )
-      VALUES (?, ?, ?)
+      VALUES (?1, ?2, ?3, ?4)
       ON CONFLICT(photo_id, visitor_id)
-      DO NOTHING
+      DO UPDATE SET
+        created_at = ?3,
+        fulfilled_at = NULL,
+        downloaded_at = NULL,
+        notification_status = 'pending',
+        notification_attempt_count = 0,
+        notification_last_attempt_at = NULL,
+        notification_sent_at = NULL,
+        notification_last_error = NULL
+      WHERE
+        raw_requests.fulfilled_at IS NOT NULL
+        AND ?4 IS NULL
     `,
   )
-    .bind(photoId, visitor.id, now)
+    .bind(photoId, visitor.id, now, fulfilledAt)
     .run();
 
-  if (insertResult.meta.changes === 1) {
+  /*
+   * The DO UPDATE arm is "ask again", and it fires in exactly one situation:
+   * this visitor already had a fulfilled request and the RAW behind it has
+   * since been reclaimed. Resetting the notification lease alongside it is
+   * deliberate -- notifyRawRequested returns early on a 'sent' row, so without
+   * the reset the photographer would never hear that the file is wanted a
+   * second time. A plain duplicate request (row present, still waiting) hits
+   * neither arm and changes nothing.
+   */
+  if (insertResult.meta.changes === 1 && fulfilledAt === null) {
     scheduleRawRequestNotification(env.DB, env, ctx, photoId, visitor.id);
   }
 
   return jsonResponse({
     requested: true,
+    rawDownload: toViewerRawDownload(galleryPhoto, fulfilledAt),
+    rawDownloadedAt: null,
   });
+}
+
+/*
+ * Note the expiry is derived from *this* visitor's fulfilled_at, while the
+ * reclaim actually runs off the newest fulfilled_at across every live request
+ * for the photo. That can only ever be later, so the date shown to a viewer is
+ * a floor rather than a promise -- and it stays that way on purpose, because
+ * the true expiry would leak the existence of another visitor's request.
+ */
+function toViewerRawDownload(
+  source: RawDownloadSource,
+  fulfilledAt: string | null,
+): ViewerRawDownloadRecord | null {
+  if (source.rawStorageKey === null || fulfilledAt === null) {
+    return null;
+  }
+
+  return {
+    filename: source.rawOriginalFilename ?? source.originalFilename,
+    byteSize: source.rawByteSize ?? 0,
+    expiresAt: new Date(
+      Date.parse(fulfilledAt) + RAW_DELIVERY_TTL_MS,
+    ).toISOString(),
+  };
 }
 
 async function removeRawRequest(
@@ -2774,9 +2982,190 @@ async function removeRawRequest(
       .run();
   }
 
+  await reclaimRawPhotos(env.DB, env, "p.id = ?", photoId);
+
   return jsonResponse({
     requested: false,
   });
+}
+
+/*
+ * The reclaim predicate (#209), kept as a pure function over one row so the
+ * policy is readable in one place and testable without R2.
+ *
+ * Order matters. The TTL is checked first because it is unconditional -- it is
+ * the half of the policy that bounds the abandoned-requester case, and a
+ * requester who never returns would otherwise keep awaitingCount above zero
+ * indefinitely and veto every later branch.
+ */
+function isRawReclaimable(row: RawReclaimRow, now: number): boolean {
+  if (
+    row.lastFulfilledAt !== null &&
+    now - Date.parse(row.lastFulfilledAt) >= RAW_DELIVERY_TTL_MS
+  ) {
+    return true;
+  }
+
+  /*
+   * Somebody is still owed these bytes: either their request has not been
+   * stamped fulfilled yet, or it has and they have not collected. Either way
+   * the object stays.
+   */
+  if (row.awaitingCount > 0) {
+    return false;
+  }
+
+  /*
+   * No live requests at all. Two ways to get here, both meaning nobody is
+   * waiting: every requester withdrew after the RAW landed (removeRawRequest
+   * DELETEs the row, which is what would otherwise orphan the object), or a
+   * RAW was uploaded for a photo whose only request was withdrawn mid-upload.
+   * No grace period -- a grace period protects an interrupted download, and
+   * there is nobody here to have interrupted one.
+   */
+  if (row.liveRequestCount === 0) {
+    return true;
+  }
+
+  return (
+    row.lastDownloadedAt !== null &&
+    now - Date.parse(row.lastDownloadedAt) >= RAW_DOWNLOAD_GRACE_MS
+  );
+}
+
+/*
+ * Deletes every delivered RAW matching `photoFilter` that the policy above no
+ * longer justifies keeping, and gives the account its bytes back.
+ *
+ * This runs from public, unauthenticated request paths (the download route and
+ * removeRawRequest) as well as from the iPad's poll, so it cannot take an
+ * AccountScope -- there is no principal on the public side to build one from.
+ * It reads account_id off the photo row instead and adjusts that account
+ * directly. That is safe because the caller never chooses the account: the
+ * filter narrows to one photo or one event, and the row itself names which
+ * account's counter to move. It also keeps the aggregate off the whole table.
+ *
+ * There is no cron in this project (deliberately -- see CLAUDE.md on
+ * migrations and workflows), so the TTL half of the policy only advances when
+ * one of those callers runs. The iPad's per-event photo poll is the reliable
+ * one: a gallery nobody ever opens again still has its abandoned requests
+ * swept, because the photographer's app keeps asking about the event.
+ *
+ * Failure here is deliberately silent. A reclaim that half-fails leaves bytes
+ * in R2 that the database no longer counts, which the dashboard's
+ * refreshAccountStorageBytes reconciliation is already built to absorb; taking
+ * a viewer's download or the iPad's poll down over it would be far worse.
+ */
+async function reclaimRawPhotos(
+  database: D1Database,
+  env: TenantEnv,
+  photoFilter: string,
+  filterValue: string,
+): Promise<void> {
+  let candidates: D1Result<RawReclaimRow>;
+
+  try {
+    candidates = await database
+      .prepare(
+        `
+        SELECT
+          p.id AS photoId,
+          p.account_id AS accountId,
+          p.raw_storage_key AS rawStorageKey,
+          p.raw_byte_size AS rawByteSize,
+          COUNT(r.photo_id) AS liveRequestCount,
+          COALESCE(
+            SUM(
+              CASE
+                /*
+                 * The r.photo_id test is load-bearing, not defensive. This is
+                 * a LEFT JOIN, so a photo with no requests at all still
+                 * produces one row with every r.* column NULL -- and without
+                 * this guard "r.fulfilled_at IS NULL" is true for that
+                 * phantom row, making a RAW nobody is waiting for look like a
+                 * RAW somebody is waiting for, forever.
+                 */
+                WHEN
+                  r.photo_id IS NOT NULL
+                  AND (r.fulfilled_at IS NULL OR r.downloaded_at IS NULL)
+                THEN 1
+                ELSE 0
+              END
+            ),
+            0
+          ) AS awaitingCount,
+          MAX(r.fulfilled_at) AS lastFulfilledAt,
+          MAX(r.downloaded_at) AS lastDownloadedAt
+        FROM photos p
+        LEFT JOIN raw_requests r
+          ON r.photo_id = p.id
+        WHERE
+          p.raw_storage_key IS NOT NULL
+          AND ${photoFilter}
+        GROUP BY p.id
+      `,
+      )
+      .bind(filterValue)
+      .all<RawReclaimRow>();
+  } catch (error) {
+    console.error("Unable to look for reclaimable RAW files:", error);
+    return;
+  }
+
+  const now = Date.now();
+
+  for (const row of candidates.results) {
+    if (!isRawReclaimable(row, now)) {
+      continue;
+    }
+
+    try {
+      await env.pickpic_photos.delete(row.rawStorageKey);
+    } catch (error) {
+      console.error("Unable to delete a reclaimed RAW file:", error);
+      continue;
+    }
+
+    try {
+      /*
+       * Clearing raw_uploaded_at alongside the rest is what lets a later
+       * request re-arm the pipeline: with no raw_storage_key, addRawRequest
+       * leaves fulfilled_at NULL, listPhotos counts the request as pending
+       * again, and the iPad re-uploads. The raw_requests rows themselves stay
+       * -- they are the history the gallery reads to tell a visitor they
+       * already collected this one.
+       */
+      await database.batch([
+        database
+          .prepare(
+            `
+            UPDATE photos
+            SET
+              raw_storage_key = NULL,
+              raw_original_filename = NULL,
+              raw_content_type = NULL,
+              raw_byte_size = NULL,
+              raw_sha256 = NULL,
+              raw_uploaded_at = NULL
+            WHERE id = ?
+          `,
+          )
+          .bind(row.photoId),
+
+        database
+          .prepare(
+            `
+            UPDATE accounts
+            SET storage_bytes = MAX(0, storage_bytes - ?)
+            WHERE id = ?
+          `,
+          )
+          .bind(row.rawByteSize ?? 0, row.accountId),
+      ]);
+    } catch (error) {
+      console.error("Unable to record a reclaimed RAW file:", error);
+    }
+  }
 }
 
 async function clearPhotoHearts(
@@ -3415,6 +3804,153 @@ async function getGalleryFinalPhotoImage(
   }
 
   return getStoredJpeg(env, photo.finalStorageKey);
+}
+
+/*
+ * Hands the delivered RAW to the one visitor who asked for it (#209).
+ *
+ * Scoping is findPhotoInShare -- the same choke point every other public photo
+ * read goes through, so an archived or draft event takes the download away
+ * with the gallery -- plus a second check that this visitor token owns a
+ * *fulfilled* raw_requests row for this photo. A share link alone is not
+ * enough: the RAW is the photographer's original, delivered to one named
+ * requester, not gallery content.
+ *
+ * This deliberately does NOT go through getStoredJpeg. That helper sends
+ * `public, max-age=31536000, immutable`, which on this route would be actively
+ * dangerous in two directions at once: Cloudflare's edge would keep serving a
+ * private original for a year after the reclaim deleted it from R2, and the
+ * reclaim itself -- the entire point of #209 -- would free storage while the
+ * bytes stayed retrievable. The hazard is already flagged in the comment above
+ * findPhotoInShare for the image routes; here it is disqualifying.
+ */
+async function getGalleryRawPhoto(
+  request: Request,
+  env: Env,
+  shareToken: string,
+  photoId: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  const photo = await findPhotoInShare(env, shareToken, photoId);
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  /*
+   * One message for "never delivered", "already reclaimed" and "not yours",
+   * and one status code, so the route cannot be used to probe which photos
+   * other visitors have RAWs waiting for.
+   */
+  const unavailable = jsonResponse(
+    { error: "This RAW file is not available to download." },
+    404,
+  );
+
+  if (!photo.rawRequestsEnabled || photo.rawStorageKey === null) {
+    return unavailable;
+  }
+
+  const rawRequest = await env.DB.prepare(
+    `
+      SELECT
+        r.visitor_id AS visitorId,
+        r.fulfilled_at AS fulfilledAt
+      FROM raw_requests r
+      INNER JOIN gallery_visitors v
+        ON v.id = r.visitor_id
+      WHERE
+        r.photo_id = ?
+        AND v.event_id = ?
+        AND v.visitor_token = ?
+    `,
+  )
+    .bind(photoId, photo.eventId, visitorToken)
+    .first<RawRequestOwnerRow>();
+
+  if (!rawRequest || rawRequest.fulfilledAt === null) {
+    return unavailable;
+  }
+
+  const object = await env.pickpic_photos.get(photo.rawStorageKey);
+
+  if (!object) {
+    return unavailable;
+  }
+
+  /*
+   * Stamped before the body streams, because a started download is all this
+   * route can observe -- see migration 0021. RAW_DOWNLOAD_GRACE_MS is what
+   * makes that honest: the stamp starts a clock, it does not free the bytes.
+   */
+  const downloadedAt = new Date().toISOString();
+
+  try {
+    await env.DB.prepare(
+      `
+        UPDATE raw_requests
+        SET downloaded_at = ?
+        WHERE
+          photo_id = ?
+          AND visitor_id = ?
+      `,
+    )
+      .bind(downloadedAt, photoId, rawRequest.visitorId)
+      .run();
+  } catch (error) {
+    /*
+     * Serve it anyway. Losing the stamp costs storage-days -- the TTL still
+     * collects it -- while refusing the download costs the visitor the file
+     * they were promised.
+     */
+    console.error("Unable to record a RAW file download:", error);
+  }
+
+  /*
+   * Deliberately no reclaim sweep here, for two reasons that reinforce each
+   * other. It could not fire anyway -- the stamp written a few lines above
+   * restarts the grace clock for this very photo, so the predicate is always
+   * false immediately after a download. And if it ever could fire, it would
+   * be deleting the R2 object this response is still streaming from. The
+   * bytes are collected by the sweep on the iPad's photo poll instead.
+   */
+
+  const filename = photo.rawOriginalFilename ?? photo.originalFilename;
+  const headers = new Headers();
+
+  headers.set("Content-Type", photo.rawContentType ?? RAW_CONTENT_TYPE);
+  headers.set("Content-Length", object.size.toString());
+
+  /*
+   * Both forms, because the ASCII fallback is what a browser uses when it
+   * cannot parse filename*, and a RAW name can carry anything the camera or
+   * the photographer put in it. Quotes and backslashes are stripped rather
+   * than escaped so the fallback cannot break out of its own quoting.
+   */
+  headers.set(
+    "Content-Disposition",
+    `attachment; filename="${filename.replace(/["\\]/g, "")}"; ` +
+      `filename*=UTF-8''${encodeURIComponent(filename)}`,
+  );
+
+  headers.set("Cache-Control", "private, no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+
+  /*
+   * No ETag and no Accept-Ranges. A range request would let a client resume a
+   * transfer we have already stamped as downloaded, across a reclaim that may
+   * have removed the object underneath it; a retry of the whole file is both
+   * simpler to reason about and what the grace period is sized for.
+   */
+  return new Response(object.body, {
+    status: 200,
+    headers,
+  });
 }
 
 async function uploadFinalPhoto(
@@ -4467,7 +5003,7 @@ async function handleAdminRequest(
     }
 
     if (request.method === "GET") {
-      return listPhotos(scope, eventId);
+      return listPhotos(env, ctx, scope, eventId);
     }
 
     if (request.method === "DELETE") {
@@ -4790,6 +5326,33 @@ async function routeRequest(
     }
 
     return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  /*
+   * Sits beside the request route rather than up with the image routes,
+   * because it is the other half of the same feature and shares its scoping:
+   * both narrow through findPhotoInShare and then match the visitor token
+   * against gallery_visitors/raw_requests. It is a GET, so the
+   * requireOpenGallery guard above does not apply to it -- deliberately. A
+   * `completed` gallery stops taking new requests while its existing
+   * downloads stay collectable, which is what the gallery banner already
+   * promises viewers.
+   */
+  const galleryRawDownloadMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/photos\/([^/]+)\/raw$/,
+  );
+
+  if (galleryRawDownloadMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    return getGalleryRawPhoto(
+      request,
+      env,
+      decodeURIComponent(galleryRawDownloadMatch[1]),
+      decodeURIComponent(galleryRawDownloadMatch[2]),
+    );
   }
 
   const galleryCommentMatch = url.pathname.match(

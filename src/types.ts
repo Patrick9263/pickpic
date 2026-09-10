@@ -56,10 +56,30 @@ export interface PhotoRecord {
   comments: PhotoCommentRecord[];
 }
 
+/*
+ * The delivered RAW waiting for this viewer. Mirrors the worker's
+ * ViewerRawDownloadRecord: only ever present for the visitor whose own request
+ * was fulfilled, and never carrying anything about other visitors' requests.
+ */
+export interface ViewerRawDownloadRecord {
+  filename: string;
+  byteSize: number;
+  expiresAt: string;
+}
+
 export interface GalleryPhotoRecord extends Omit<PhotoRecord, "comments"> {
   comments: ViewerPhotoCommentRecord[];
   viewerHearted: boolean;
   viewerRequestedRaw: boolean;
+
+  /*
+   * These two together are what give the request button its third and fourth
+   * states. viewerRawDownload is null both before the RAW arrives and after it
+   * has been reclaimed; viewerRawDownloadedAt is what tells those two apart,
+   * so a collected download does not render as "still waiting".
+   */
+  viewerRawDownload: ViewerRawDownloadRecord | null;
+  viewerRawDownloadedAt: string | null;
 }
 
 export interface UploadBatchProgress {
@@ -98,9 +118,11 @@ export interface EventStorageRecord {
   photoCount: number;
   finalCount: number;
   variantCount: number;
+  rawCount: number;
   proofBytes: number;
   finalBytes: number;
   variantBytes: number;
+  rawBytes: number;
   totalBytes: number;
 }
 
@@ -128,9 +150,11 @@ export interface StorageUsageRecord {
   photoCount: number;
   finalCount: number;
   variantCount: number;
+  rawCount: number;
   proofBytes: number;
   finalBytes: number;
   variantBytes: number;
+  rawBytes: number;
   totalBytes: number;
   plan: string;
   capBytes: number;

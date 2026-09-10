@@ -8,6 +8,7 @@ import {
   formatDayGroupLabel,
   getDefaultPreviewUrl,
   getOrCreateVisitorToken,
+  getRawRequestState,
   readStorageItem,
   sanitizeDownloadFilename,
   selectPhotosById,
@@ -88,6 +89,75 @@ describe("createArchiveFilename", () => {
 
   it("falls back to a generic name for an empty/unsafe title", () => {
     expect(createArchiveFilename("***")).toBe("pickpic-gallery-photos.zip");
+  });
+});
+
+describe("getRawRequestState", () => {
+  const download = {
+    filename: "DSC01015.ARW",
+    byteSize: 118_000_000,
+    expiresAt: "2026-02-15T00:00:00.000Z",
+  };
+
+  it("reports none before the viewer has asked", () => {
+    expect(
+      getRawRequestState({
+        viewerRequestedRaw: false,
+        viewerRawDownload: null,
+        viewerRawDownloadedAt: null,
+      }),
+    ).toBe("none");
+  });
+
+  it("reports waiting while the iPad has yet to deliver", () => {
+    expect(
+      getRawRequestState({
+        viewerRequestedRaw: true,
+        viewerRawDownload: null,
+        viewerRawDownloadedAt: null,
+      }),
+    ).toBe("waiting");
+  });
+
+  it("reports ready once the RAW is available to this viewer", () => {
+    expect(
+      getRawRequestState({
+        viewerRequestedRaw: true,
+        viewerRawDownload: download,
+        viewerRawDownloadedAt: null,
+      }),
+    ).toBe("ready");
+  });
+
+  /*
+   * Inside the grace period a collected RAW is still there, and offering the
+   * download again is the whole reason that period exists -- a transfer that
+   * died at 80% must not leave the viewer looking at "Downloaded".
+   */
+  it("stays ready during the grace period after a download", () => {
+    expect(
+      getRawRequestState({
+        viewerRequestedRaw: true,
+        viewerRawDownload: download,
+        viewerRawDownloadedAt: "2026-02-02T00:00:00.000Z",
+      }),
+    ).toBe("ready");
+  });
+
+  /*
+   * The state that only exists because of the reclaim. Without
+   * viewerRawDownloadedAt this is indistinguishable from "waiting", and a
+   * viewer whose file was deleted would sit watching a request that had in
+   * fact already been satisfied.
+   */
+  it("reports collected once the downloaded RAW has been reclaimed", () => {
+    expect(
+      getRawRequestState({
+        viewerRequestedRaw: true,
+        viewerRawDownload: null,
+        viewerRawDownloadedAt: "2026-02-02T00:00:00.000Z",
+      }),
+    ).toBe("collected");
   });
 });
 

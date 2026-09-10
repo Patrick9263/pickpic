@@ -59,6 +59,8 @@ export function makeGalleryPhoto(
     comments: [],
     viewerHearted: false,
     viewerRequestedRaw: false,
+    viewerRawDownload: null,
+    viewerRawDownloadedAt: null,
     ...overrides,
   };
 }
@@ -70,9 +72,11 @@ export function makeStorageUsage(
     photoCount: 0,
     finalCount: 0,
     variantCount: 0,
+    rawCount: 0,
     proofBytes: 0,
     finalBytes: 0,
     variantBytes: 0,
+    rawBytes: 0,
     totalBytes: 0,
     plan: "free",
     capBytes: 5_000_000_000,

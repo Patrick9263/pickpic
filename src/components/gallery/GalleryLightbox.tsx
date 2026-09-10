@@ -11,6 +11,10 @@ import {
 import type { GalleryPhotoRecord, ViewerPhotoCommentRecord } from "../../types";
 import type { PhotoVersion } from "./types";
 import GalleryComments from "./GalleryComments";
+import {
+  formatApproximateByteSize,
+  getRawRequestState,
+} from "../../pages/galleryHelpers";
 
 interface PointerStart {
   pointerId: number;
@@ -49,6 +53,8 @@ type GalleryLightboxProps = {
   toggleHeart: (photo: GalleryPhotoRecord) => Promise<void>;
   togglingRawRequestPhotoId: string | null;
   toggleRawRequest: (photo: GalleryPhotoRecord) => Promise<void>;
+  downloadingRawPhotoId: string | null;
+  downloadRawPhoto: (photo: GalleryPhotoRecord) => Promise<void>;
   rawRequestsEnabled: boolean;
   commentActionId: string | null;
   commentText: string;
@@ -75,6 +81,8 @@ function GalleryLightbox({
   toggleHeart,
   togglingRawRequestPhotoId,
   toggleRawRequest,
+  downloadingRawPhotoId,
+  downloadRawPhoto,
   rawRequestsEnabled,
   commentActionId,
   commentText,
@@ -298,6 +306,7 @@ function GalleryLightbox({
     setImageRetryCount((currentCount) => currentCount + 1);
   }
 
+  const rawRequestState = getRawRequestState(selectedPhoto);
   const displayedImageUrl = selectedImageUrl ?? selectedPhoto.imageUrl;
   const requestedImageUrl =
     imageRetryCount > 0
@@ -526,24 +535,53 @@ function GalleryLightbox({
             {rawRequestsEnabled && (
               <button
                 className={`lightbox-raw-request-button ${
-                  selectedPhoto.viewerRequestedRaw
-                    ? "lightbox-raw-request-button-active"
-                    : ""
+                  rawRequestState === "none"
+                    ? ""
+                    : `lightbox-raw-request-button-${rawRequestState}`
                 }`}
                 type="button"
                 disabled={
-                  !interactionsEnabled ||
-                  togglingRawRequestPhotoId === selectedPhoto.id
+                  rawRequestState === "ready"
+                    ? downloadingRawPhotoId === selectedPhoto.id
+                    : !interactionsEnabled ||
+                      togglingRawRequestPhotoId === selectedPhoto.id
                 }
-                onClick={() => void toggleRawRequest(selectedPhoto)}
-                aria-pressed={selectedPhoto.viewerRequestedRaw}
+                onClick={() =>
+                  void (rawRequestState === "ready"
+                    ? downloadRawPhoto(selectedPhoto)
+                    : toggleRawRequest(selectedPhoto))
+                }
+                aria-pressed={
+                  rawRequestState === "ready"
+                    ? undefined
+                    : selectedPhoto.viewerRequestedRaw
+                }
               >
                 <span>
-                  {!interactionsEnabled
-                    ? "Gallery closed"
-                    : selectedPhoto.viewerRequestedRaw
-                      ? "RAW file requested"
-                      : "Request RAW file"}
+                  {rawRequestState === "ready"
+                    ? downloadingRawPhotoId === selectedPhoto.id
+                      ? "Downloading…"
+                      : /*
+                         * The size is in the label rather than a tooltip
+                         * because the gallery is mobile-first: on cellular,
+                         * "Download RAW" and "Download RAW (118 MB)" are
+                         * different decisions, and there is no hover to
+                         * reveal it on a phone.
+                         */
+                        `${
+                          selectedPhoto.viewerRawDownloadedAt === null
+                            ? "Download RAW"
+                            : "Download RAW again"
+                        } (${formatApproximateByteSize(
+                          selectedPhoto.viewerRawDownload?.byteSize ?? 0,
+                        )})`
+                    : !interactionsEnabled
+                      ? "Gallery closed"
+                      : rawRequestState === "waiting"
+                        ? "RAW file requested"
+                        : rawRequestState === "collected"
+                          ? "Downloaded · Request again"
+                          : "Request RAW file"}
                 </span>
               </button>
             )}
