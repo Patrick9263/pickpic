@@ -129,16 +129,68 @@ Three LaunchAgents run [scripts/review/run-review.sh](scripts/review/run-review.
 the early morning America/New_York — inside the hours Patrick is asleep, so an expensive run never
 competes with his own interactive use.
 
-| Agent                               | When           | What it does                             |
-| ----------------------------------- | -------------- | ---------------------------------------- |
-| `com.pickpic.claude-review-daily`   | Mon–Thu 6:10am | Rotating single-surface analysis         |
-| `com.pickpic.claude-review-surplus` | Fri–Sat 6:10am | Ready-issue implementation, else a sweep |
-| `com.pickpic.claude-review-trends`  | Sun 7:10am     | Audits the job's own effectiveness       |
+| Agent                               | When           | What it does                                            |
+| ----------------------------------- | -------------- | ------------------------------------------------------- |
+| `com.pickpic.claude-review-daily`   | Mon–Thu 6:10am | Ready-issue implementation, then analysis if affordable |
+| `com.pickpic.claude-review-surplus` | Fri–Sat 6:10am | The same, with a larger implementation budget           |
+| `com.pickpic.claude-review-trends`  | Sun 7:10am     | Audits the job's own effectiveness                      |
 
-The daily pass rotates — Mon `worker/`, Tue `src/`, Wed `ipad/`, Thu cross-cutting — so each run
+**Every run implements before it analyses.** If any `ready` issues are queued and affordable, the run
+works through them — one PR each — and only then considers analysis. Implementation used to be
+surplus-only, which meant the four weekday runs could do nothing but add to a backlog they were
+simultaneously standing down because of.
+
+The analysis pass rotates — Mon `worker/`, Tue `src/`, Wed `ipad/`, Thu cross-cutting — so each run
 goes deep on one area rather than skimming everything and resurfacing yesterday's findings. Analysis
 runs post a single GitHub issue labelled `review-report` with numbered suggestions; **they never
 file individual issues**, because triage is Patrick's decision.
+
+### An issue declares the depth it deserves
+
+Two label namespaces size the work: **`model:opus|sonnet|haiku`** and
+**`effort:max|high|medium|low`**. They are a recommendation carrier, not permission — **`ready` is
+still the only thing that admits an issue to unattended work**, and depth labels alone make nothing
+runnable.
+
+Labels rather than a field in the issue body, deliberately: `pickpic` is public, so anyone can open
+an issue and write anything in its body, but only collaborators can apply a label and the label set
+is closed — nothing attacker-controlled gets near a `--model` flag. They are also two taps during
+phone triage, and exact to parse where grepping free-form markdown is not.
+
+**The budget ladder is a ceiling over these, not a replacement for them:**
+
+- A declaration at or below what the morning affords is honoured verbatim. This is the cost saving —
+  a `haiku`/`low` issue costs that even on a morning the ladder would have spent Opus/`max`.
+- A declaration above it is **deferred to a richer morning, never downgraded**, because a bad
+  unattended PR costs more review time than an absent one. Deferral is per-issue: the queue is
+  oldest-first, and one expensive issue at the front must not block the cheap ones behind it.
+- Absent or contradictory labels fall back to **`sonnet`/`medium`, not to the ladder.** Depth labels
+  can never be guaranteed present — an outside contributor cannot apply labels at all — and
+  defaulting to the ladder would mean a forgotten label draws Opus/`max` on a Monday, which is the
+  exact overspend the namespaces exist to prevent.
+
+Asking for Opus is therefore not free: on a busy week it can mean the issue waits days. An issue
+whose labels the budget never reaches will **starve silently**, so the Sunday trends run is told to
+name any issue that defers repeatedly and never runs.
+
+**How much one run may take on is measured in weight, not issue count** — resolved effort rank
+(`low` 1, `medium` 2, `high` 3, `max` 4) against a budget of **4 on a weekday and 10 on surplus**. So
+a weekday morning buys four trivial fixes, or two mediums, or one large plus one small, or a single
+`max` — but never two `high`-or-above PRs at once. An issue that does not fit is left in place for
+the next run rather than dropped. A flat count would have treated four one-line fixes and four
+cross-file rewrites as the same morning's work.
+
+Weekday runs additionally need weekly under 70% before they will implement at all; above that the
+queue is left alone and the run goes straight to the cheaper analysis.
+
+### Implementing does not end the run
+
+After the implement loop, the run carries on into analysis **if all four gates hold**: session under
+50% (implementing is the longest thing this job does, and the follow-on must not eat the window
+Patrick wakes up to), the weekly ladder is not `skip`, unread findings are at most 15, and fewer than
+6 PRs are open — recounted, since this run just added to that number. Otherwise it exits after
+implementing. Most ready issues are small, and a run that spent twenty minutes on a one-line fix has
+the whole morning left.
 
 **`pickpic` is a public repo, so a security-tagged finding never reaches its public issue tracker.**
 Every finding in `scripts/review/prompts/daily.md`'s schema carries an optional `**Category**`
@@ -152,23 +204,38 @@ tagging individual findings correctly, since an incidental security finding can 
 scan (that's exactly how #124's closed-gallery bug came out of a `cross-cutting` run). This was
 added after #124 and #127 published working descriptions of real, if short-lived, vulnerabilities —
 both were fixed within a day, but a public repo shouldn't carry that window at all. **Known
-simplification:** the untriaged-backlog count, sweep sizing, and the `surplus` mode's ready-issue
-auto-implement path all stay scoped to the public repo only — a privately-filed security issue
-won't be auto-implemented and doesn't count against the 15-issue backlog ceiling.
+simplification:** the backlog count, sweep sizing, and the ready-issue auto-implement path all stay
+scoped to the public repo only — a privately-filed security issue won't be auto-implemented and
+doesn't count against the backlog ceiling.
 
-The surplus runs exist to spend a weekly budget window that would otherwise expire unused. If any
-open issues carry the `ready` label, that run implements them oldest-first, one PR per issue, until
-either the queue is empty or open PRs reach 6 (see the next paragraph) — so a Friday with an empty PR
-queue can clear most of a `ready` backlog in one run instead of trickling out one issue a week.
-Otherwise it runs a **sweep** — several independent single-surface scans, then a consolidation pass
+The surplus runs exist to spend a weekly budget window that would otherwise expire unused. They
+implement `ready` issues oldest-first, one PR per issue, until the weight budget is spent, the queue
+is empty, or open PRs reach 6 (see the next paragraph) — so a Friday with an empty PR queue can clear
+most of a `ready` backlog in one run instead of trickling out one issue a week. With nothing to
+implement they run a **sweep** — several independent single-surface scans, then a consolidation pass
 that merges, deduplicates and ranks them into one report of at most 12 entries. Only apply `ready` to
 work you are comfortable being done unattended.
 
 **A sweep fills the backlog toward a target, rather than running a fixed number of scans.** The
 weekly window expires Sunday whether or not it was used, so an empty backlog with budget left is
-exactly when it is worth stocking up. The target is 24 open untriaged issues under 45% weekly, 15
-under 60%, and 9 above that; scans run at roughly three surviving findings each, so the count is
-`(target − untriaged) / 3`. An empty backlog on a good week gets 8 scans; a full one gets 1.
+exactly when it is worth stocking up. The target is 12 unread findings under 45% weekly, 8 under 60%,
+and 5 above that; scans run at roughly three surviving findings each, so the count is
+`(target − unread) / 3`. An empty backlog on a good week gets 4 scans; a full one gets 1. Those
+targets came down from 24/15/9 when the backlog metric was narrowed (see below) — subtracting a
+smaller number from the old targets would have scanned _harder_, which is the opposite of the point.
+They are estimated from a single week's data, and `prompts/trends.md` is told to revisit them once
+three weeks of rows exist.
+
+**The backlog metric counts unread job output, not every unlabelled issue.** This tracker is mostly a
+hand-written feature backlog: issues Patrick files himself to track work that needs doing. Those are
+triaged by definition — he wrote them — yet under the old rule they counted as untriaged, pushed the
+total past the ceiling, and stood the weekday run down with `skip-backlog-full`. His own planning was
+switching off the job meant to help with it, which is a category error: the ceiling exists to
+throttle the _generator_, not the person it reports to. So the measure is now the findings still
+sitting unread inside open `review-report` issues. It rises when a report is posted and falls when
+Patrick reads one and closes it. An issue filed _from_ a report stops counting, correctly — filing it
+**is** the triage decision. A useful side effect: the metric no longer looks at label shape at all,
+so adding `model:`/`effort:` labels cannot accidentally make an issue read as triaged.
 
 Sweep targets are finer-grained than the weekday rotation's four (`worker-auth-and-tenancy`,
 `src-gallery`, `ipad-pipeline`, `accessibility`, and so on — the full list is in
@@ -204,10 +271,10 @@ is dirty — uncommitted work is worth more than the automatic restore.
 **Four rules each unattended implementation pass must never break** — it never pushes to `main`,
 merges, or deploys (a `main` push deploys all three workers); it never authors a D1 migration; each
 pass touches only its own assigned issue, never opportunistically fixing other things it notices
-(the surplus job itself may now work through several `ready` issues in one run, but each becomes its
-own isolated pass and its own PR — see "Scheduled review job" above); and it refuses to touch
-`project.pbxproj` while Xcode is running, because of trap 4 below. It also stands down if more than
-15 untriaged issues are already open, since a suggestion generator that outruns triage capacity just
+(a run may work through several `ready` issues, but each becomes its own isolated pass and its own PR
+— see "Scheduled review job" above); and it refuses to touch `project.pbxproj` while Xcode is
+running, because of trap 4 below. Analysis also stands down if more than 15 unread findings are
+already waiting in open reports, since a suggestion generator that outruns triage capacity just
 creates work.
 
 **The Sunday trends run audits the job rather than the code**, posting an issue labelled
@@ -220,8 +287,12 @@ told explicitly **not to recommend threshold changes with under three weeks of d
 confident recommendation drawn from six rows will be acted on and is worse than none.
 
 Every run appends one row to `~/.claude/pickpic-review/metrics.csv` — timestamp, mode, kind, target,
-outcome, model, effort, scan count, findings, before/after budget for both windows, duration, and
-the issue it posted. It is written from an `EXIT` trap, so **skips and failures are recorded as
+outcome, model, effort, scan count, findings, before/after budget for both windows, duration, the
+issue it posted, and an `implemented` column holding one entry per issue attempted
+(`<issue>:<pr>:<model>/<effort>`, or `:no-pr:`, `:failed:`, or `:deferred-budget`). That is a
+separate column from the posted issue because a run can now do both. New columns are appended at the
+end and readers count from the front, so rows written before a column existed simply end early —
+`render_bar_chart` relies on this, and so does the trends prompt. It is written from an `EXIT` trap, so **skips and failures are recorded as
 faithfully as successes**: how often the job stands down and why is the more interesting trend than
 what a successful run costs. Budget figures are integer percentages, so a single row is coarse, but
 across weeks it answers whether sweeps are getting more expensive and how much of the weekly window

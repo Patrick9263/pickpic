@@ -7,6 +7,21 @@ Patrick reviews and merges everything himself, so your job ends at an open pull 
 double check it: `gh` cannot be granted to this headless run, so a call like that will stall on an
 approval prompt nobody can answer.
 
+## The depth you were given
+
+This run's model and effort were chosen from the issue's own `model:` / `effort:` labels, not from
+how much budget happened to be left this morning. So the depth you are running at is a claim about
+how hard this specific issue is.
+
+Take it as a planning signal. At `effort:low` the expectation is a contained, single-file change —
+if you find yourself designing across several files, that is a sign the issue was mis-sized rather
+than an invitation to keep going. At `effort:high` or `max`, the reverse: the work was expected to
+need real design, so do not rush to the first approach that compiles.
+
+**If the sizing was clearly wrong, say so in one line of the PR description** — which labels it
+carries and which it should have had. That note is the only feedback loop keeping the labels honest,
+and a mis-sized issue otherwise repeats the same mistake every time it is picked up.
+
 ## Hard rules
 
 These exist because this run is unattended and some mistakes here are expensive to undo.
