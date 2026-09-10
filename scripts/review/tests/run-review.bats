@@ -9,6 +9,11 @@
 # access and are out of scope (see issue #150) -- this only exercises the pure arithmetic and
 # threshold checks that decide what a run *would* do.
 #
+# CI runs this under bash 5; macOS ships bash 3.2, and `set -u` is stricter on the newer one --
+# `${unset_var//a/b}` aborts the script on bash 4.2+ but is silently empty on 3.2. A stub that reads
+# an unset FAKE_* variable therefore passes locally and fails only in CI (it already has once), so
+# default every one of them with `${VAR:-}` rather than trusting a local green run.
+#
 # run-review.sh hardcodes REPO=/Users/patrick/Dev/pickpic and STATE_DIR=/Users/patrick/.claude/pickpic-review
 # (by design -- it's a personal, locally-scheduled job, not general-purpose software). Exercising
 # the real script therefore means those exact paths have to exist; the CI workflow makes
@@ -26,7 +31,8 @@ setup() {
 
   # Fresh slate for every test -- these drive the gh() stub below.
   unset FAKE_GH_READY_ISSUES FAKE_GH_PR_BODIES FAKE_GH_OPEN_PR_COUNT FAKE_GH_UNTRIAGED_COUNT \
-    FAKE_GH_REPORT_ISSUE_NUMBERS FAKE_GH_REPORT_BODY FAKE_GH_ISSUE_HISTORY
+    FAKE_GH_REPORT_ISSUE_NUMBERS FAKE_GH_REPORT_BODY FAKE_GH_ISSUE_HISTORY \
+    FAKE_GH_ISSUE_LABELS FAKE_UNREAD_FINDINGS
   export FAKE_SESSION_PCT=10
 
   # Stands in for the real `claude` binary. The script only ever calls `claude -p "/usage"` before
@@ -58,9 +64,30 @@ setup() {
         ;;
       "issue list")
         if [[ "$*" == *"--label ready"* ]]; then
-          printf '%s' "${FAKE_GH_READY_ISSUES:-}"
+          # The real query returns "<number> <comma-joined labels>" per line, so depth resolution
+          # costs no extra API call. FAKE_GH_READY_ISSUES stays a bare number list (as it was before
+          # depth labels existed) and FAKE_GH_ISSUE_LABELS optionally supplies each one's labels as
+          # "42=ready,model:sonnet;43=ready,effort:low". An issue absent from the map yields no
+          # labels, which is the "unlabelled ready issue" case worth exercising in its own right.
+          # The `:-` is load-bearing: run-review.sh runs under `set -u`, and a pattern substitution
+          # on an unset variable is an unbound-variable error on bash 4.2+ (though not on macOS's
+          # bash 3.2, which is why this passed locally and failed in CI).
+          local n e entry map="${FAKE_GH_ISSUE_LABELS:-}"
+          for n in ${FAKE_GH_READY_ISSUES:-}; do
+            entry=""
+            for e in ${map//;/ }; do
+              [[ "${e%%=*}" == "$n" ]] && entry="${e#*=}"
+            done
+            printf '%s %s\n' "$n" "$entry"
+          done
         elif [[ "$*" == *"--label review-report"* ]]; then
-          printf '%s' "${FAKE_GH_REPORT_ISSUE_NUMBERS:-}"
+          # One synthetic report holds the whole unread-findings count unless a test names its own
+          # report issues (the trends suite does).
+          if [[ -n "${FAKE_GH_REPORT_ISSUE_NUMBERS:-}" ]]; then
+            printf '%s' "$FAKE_GH_REPORT_ISSUE_NUMBERS"
+          elif [[ "${FAKE_UNREAD_FINDINGS:-0}" -gt 0 ]]; then
+            printf '777'
+          fi
         elif [[ "$*" == *"--state all"* ]]; then
           printf '%s' "${FAKE_GH_ISSUE_HISTORY:-}"
         else
@@ -68,7 +95,17 @@ setup() {
         fi
         ;;
       "issue view")
-        printf '%s' "${FAKE_GH_REPORT_BODY:-}"
+        # The backlog metric counts "### <n>" headings in an open report's body, so synthesize a
+        # body with exactly FAKE_UNREAD_FINDINGS of them unless the test supplied its own.
+        if [[ -n "${FAKE_GH_REPORT_BODY:-}" ]]; then
+          printf '%s' "$FAKE_GH_REPORT_BODY"
+        else
+          local i=1
+          while [[ "$i" -le "${FAKE_UNREAD_FINDINGS:-0}" ]]; do
+            printf '### %s. finding\n' "$i"
+            i=$(( i + 1 ))
+          done
+        fi
         ;;
       "issue create")
         printf 'https://github.com/Patrick9263/pickpic/issues/9999'
@@ -86,21 +123,21 @@ setup() {
 # ---------------------------------------------------------------------------
 
 @test "decide_depth: below 45% weekly picks deep/opus/max" {
-  FAKE_WEEK_PCT=30 FAKE_GH_UNTRIAGED_COUNT=0 run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"depth=deep"* ]]
   [[ "$output" == *"kind=analyse target=test-area model=opus effort=max"* ]]
 }
 
 @test "decide_depth: 45-64% weekly picks standard/opus/high" {
-  FAKE_WEEK_PCT=50 FAKE_GH_UNTRIAGED_COUNT=0 run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  FAKE_WEEK_PCT=50 FAKE_UNREAD_FINDINGS=0 run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"depth=standard"* ]]
   [[ "$output" == *"kind=analyse target=test-area model=opus effort=high"* ]]
 }
 
 @test "decide_depth: 65-79% weekly picks light/sonnet/medium" {
-  FAKE_WEEK_PCT=70 FAKE_GH_UNTRIAGED_COUNT=0 run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  FAKE_WEEK_PCT=70 FAKE_UNREAD_FINDINGS=0 run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"depth=light"* ]]
   [[ "$output" == *"kind=analyse target=test-area model=sonnet effort=medium"* ]]
@@ -122,10 +159,21 @@ setup() {
   [[ "$output" == *"SKIP: surplus run needs weekly < 60%, currently 65%"* ]]
 }
 
-@test "any mode stands down once the untriaged backlog exceeds 15" {
-  FAKE_WEEK_PCT=30 FAKE_GH_UNTRIAGED_COUNT=16 run bash "$REVIEW_SCRIPT" daily --dry-run
+@test "any mode stands down once unread findings exceed 15" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=16 run bash "$REVIEW_SCRIPT" daily --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"SKIP: 16 untriaged open issues already -- not adding more"* ]]
+  [[ "$output" == *"SKIP: 16 unread findings already waiting -- not adding more"* ]]
+}
+
+# The backlog metric counts unread findings inside open reports, NOT hand-filed issues. Patrick's own
+# feature backlog used to push this count past the ceiling and stand the weekday run down -- his own
+# planning switching off the job meant to help with it.
+@test "the backlog gate ignores hand-filed unlabelled issues" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_UNTRIAGED_COUNT=40 \
+    run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"backlog: 0 unread finding(s)"* ]]
+  [[ "$output" != *"SKIP"* ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -133,24 +181,23 @@ setup() {
 # ---------------------------------------------------------------------------
 
 @test "sweep sizing: empty backlog on a good week books the full deficit" {
-  # target 24 (week < 45%), untriaged 0 -> deficit 24 -> ceil(24/3) = 8 scans
-  FAKE_WEEK_PCT=30 FAKE_GH_UNTRIAGED_COUNT=0 run bash "$REVIEW_SCRIPT" surplus --dry-run
+  # target 12 (week < 45%), unread 0 -> deficit 12 -> ceil(12/3) = 4 scans
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 run bash "$REVIEW_SCRIPT" surplus --dry-run
   [ "$status" -eq 0 ]
-  [[ "$output" == *"kind=sweep target=sweep of 8 areas"* ]]
+  [[ "$output" == *"kind=sweep target=sweep of 4 areas"* ]]
 }
 
 @test "sweep sizing: a near-full backlog only books one scan" {
-  # target 15 (45% <= week < 60%), untriaged 12 -> deficit 3 -> ceil(3/3) = 1 scan
-  FAKE_WEEK_PCT=50 FAKE_GH_UNTRIAGED_COUNT=12 run bash "$REVIEW_SCRIPT" surplus --dry-run
+  # target 8 (45% <= week < 60%), unread 6 -> deficit 2, clamped to the 3 floor -> ceil(3/3) = 1 scan
+  FAKE_WEEK_PCT=50 FAKE_UNREAD_FINDINGS=6 run bash "$REVIEW_SCRIPT" surplus --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"kind=sweep target=sweep of 1 areas"* ]]
 }
 
 @test "sweep sizing: a backlog already at target is clamped to the 3-entry floor" {
-  # target 15 (45% <= week < 60%), untriaged 15 (right at the 15-untriaged backlog ceiling, so the
-  # run isn't stood down entirely) -> raw deficit 0, clamped to 3 -> ceil(3/3) = 1 scan.
+  # target 8 (45% <= week < 60%), unread 8 -> raw deficit 0, clamped to 3 -> ceil(3/3) = 1 scan.
   # Without the floor this would round down to 0 scans and the sweep would find nothing.
-  FAKE_WEEK_PCT=50 FAKE_GH_UNTRIAGED_COUNT=15 run bash "$REVIEW_SCRIPT" surplus --dry-run
+  FAKE_WEEK_PCT=50 FAKE_UNREAD_FINDINGS=8 run bash "$REVIEW_SCRIPT" surplus --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"kind=sweep target=sweep of 1 areas"* ]]
 }
@@ -160,7 +207,7 @@ setup() {
 # ---------------------------------------------------------------------------
 
 @test "surplus mode implements a ready issue that has no open PR yet" {
-  FAKE_WEEK_PCT=30 FAKE_GH_UNTRIAGED_COUNT=0 FAKE_GH_READY_ISSUES=42 FAKE_GH_OPEN_PR_COUNT=1 \
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 FAKE_GH_OPEN_PR_COUNT=1 \
     run bash "$REVIEW_SCRIPT" surplus --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"kind=implement queue=42"* ]]
@@ -168,12 +215,183 @@ setup() {
 }
 
 @test "surplus mode skips a ready issue that already has an open PR, falling back to a sweep" {
-  FAKE_WEEK_PCT=30 FAKE_GH_UNTRIAGED_COUNT=0 FAKE_GH_READY_ISSUES=42 \
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
     FAKE_GH_PR_BODIES="Closes #42" FAKE_GH_OPEN_PR_COUNT=1 \
     run bash "$REVIEW_SCRIPT" surplus --dry-run
   [ "$status" -eq 0 ]
   [[ "$output" == *"skipping ready issue #42 -- already has an open PR"* ]]
-  [[ "$output" == *"kind=sweep target=sweep of 8 areas"* ]]
+  [[ "$output" == *"kind=sweep target=sweep of 4 areas"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Weekday (daily) implementation
+#
+# Implementing used to be surplus-only, so the Mon-Thu runs could only ever add to the backlog they
+# were standing down because of.
+# ---------------------------------------------------------------------------
+
+@test "daily mode implements a ready issue instead of analysing" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:sonnet,effort:medium" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kind=implement queue=42"* ]]
+  [[ "$output" != *"kind=analyse"* ]]
+}
+
+@test "daily mode with an empty ready queue still analyses" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kind=analyse target=test-area"* ]]
+}
+
+# Implementation is the expensive path; above 70% weekly the weekday run leaves the queue alone and
+# falls through to the cheaper analysis rather than starting work it may not finish.
+@test "daily mode does not implement above 70% weekly" {
+  FAKE_WEEK_PCT=72 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"not implementing this run: weekly at 72%"* ]]
+  [[ "$output" == *"kind=analyse target=test-area"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# resolve_issue_depth(): the ladder as a ceiling, and the labels that size an issue
+# ---------------------------------------------------------------------------
+
+# The cost saving. A cheap issue costs cheap even on a morning the ladder would have spent opus/max.
+@test "a below-ladder declaration is honoured verbatim" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:haiku,effort:low" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"depths=haiku/low"* ]]
+  [[ "$output" == *"ceiling=opus/max"* ]]
+}
+
+# The other half of the point: a hard issue waits for a morning that can afford it rather than being
+# attempted by a weaker model, because a bad unattended PR costs more review time than an absent one.
+#
+# 65% is the one window where this is observable: the ladder is light (sonnet/medium) but the
+# weekday implement gate (<70%) is still open. Surplus cannot be used here -- it stands down
+# entirely at 60%, so the run would never reach the queue.
+@test "an above-ladder declaration defers instead of being downgraded" {
+  FAKE_WEEK_PCT=65 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:opus,effort:max" \
+    run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"deferring ready issue #42"* ]]
+  # Nothing left to implement, so the run falls through to analysis rather than doing nothing.
+  [[ "$output" == *"kind=analyse target=test-area"* ]]
+}
+
+# Oldest-first ordering means an expensive issue sits at the front of the queue; it must not block
+# the cheap ones behind it, so deferral is per-issue rather than a break out of the loop.
+@test "a deferred issue does not block a cheaper one behind it" {
+  FAKE_WEEK_PCT=50 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES="42 43" \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:opus,effort:max;43=ready,model:sonnet,effort:low" \
+    run bash "$REVIEW_SCRIPT" surplus --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"deferring ready issue #42"* ]]
+  [[ "$output" == *"kind=implement queue=43"* ]]
+}
+
+# Depth labels cannot be guaranteed present -- an outside contributor on this public repo cannot
+# apply labels at all. Defaulting to the ladder would mean a forgotten label draws opus/max.
+@test "an unlabelled ready issue defaults to sonnet/medium, not to the ladder" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no model: label"* ]]
+  [[ "$output" == *"depths=sonnet/medium"* ]]
+}
+
+@test "an unrecognised label value reads as absent rather than reaching the CLI" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:gpt,effort:turbo" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"depths=sonnet/medium"* ]]
+  [[ "$output" != *"gpt"* ]]
+}
+
+# Two labels from one namespace is a triage slip with no sensible resolution, so it is treated as
+# absent rather than guessed at.
+@test "contradictory labels from one namespace fall back to the default" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:opus,model:haiku" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"contradictory model: labels"* ]]
+  [[ "$output" == *"depths=sonnet/medium"* ]]
+}
+
+# Each namespace defaults independently, so `model:` alone is a valid, meaningful declaration.
+@test "one namespace alone still cheapens that half" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:haiku" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"depths=haiku/medium"* ]]
+}
+
+# The default is itself ladder-capped: on a light day it must not run richer than the day affords.
+@test "the sonnet/medium default is still capped by a light ladder" {
+  FAKE_WEEK_PCT=50 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"depths=sonnet/medium"* ]]
+  [[ "$output" == *"ceiling=opus/high"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# The weight budget: how much a single run may take on
+#
+# Measured in resolved effort rank (low 1, medium 2, high 3, max 4) rather than issue count, so that
+# four one-line fixes and four cross-file rewrites are not treated as the same morning's work.
+# ---------------------------------------------------------------------------
+
+@test "weight budget: four low-effort issues all fit a weekday run" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES="41 42 43 44" \
+    FAKE_GH_ISSUE_LABELS="41=ready,effort:low;42=ready,effort:low;43=ready,effort:low;44=ready,effort:low" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kind=implement queue=41 42 43 44"* ]]
+  [[ "$output" == *"weight=4/4"* ]]
+}
+
+# The "large PRs don't pile up" property, stated directly: 3 + 3 exceeds the weekday budget of 4.
+@test "weight budget: two high-effort issues do not fit one weekday run" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES="42 43" \
+    FAKE_GH_ISSUE_LABELS="42=ready,effort:high;43=ready,effort:high" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kind=implement queue=42"* ]]
+  [[ "$output" == *"issue #43 does not fit this run's remaining weight"* ]]
+}
+
+# An oversized issue is left in place for the next run, not dropped -- so a smaller one behind it can
+# still take the remaining weight without the queue losing its oldest-first order across runs.
+@test "weight budget: an oversized issue is passed over, not dropped" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES="42 43 44" \
+    FAKE_GH_ISSUE_LABELS="42=ready,effort:high;43=ready,effort:max;44=ready,effort:low" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"issue #43 does not fit this run's remaining weight"* ]]
+  [[ "$output" == *"kind=implement queue=42 44"* ]]
+  [[ "$output" == *"weight=4/4"* ]]
+}
+
+# Draining is surplus's whole purpose, so it carries a larger budget than a weekday run.
+@test "weight budget: surplus admits more than a weekday run" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES="42 43" \
+    FAKE_GH_ISSUE_LABELS="42=ready,effort:high;43=ready,effort:high" \
+    run bash "$REVIEW_SCRIPT" surplus --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kind=implement queue=42 43"* ]]
+  [[ "$output" == *"weight=6/10"* ]]
 }
 
 # ---------------------------------------------------------------------------

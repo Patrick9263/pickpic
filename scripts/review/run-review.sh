@@ -62,15 +62,21 @@ log() {
   printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG_FILE"
 }
 
-# Invokes claude headlessly against $MODEL/$EFFORT/$ALLOWED, which callers set as globals before
-# calling this. Defined this early so the surplus implement loop -- which runs well before the
-# generic "Run" section further down -- can call it too.
+# Invokes claude headlessly against $ALLOWED, which callers set as a global before calling this.
+# Defined this early so the implement loop -- which runs well before the generic "Run" section
+# further down -- can call it too.
+#
+# $3/$4 optionally override the model and effort for a single call, defaulting to the run-level
+# $MODEL/$EFFORT the depth ladder chose. The implement loop passes per-issue values (see
+# resolve_issue_depth) rather than assigning to the globals, because those globals are also what
+# record_metrics writes to the run's `model`/`effort` columns -- mutating them per issue would make
+# every row report whatever the last issue in the queue happened to use.
 run_claude() {
-  local prompt="$1" outfile="$2" rc
+  local prompt="$1" outfile="$2" model="${3:-$MODEL}" effort="${4:-$EFFORT}" rc
   set +e
   claude -p "$prompt" \
-    --model "$MODEL" \
-    --effort "$EFFORT" \
+    --model "$model" \
+    --effort "$effort" \
     --allowedTools "${ALLOWED[@]}" \
     >"$outfile" 2>>"$LOG_FILE"
   rc=$?
@@ -106,19 +112,24 @@ SCANS_DONE=0
 FINDINGS_COUNT=""
 ISSUE_REF=""
 ISSUE_REF_PRIVATE=""
+# Per-issue implement outcomes, kept separate from ISSUE_REF (the posted report) because a run can
+# now do both -- see the follow-on analysis block.
+IMPLEMENTED_REF=""
+DID_IMPLEMENT="no"
 
 record_metrics() {
   [[ "$DRY_RUN" == "yes" ]] && return 0
   if [[ ! -f "$METRICS_FILE" ]]; then
-    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private\n' >"$METRICS_FILE"
+    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private,implemented\n' >"$METRICS_FILE"
   fi
   local wb="${BUDGET_BEFORE_WEEK:-}" wa="${BUDGET_AFTER_WEEK:-}" wd=""
   [[ -n "$wb" && -n "$wa" && "$wa" != "?" ]] && wd=$(( wa - wb ))
-  printf '%s,%s,%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$MODE" "${RUN_KIND:-}" "${TARGET:-}" "$RUN_OUTCOME" \
     "${MODEL:-}" "${EFFORT:-}" "$SCANS_DONE" "$FINDINGS_COUNT" \
     "$wb" "$wa" "$wd" "${BUDGET_BEFORE_SESSION:-}" "${BUDGET_AFTER_SESSION:-}" \
-    "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" "$ISSUE_REF_PRIVATE" >>"$METRICS_FILE"
+    "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" "$ISSUE_REF_PRIVATE" \
+    "${IMPLEMENTED_REF:-}" >>"$METRICS_FILE"
 }
 
 # Renders one row per recorded run for a numeric column of $METRICS_FILE, as a small ASCII gauge:
@@ -284,6 +295,90 @@ decide_depth() {
   else
     DEPTH="light"; MODEL="sonnet"; EFFORT="medium"
   fi
+}
+
+# --- Per-issue depth -------------------------------------------------------
+#
+# The ladder above sizes the *run* from the budget. That is the wrong unit for implementation work:
+# a one-line constant change and a cross-file refactor are not worth the same model, and which one
+# gets Opus/max is currently decided by nothing more than what the weekly window happened to read
+# that morning.
+#
+# So an issue declares what it deserves, through two label namespaces -- `model:opus|sonnet|haiku`
+# and `effort:max|high|medium|low`. Labels rather than a field in the issue body because pickpic is
+# a PUBLIC repo: anyone can open an issue and write anything in its body, but only collaborators can
+# apply a label, and the label set is closed. Nothing attacker-controlled gets near a `--model`
+# flag. (Validated against the allowlists below regardless -- belt and braces, since the cost of
+# being wrong is executing an arbitrary string as a CLI argument.)
+#
+# These are also the allowlist: the matcher below only ever considers these exact names, so a
+# typo'd or invented label reads as absent rather than being passed through to the CLI.
+model_rank() { case "$1" in haiku) echo 1 ;; sonnet) echo 2 ;; opus) echo 3 ;; *) echo 0 ;; esac; }
+effort_rank() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; max) echo 4 ;; *) echo 0 ;; esac; }
+
+# Resolves one issue's labels against the run's ladder, setting ISSUE_MODEL / ISSUE_EFFORT /
+# ISSUE_DEFER / ISSUE_WEIGHT / ISSUE_DEPTH_NOTE. Pure -- no I/O, no globals mutated beyond those --
+# so it is exercisable from bats without a live run.
+#
+# $1 is the issue's comma-separated label list.
+#
+# The ladder is a CEILING, not an instruction:
+#
+#   - A declaration at or below what the day affords is honoured verbatim. This is the whole cost
+#     saving: a `sonnet`/`low` issue costs that on a morning the ladder would have spent Opus/max on.
+#   - A declaration ABOVE it defers. The issue is left for a richer morning rather than attempted by
+#     a weaker model, because a bad unattended PR costs more review time than an absent one -- which
+#     is the same reasoning prompts/surplus.md already applies to an ambiguous issue.
+#   - Absent or unparseable labels fall back to sonnet/medium, NOT to the ladder. Depth labels can
+#     never be guaranteed present: an outside contributor on a public repo cannot apply labels at
+#     all, and a hand-filed issue only carries them if Patrick remembered. Defaulting to the ladder
+#     would mean a forgotten label draws Opus/max on a Monday -- precisely the overspend this exists
+#     to stop. The asymmetry decides it: an under-powered run produces a weak PR that gets rejected,
+#     an over-powered one silently spends the week.
+resolve_issue_depth() {
+  local labels=",${1//[[:space:]]/}," want_model="" want_effort="" note=""
+
+  # Two labels from the same namespace is a triage slip, not an instruction -- there is no sensible
+  # way to pick between them, so treat it exactly like an absent label rather than guessing.
+  local m e
+  for m in opus sonnet haiku; do
+    if [[ "$labels" == *",model:$m,"* ]]; then
+      [[ -n "$want_model" ]] && { want_model=""; note="contradictory model: labels"; break; }
+      want_model="$m"
+    fi
+  done
+  for e in max high medium low; do
+    if [[ "$labels" == *",effort:$e,"* ]]; then
+      [[ -n "$want_effort" ]] && { want_effort=""; note="contradictory effort: labels"; break; }
+      want_effort="$e"
+    fi
+  done
+
+  # Each namespace defaults independently, so `model:sonnet` alone is a valid, meaningful
+  # declaration -- it cheapens the model and leaves the effort at the conservative default.
+  [[ -z "$want_model" ]] && { want_model="sonnet"; [[ -z "$note" ]] && note="no model: label"; }
+  [[ -z "$want_effort" ]] && { want_effort="medium"; [[ -z "$note" ]] && note="no effort: label"; }
+
+  ISSUE_DEFER=0
+  ISSUE_DEPTH_NOTE="$note"
+
+  # Model first, then effort: a cheaper model outweighs a richer effort setting, so opus/low is
+  # "above" sonnet/max rather than below it.
+  local wm we lm le
+  wm="$(model_rank "$want_model")"; we="$(effort_rank "$want_effort")"
+  lm="$(model_rank "$MODEL")";      le="$(effort_rank "$EFFORT")"
+  if [[ "$wm" -gt "$lm" || ( "$wm" -eq "$lm" && "$we" -gt "$le" ) ]]; then
+    ISSUE_DEFER=1
+    ISSUE_MODEL="$MODEL"; ISSUE_EFFORT="$EFFORT"; ISSUE_WEIGHT=0
+    return 0
+  fi
+
+  ISSUE_MODEL="$want_model"
+  ISSUE_EFFORT="$want_effort"
+  # What the issue costs against a run's weight budget. Effort rank alone: it tracks the size of the
+  # resulting PR, which is what the budget is really rationing -- review capacity, not tokens. A
+  # flat per-run issue count would treat four one-line fixes the same as four cross-file rewrites.
+  ISSUE_WEIGHT="$we"
 }
 
 # The daily pass rotates so each run goes deep on one surface instead of skimming everything and
@@ -467,19 +562,69 @@ fi
 # Issues already covered by an open PR are skipped. An issue stays open until the PR closing it is
 # merged, so without this the next run picks up the same issue it implemented yesterday and opens a
 # duplicate PR against work already awaiting review.
+#
+# Built in BOTH modes. It used to be surplus-only, which meant implementation happened at most two
+# mornings a week while the weekday runs did nothing but add to the pile they could have been
+# draining -- and once the backlog passed the ceiling below, the weekday run stood down entirely.
+# The backlog was switching off the one job able to reduce it.
+#
+# WEIGHT BUDGET. How much a run may take on is measured in resolved effort rank, not issue count: a
+# weekday run spends 4, a surplus run 10. So a weekday morning buys four trivial fixes, or two
+# mediums, or one large plus one small, or a single `max` -- but never two `high`-or-above PRs at
+# once, which is the property worth having. Draining is surplus's whole purpose, hence its larger
+# budget. An issue that does not fit is LEFT IN PLACE for the next run rather than dropped, so the
+# oldest-first order still holds across runs.
 READY_QUEUE=()
-if [[ "$MODE" == "surplus" ]]; then
+READY_DEPTHS=()
+WEIGHT_BUDGET=4
+[[ "$MODE" == "surplus" ]] && WEIGHT_BUDGET=10
+WEIGHT_SPENT=0
+DEFERRED_ISSUES=()
+
+# Implementation is the expensive path, so a weekday run only takes it on with real headroom left --
+# the same 70% the loop already uses to stop itself mid-queue. Above that the queue is left alone
+# and the run falls through to analysis, which is cheaper. Surplus has its own stricter <60% gate
+# applied further up, before this point is reached.
+if [[ "$MODE" != "surplus" && "$WEEK_PCT" -ge 70 ]]; then
+  log "not implementing this run: weekly at ${WEEK_PCT}% -- leaving the ready queue for a better morning"
+else
   LINKED_ISSUES="$(gh pr list --state open --limit 50 --json body --jq '.[].body // ""' 2>/dev/null \
     | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | sort -u || true)"
-  for cand in $(gh issue list --label ready --state open --limit 50 --json number,labels \
-      --jq '[.[] | select(([.labels[].name] | any(. == "review-report" or . == "review-trends")) | not)]
-            | sort_by(.number) | .[].number' 2>/dev/null || true); do
+  # Emits "<number> <labels>" per line -- the label list comes back from this same query, so
+  # resolving depth costs no extra API calls. A `while read` rather than a `for` over command
+  # substitution because the label field can be empty and word splitting would then misalign the
+  # columns.
+  while read -r cand cand_labels; do
+    [[ -z "$cand" ]] && continue
     if printf '%s\n' "$LINKED_ISSUES" | grep -qx "$cand" 2>/dev/null; then
       log "skipping ready issue #$cand -- already has an open PR"
       continue
     fi
+
+    # Depth is resolved HERE, during queue building, rather than inside the implement loop -- which
+    # is past the --dry-run exit and so could never be exercised without spending real budget. This
+    # way `--dry-run` prints the actual plan, deferrals included, and the whole decision is testable.
+    resolve_issue_depth "$cand_labels"
+    if [[ "$ISSUE_DEFER" == "1" ]]; then
+      # Deferred, not skipped: the issue wants more than today affords and will be picked up on a
+      # richer morning. Deliberately `continue` rather than `break` -- the queue is oldest-first, and
+      # one expensive issue at the front must not block the cheap ones behind it.
+      log "deferring ready issue #$cand -- wants a richer run than this one (day affords ${MODEL}/${EFFORT})"
+      DEFERRED_ISSUES+=("$cand")
+      continue
+    fi
+    if [[ $(( WEIGHT_SPENT + ISSUE_WEIGHT )) -gt "$WEIGHT_BUDGET" ]]; then
+      log "issue #$cand does not fit this run's remaining weight ($WEIGHT_SPENT/$WEIGHT_BUDGET used) -- leaving it for the next"
+      continue
+    fi
+
+    WEIGHT_SPENT=$(( WEIGHT_SPENT + ISSUE_WEIGHT ))
     READY_QUEUE+=("$cand")
-  done
+    READY_DEPTHS+=("$ISSUE_MODEL/$ISSUE_EFFORT")
+    [[ -n "$ISSUE_DEPTH_NOTE" ]] && log "issue #$cand: $ISSUE_DEPTH_NOTE -- defaulting to $ISSUE_MODEL/$ISSUE_EFFORT"
+  done < <(gh issue list --label ready --state open --limit 50 --json number,labels \
+      --jq '[.[] | select(([.labels[].name] | any(. == "review-report" or . == "review-trends")) | not)]
+            | sort_by(.number) | .[] | "\(.number) \([.labels[].name] | join(","))"' 2>/dev/null || true)
 fi
 
 # Unreviewed pull requests are backlog too, and the untriaged-issue count cannot see them.
@@ -500,45 +645,55 @@ if [[ ${#READY_QUEUE[@]} -gt 0 ]]; then
   elif [[ "$SLOTS" -lt "${#READY_QUEUE[@]}" ]]; then
     log "trimming ready queue to $SLOTS issue(s) -- $OPEN_PRS open PRs already awaiting review"
     READY_QUEUE=("${READY_QUEUE[@]:0:$SLOTS}")
+    READY_DEPTHS=("${READY_DEPTHS[@]:0:$SLOTS}")
   fi
 fi
 
-# A suggestion generator that outruns triage capacity just creates work, so stand down when the
-# untriaged backlog is already large.
-UNTRIAGED="$(gh issue list --state open --limit 100 --json number,labels --jq '[.[] | select(.labels | length == 0)] | length' 2>/dev/null || echo 0)"
-
-# Suggestions waiting inside an open report count as backlog too.
+# A suggestion generator that outruns triage capacity just creates work, so stand down when too much
+# of this job's own output is still unread.
 #
-# Without this the backlog metric can never rise from this job's own output: a sweep posts ONE issue
-# and labels it `review-report`, so it never lands in the unlabelled count above. Every subsequent
-# run would then see an empty backlog and scan at full width forever, regardless of how many
-# untriaged suggestions were already sitting in reports nobody had read yet.
-PENDING_IN_REPORTS=0
+# "Unread output" specifically -- NOT "every open issue nobody has labelled". This counted unlabelled
+# open issues until it was noticed that the tracker is mostly a hand-written feature backlog: issues
+# Patrick files himself to track work that needs doing. Those are triaged by definition (he wrote
+# them), yet they pushed the count to 19 against a ceiling of 15 and stood the weekday run down with
+# `skip-backlog-full`. His own planning was switching off the job, which is a category error -- the
+# ceiling exists to throttle the *generator*, not the person it reports to.
+#
+# So the measure is the suggestions sitting in reports nobody has read yet. It rises when a report is
+# posted and falls when Patrick reads one and closes it, which is exactly the signal being reached
+# for. An issue he files *from* a report stops counting, correctly: filing it IS the triage decision.
+#
+# A useful side effect: the metric no longer looks at label shape at all, so adding `model:`/`effort:`
+# labels to an issue cannot accidentally make it read as triaged and deflate the backlog.
+UNREAD_FINDINGS=0
 for n in $(gh issue list --label review-report --state open --limit 20 --json number --jq '.[].number' 2>/dev/null); do
   c="$(gh issue view "$n" --json body --jq '.body' 2>/dev/null | grep -c '^### [0-9]' || true)"
-  PENDING_IN_REPORTS=$(( PENDING_IN_REPORTS + c ))
+  UNREAD_FINDINGS=$(( UNREAD_FINDINGS + c ))
 done
-UNTRIAGED=$(( UNTRIAGED + PENDING_IN_REPORTS ))
-log "backlog: $UNTRIAGED untriaged ($PENDING_IN_REPORTS of them inside open reports)"
-if [[ ${#READY_QUEUE[@]} -eq 0 && "$UNTRIAGED" -gt 15 ]]; then
+log "backlog: $UNREAD_FINDINGS unread finding(s) inside open reports"
+[[ ${#DEFERRED_ISSUES[@]} -gt 0 ]] && log "deferred on budget this run: ${DEFERRED_ISSUES[*]}"
+if [[ ${#READY_QUEUE[@]} -eq 0 && "$UNREAD_FINDINGS" -gt 15 ]]; then
   RUN_OUTCOME="skip-backlog-full"
-  log "SKIP: $UNTRIAGED untriaged open issues already -- not adding more"
+  log "SKIP: $UNREAD_FINDINGS unread findings already waiting -- not adding more"
   exit 0
 fi
 
 # Implement every issue in the queue, one PR each, until the queue is empty, budget runs low, or a PR
-# this run itself opened brings the open-PR count back up to the ceiling. This is a self-contained
-# path with its own exit: it never falls through to the sweep/analysis logic below, which only
-# applies when there was nothing ready to implement.
+# this run itself opened brings the open-PR count back up to the ceiling.
+#
+# Unlike before, this is no longer a dead end: if the implement pass turned out to be cheap and the
+# backlog and PR queue are both healthy, the run carries on into the analysis below rather than
+# exiting. See "follow-on analysis" after the loop.
 if [[ ${#READY_QUEUE[@]} -gt 0 ]]; then
   RUN_KIND="implement"
   PROMPT_FILE="$REPO/scripts/review/prompts/surplus.md"
   TARGET="issues ${READY_QUEUE[*]}"
-  log "kind=implement queue=${READY_QUEUE[*]} model=${MODEL} effort=${EFFORT}"
+  log "kind=implement queue=${READY_QUEUE[*]} depths=${READY_DEPTHS[*]} weight=${WEIGHT_SPENT}/${WEIGHT_BUDGET} ceiling=${MODEL}/${EFFORT}"
 
   if [[ "$DRY_RUN" == "yes" ]]; then
     RUN_OUTCOME="dry-run"
-    log "DRY RUN -- would implement ready issues: ${READY_QUEUE[*]}"
+    log "DRY RUN -- would implement ready issues: ${READY_QUEUE[*]} at ${READY_DEPTHS[*]}"
+    [[ ${#DEFERRED_ISSUES[@]} -gt 0 ]] && log "DRY RUN -- would defer: ${DEFERRED_ISSUES[*]}"
     exit 0
   fi
 
@@ -560,13 +715,19 @@ If this issue requires adding a new Swift file, stop and report that it was defe
   STAMP="$(date +%Y-%m-%d)"
   IMPLEMENTED_ISSUES=()
   OPENED_PRS=()
-  # One entry per issue attempted, "$issue:$pr" or "$issue:no-pr" or "$issue:failed" -- the trends
-  # audit found implement-pass yield was under-logged (issues #129/#145 showed no PR and no way to
-  # tell whether the pass failed or just went unrecorded). This makes every attempt explicit instead
-  # of only listing the PRs that happened to land.
+  # One entry per issue attempted, "$issue:$pr:$model/$effort" (or ":no-pr:", ":failed:") -- the
+  # trends audit found implement-pass yield was under-logged (issues #129/#145 showed no PR and no
+  # way to tell whether the pass failed or just went unrecorded). This makes every attempt explicit
+  # instead of only listing the PRs that happened to land, and carrying the depth each issue actually
+  # ran at is what lets the trends audit ask whether the labels are sized correctly.
   ISSUE_OUTCOMES=()
+  # Recorded even though they were never attempted, so the trends run can spot an issue that defers
+  # every single time and never runs -- an `opus`/`max` issue only clears the ceiling below 45%
+  # weekly, so on a run of busy weeks it can starve indefinitely with nothing saying so.
+  for d in "${DEFERRED_ISSUES[@]:-}"; do [[ -n "$d" ]] && ISSUE_OUTCOMES+=("$d:deferred-budget"); done
 
-  for issue in "${READY_QUEUE[@]}"; do
+  for idx in "${!READY_QUEUE[@]}"; do
+    issue="${READY_QUEUE[$idx]}"
     # A PR opened earlier in this same loop counts against the ceiling exactly like one left over
     # from a previous run -- re-check rather than trusting the count computed before the loop started.
     OPEN_PRS="$(gh pr list --state open --limit 50 --json number --jq 'length' 2>/dev/null || echo 0)"
@@ -582,6 +743,20 @@ If this issue requires adding a new Swift file, stop and report that it was defe
     if [[ -n "${WEEK_PCT:-}" && "$WEEK_PCT" -ge 70 ]]; then
       log "implement: stopping early at ${WEEK_PCT}% weekly, before issue #$issue"
       break
+    fi
+
+    # Re-check the issue's depth against the ladder as it stands NOW, not as it stood when the queue
+    # was built. The re-read above can have moved the window -- an interactive session, or this
+    # loop's own earlier issues -- and a depth that fitted the ceiling at 06:10 may not fit an hour
+    # later. Fed back through resolve_issue_depth as a synthetic label string rather than re-fetching
+    # the issue: the queue already holds the depth it resolved to, and re-reading labels from GitHub
+    # would be a second API call to learn something already known.
+    decide_depth
+    resolve_issue_depth "model:${READY_DEPTHS[$idx]%/*},effort:${READY_DEPTHS[$idx]#*/}"
+    if [[ "$ISSUE_DEFER" == "1" ]]; then
+      log "implement: deferring issue #$issue -- the window moved and it now wants more than ${MODEL}/${EFFORT}"
+      ISSUE_OUTCOMES+=("$issue:deferred-budget")
+      continue
     fi
 
     # Fetched here, not left for the model to fetch: `gh` cannot be granted to a headless run (see
@@ -605,10 +780,10 @@ $ISSUE_BLOCK
 $XCODE_NOTE"
     PR_BEFORE="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
 
-    log "implement: issue #$issue"
-    if ! run_claude "$ISSUE_PROMPT" "$REPORTS_DIR/$STAMP-implement-$issue.md"; then
+    log "implement: issue #$issue at ${ISSUE_MODEL}/${ISSUE_EFFORT}"
+    if ! run_claude "$ISSUE_PROMPT" "$REPORTS_DIR/$STAMP-implement-$issue.md" "$ISSUE_MODEL" "$ISSUE_EFFORT"; then
       log "implement: issue #$issue failed, continuing to the next"
-      ISSUE_OUTCOMES+=("$issue:failed")
+      ISSUE_OUTCOMES+=("$issue:failed:${ISSUE_MODEL}/${ISSUE_EFFORT}")
       continue
     fi
     SCANS_DONE=$(( SCANS_DONE + 1 ))
@@ -619,10 +794,10 @@ $XCODE_NOTE"
     PR_AFTER="$(gh pr list --state open --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)"
     if [[ -n "$PR_AFTER" && "$PR_AFTER" != "$PR_BEFORE" ]]; then
       OPENED_PRS+=("$PR_AFTER")
-      ISSUE_OUTCOMES+=("$issue:$PR_AFTER")
+      ISSUE_OUTCOMES+=("$issue:$PR_AFTER:${ISSUE_MODEL}/${ISSUE_EFFORT}")
       log "opened PR #$PR_AFTER for issue #$issue"
     else
-      ISSUE_OUTCOMES+=("$issue:no-pr")
+      ISSUE_OUTCOMES+=("$issue:no-pr:${ISSUE_MODEL}/${ISSUE_EFFORT}")
       log "no new PR detected for issue #$issue -- the run may have stopped short; check $REPORTS_DIR/$STAMP-implement-$issue.md"
     fi
 
@@ -636,13 +811,56 @@ $XCODE_NOTE"
   read_usage
   BUDGET_AFTER_WEEK="${WEEK_PCT:-?}"
   BUDGET_AFTER_SESSION="${SESSION_PCT:-?}"
-  # Semicolon-joined, not comma-joined: ISSUE_REF lands in an unquoted field of the metrics CSV
+  # Semicolon-joined, not comma-joined: IMPLEMENTED_REF lands in an unquoted field of the metrics CSV
   # below, and a comma there would be read back as an extra column. Per-issue outcomes (not just the
   # PRs that landed) so a future trends audit can see every attempt, not only the successful ones.
-  ISSUE_REF="$(IFS=';'; echo "${ISSUE_OUTCOMES[*]:-}")"
+  #
+  # Its own column rather than reusing ISSUE_REF, because a run can now implement AND post a report,
+  # and ISSUE_REF has to stay the posted report's number for the existing trends parsing to work.
+  IMPLEMENTED_REF="$(IFS=';'; echo "${ISSUE_OUTCOMES[*]:-}")"
   RUN_OUTCOME="ok-implement"
   log "implement loop finished: ${#IMPLEMENTED_ISSUES[@]}/${#READY_QUEUE[@]} issue(s) implemented, PRs: ${OPENED_PRS[*]:-none}"
-  exit 0
+
+  # --- Follow-on analysis --------------------------------------------------
+  #
+  # Implementing used to end the run outright. That wasted the common case: most ready issues are
+  # small, and a run that spent twenty minutes on a one-line fix has the whole morning left. So if
+  # the implement pass really was cheap and there is nothing else backing up, carry on into the
+  # analysis below instead of going back to sleep.
+  #
+  # Every gate has to hold, and each is one that already exists elsewhere in this script:
+  #
+  #   session < 50%   the implement loop is the longest thing this job does, and analysis afterwards
+  #                   must not eat the window Patrick wakes up to. Deliberately stricter than the
+  #                   loop's own 70% stop -- this work is optional, that work was already committed.
+  #   ladder != skip  the standing 80% weekly standdown.
+  #   backlog <= 15   the same ceiling as above: don't generate into a pile nobody has read.
+  #   open PRs < 6    the same review-capacity ceiling -- recounted, because this run just added to it.
+  FOLLOW_ON="no"
+  OPEN_PRS="$(gh pr list --state open --limit 50 --json number --jq 'length' 2>/dev/null || echo 0)"
+  decide_depth
+  if [[ "$DEPTH" == "skip" ]]; then
+    log "follow-on analysis: no -- weekly at ${WEEK_PCT}%"
+  elif [[ -n "${SESSION_PCT:-}" && "$SESSION_PCT" -ge 50 ]]; then
+    log "follow-on analysis: no -- session at ${SESSION_PCT}% after implementing"
+  elif [[ "$UNREAD_FINDINGS" -gt 15 ]]; then
+    log "follow-on analysis: no -- $UNREAD_FINDINGS unread findings already waiting"
+  elif [[ "$OPEN_PRS" -ge 6 ]]; then
+    log "follow-on analysis: no -- $OPEN_PRS open PRs awaiting review"
+  else
+    FOLLOW_ON="yes"
+  fi
+
+  if [[ "$FOLLOW_ON" != "yes" ]]; then
+    exit 0
+  fi
+
+  log "follow-on analysis: yes -- session ${SESSION_PCT}%, weekly ${WEEK_PCT}%, $OPEN_PRS open PR(s)"
+  RUN_OUTCOME="ok-implement+analyse"
+  # BUDGET_BEFORE_* is deliberately NOT reset here: the metrics row should account for the whole
+  # run, implementation included, or the week_delta column would under-report what this job costs on
+  # exactly the mornings it does the most.
+  DID_IMPLEMENT="yes"
 fi
 
 if [[ "$MODE" == "surplus" ]]; then
@@ -662,12 +880,20 @@ if [[ "$MODE" == "surplus" ]]; then
   # exactly when it is worth stocking up, because the weekly window expires Sunday whether or not it
   # was used. When the window is already well spent, aim lower and leave the rest for interactive
   # work.
+  #
+  # These came down from 24/15/9 when the backlog metric was narrowed to unread findings only (see
+  # UNREAD_FINDINGS above). Subtracting a smaller number from the old targets would have inflated the
+  # deficit and scanned harder -- generating MORE suggestions on the change whose whole point was to
+  # stop drowning in them. Every target now also sits below the 15 ceiling; the old arrangement aimed
+  # at 24 through a ceiling of 15, so a good week would overshoot and then stand itself down the next
+  # morning. Estimated from a single week's data: prompts/trends.md is told to revisit them once
+  # three weeks of rows exist.
   if [[ "$WEEK_PCT" -lt 45 ]]; then
-    BACKLOG_TARGET=24
+    BACKLOG_TARGET=12
   elif [[ "$WEEK_PCT" -lt 60 ]]; then
-    BACKLOG_TARGET=15
+    BACKLOG_TARGET=8
   else
-    BACKLOG_TARGET=9
+    BACKLOG_TARGET=5
   fi
 
   # Targets are deliberately finer-grained than the weekday rotation's four. More scans only pay off
@@ -687,7 +913,7 @@ if [[ "$MODE" == "surplus" ]]; then
     ux-and-docs
   )
 
-  BACKLOG_DEFICIT=$(( BACKLOG_TARGET - UNTRIAGED ))
+  BACKLOG_DEFICIT=$(( BACKLOG_TARGET - UNREAD_FINDINGS ))
   [[ "$BACKLOG_DEFICIT" -lt 3 ]] && BACKLOG_DEFICIT=3
   # Roughly three findings survive consolidation per scan, so this is the deficit divided by three,
   # rounded up.
@@ -700,6 +926,10 @@ else
   PROMPT_FILE="$REPO/scripts/review/prompts/daily.md"
   TARGET="${TARGET_OVERRIDE:-$(rotation_target)}"
 fi
+
+# A run that implemented first and then fell through to here did both, and the metrics row should
+# say so rather than reporting only the half that finished last.
+[[ "${DID_IMPLEMENT:-no}" == "yes" ]] && RUN_KIND="implement+$RUN_KIND"
 
 log "kind=$RUN_KIND target=$TARGET model=${MODEL} effort=${EFFORT}"
 

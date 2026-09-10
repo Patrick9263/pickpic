@@ -74,10 +74,31 @@ For each suggestion:
 **Why it matters** — the concrete cost of leaving it.
 **Where** — `path/to/file.ts:123`
 **Size** — trivial / small / medium / large
+**Runner** — the two labels to put on this if Patrick files it, e.g. `model:sonnet` + `effort:medium`
 **Category** — `security` if this describes a currently-exploitable vulnerability (authn/authz
 bypass, injection, secret exposure, or an access-control bypass a stranger reading this report
 could act on before it's patched). Omit this line for everything else.
 ```
+
+### Choosing the `**Runner**` labels
+
+If Patrick files this finding as an issue and marks it `ready`, those two labels decide what the
+unattended run spends on it. They are a recommendation to him, not a decision — but a wrong one
+either wastes budget or produces a PR too weak to merge, so size it honestly:
+
+- **`model:sonnet` + `effort:medium`** is the default, and should be the common answer. Assume it
+  unless there is a specific reason not to.
+- **`model:haiku` + `effort:low`** for a mechanical, single-file, unambiguous change — a constant,
+  a copy fix, a missing `aria-label`, a one-line guard.
+- **`model:opus` + `effort:high`** (or `max`, sparingly) only for genuine design work: a change
+  spanning several files, one whose approach is not obvious from the issue text, or anything
+  touching a trap `CLAUDE.md` documents — `UploadJob`'s hand-written decoder, an `UploadStage` case,
+  `project.pbxproj`, the duplicate-detection path.
+
+The budget ladder treats these as a ceiling: a cheaper choice is always honoured, but an issue asking
+for more than a given morning affords is **deferred to a richer one** rather than downgraded. So
+asking for Opus is not free — it can mean the issue waits days. Ask for it when the work needs it,
+not to be safe.
 
 This report is posted publicly. A `security`-tagged finding is instead routed to a private
 tracker, so getting the tag right matters — under-tagging publishes exploit details before the fix
