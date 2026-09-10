@@ -1,5 +1,13 @@
+import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearTestData, insertEvent, insertPhoto } from "./test-fixtures.ts";
+import {
+  clearTestData,
+  deliverRawPhoto,
+  insertEvent,
+  insertPhoto,
+  insertRawRequest,
+  readRawPhotoState,
+} from "./test-fixtures.ts";
 import { expectError, galleryRequest } from "./test-request.ts";
 
 /*
@@ -159,17 +167,162 @@ describe("PUT/DELETE .../raw-request", () => {
       json: { displayName: "Guest" },
       headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
     });
-    expect(first.body).toEqual({ requested: true });
+    expect(first.body).toEqual({
+      requested: true,
+      rawDownload: null,
+      rawDownloadedAt: null,
+    });
 
     const second = await galleryRequest("PUT", RAW_REQUEST_PATH, {
       json: { displayName: "Guest" },
       headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
     });
-    expect(second.body).toEqual({ requested: true });
+    expect(second.body).toEqual({
+      requested: true,
+      rawDownload: null,
+      rawDownloadedAt: null,
+    });
 
     const removed = await galleryRequest("DELETE", RAW_REQUEST_PATH, {
       headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
     });
     expect(removed.body).toEqual({ requested: false });
+  });
+
+  /*
+   * The bug #210 left behind. The RAW object is per photo, so a second visitor
+   * asking for one that has already been delivered has nothing to wait for --
+   * but the insert always wrote fulfilled_at NULL, which left listPhotos
+   * reporting a pending request the iPad could never satisfy and the visitor
+   * with a download that could never arrive.
+   */
+  it("fulfils a request immediately when the RAW is already delivered", async () => {
+    await seedGallery("ready");
+    await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      originalFilename: "DSC01015.ARW",
+    });
+
+    const result = await galleryRequest<{
+      requested: boolean;
+      rawDownload: { filename: string; byteSize: number } | null;
+    }>("PUT", RAW_REQUEST_PATH, {
+      json: { displayName: "Second guest" },
+      headers: { "X-PickPic-Visitor": "visitor-token-for-second-guest" },
+    });
+
+    expect(result.body.requested).toBe(true);
+    expect(result.body.rawDownload).toMatchObject({
+      filename: "DSC01015.ARW",
+      byteSize: 8,
+    });
+  });
+
+  /*
+   * Withdrawing after the RAW has landed is the one path that can leave the
+   * object with nobody left to serve it -- the row is DELETEd outright, so
+   * without a reclaim here the bytes would sit against the account's cap with
+   * no request anywhere pointing at them.
+   */
+  it("reclaims the RAW when the last requester withdraws after delivery", async () => {
+    await seedGallery("ready");
+    const storageKey = await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+    });
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      fulfilledAt: new Date().toISOString(),
+    });
+
+    const removed = await galleryRequest("DELETE", RAW_REQUEST_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+    expect(removed.body).toEqual({ requested: false });
+
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.rawStorageKey).toBeNull();
+    expect(state.rawUploadedAt).toBeNull();
+    expect(state.objectExists).toBe(false);
+    expect(state.accountStorageBytes).toBe(0);
+  });
+
+  it("keeps the RAW when one of two requesters withdraws", async () => {
+    await seedGallery("ready");
+    const storageKey = await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+    });
+
+    for (const visitorToken of [VISITOR_TOKEN, "visitor-token-for-the-other"]) {
+      await insertRawRequest({
+        photoId: PHOTO_ID,
+        eventId: EVENT_ID,
+        visitorToken,
+        fulfilledAt: new Date().toISOString(),
+      });
+    }
+
+    await galleryRequest("DELETE", RAW_REQUEST_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.rawStorageKey).toBe(storageKey);
+    expect(state.objectExists).toBe(true);
+  });
+
+  /*
+   * "Ask again" after the RAW has been reclaimed. The row already exists, so
+   * this has to go through the ON CONFLICT arm -- and it has to clear the
+   * notification lease as well, or notifyRawRequested's early return on a
+   * 'sent' row means the photographer never hears that it is wanted again.
+   */
+  it("re-arms a collected request once the RAW has been reclaimed", async () => {
+    await seedGallery("ready");
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      fulfilledAt: "2026-01-01T00:00:00.000Z",
+      downloadedAt: "2026-01-02T00:00:00.000Z",
+    });
+
+    const result = await galleryRequest("PUT", RAW_REQUEST_PATH, {
+      json: { displayName: "Guest" },
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    expect(result.body).toEqual({
+      requested: true,
+      rawDownload: null,
+      rawDownloadedAt: null,
+    });
+
+    const row = await env.DB.prepare(
+      `
+        SELECT
+          r.fulfilled_at AS fulfilledAt,
+          r.downloaded_at AS downloadedAt,
+          r.notification_status AS notificationStatus
+        FROM raw_requests r
+        WHERE r.photo_id = ?
+      `,
+    )
+      .bind(PHOTO_ID)
+      .first<{
+        fulfilledAt: string | null;
+        downloadedAt: string | null;
+        notificationStatus: string;
+      }>();
+
+    expect(row).toMatchObject({
+      fulfilledAt: null,
+      downloadedAt: null,
+      notificationStatus: "pending",
+    });
   });
 });

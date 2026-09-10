@@ -574,14 +574,37 @@
   cursor: not-allowed;
 }
 
-.gallery-raw-request-button-active {
+/*
+ * Three filled states, and the ordering of their weight is the point: "ready"
+ * is the only one that is an action rather than a status, so it is the loudest
+ * even though "waiting" keeps the accent colour it has always had. "Collected"
+ * is deliberately quiet -- the viewer already has the file, and the button is
+ * only still there in case they lost it.
+ */
+.gallery-raw-request-button-waiting {
   background: var(--color-accent);
   border-color: var(--color-accent);
   color: #14101f;
 }
 
-.gallery-raw-request-button-active:hover:not(:disabled) {
+.gallery-raw-request-button-waiting:hover:not(:disabled) {
   background: #b3a0f7;
+}
+
+.gallery-raw-request-button-ready {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: #0c1a11;
+}
+
+.gallery-raw-request-button-ready:hover:not(:disabled) {
+  background: #a6dcb6;
+}
+
+.gallery-raw-request-button-collected {
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-success);
 }
 
 .gallery-final-badge {
@@ -854,9 +877,9 @@
 }
 
 .lightbox-heart-button:not(.lightbox-heart-button-active):hover:not(:disabled),
-.lightbox-raw-request-button:not(.lightbox-raw-request-button-active):hover:not(
-    :disabled
-  ) {
+.lightbox-raw-request-button:not(.lightbox-raw-request-button-waiting):not(
+    .lightbox-raw-request-button-ready
+  ):not(.lightbox-raw-request-button-collected):hover:not(:disabled) {
   background: var(--color-surface-hover);
   border-color: var(--color-accent);
   color: var(--color-text);
@@ -874,16 +897,34 @@
   color: #17070d;
 }
 
-.lightbox-raw-request-button-active {
+.lightbox-raw-request-button-waiting {
   background: var(--color-accent);
   border-color: var(--color-accent);
   color: #14101f;
 }
 
-.lightbox-raw-request-button-active:hover:not(:disabled) {
+.lightbox-raw-request-button-waiting:hover:not(:disabled) {
   background: #b3a0f7;
   border-color: #b3a0f7;
   color: #14101f;
+}
+
+.lightbox-raw-request-button-ready {
+  background: var(--color-success);
+  border-color: var(--color-success);
+  color: #0c1a11;
+}
+
+.lightbox-raw-request-button-ready:hover:not(:disabled) {
+  background: #a6dcb6;
+  border-color: #a6dcb6;
+  color: #0c1a11;
+}
+
+.lightbox-raw-request-button-collected {
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-success);
 }
 
 .photo-version-controls {

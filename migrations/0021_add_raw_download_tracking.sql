@@ -1,0 +1,24 @@
+-- Migration number: 0021 	 2026-09-09T18:00:00.000Z
+--
+-- Records that a gallery visitor actually collected the RAW that was delivered
+-- for them, which is what lets the bytes be reclaimed (issue #209). Migration
+-- 0019 recorded the request and 0020 recorded the delivery; this records the
+-- end of the transaction.
+
+-- Per *request*, not per photo, and this asymmetry is the whole point. The RAW
+-- object is one per photo (0020), but two visitors can have asked for the same
+-- photo, so "the requester downloaded it" is not a single event -- reclaiming
+-- on the first download would strand the second visitor with a fulfilled
+-- request and no bytes behind it. Reclaim therefore tests that *every* live
+-- fulfilled request for the photo carries a downloaded_at.
+--
+-- Stamped when the download route first serves the object, not when the
+-- browser finishes receiving it, because there is no way to observe the
+-- latter. A 24h grace period between the last stamp and the reclaim is what
+-- makes that safe: a transfer that dies at 80% is simply retried the same day
+-- rather than needing a fresh ~120MB upload from the iPad.
+--
+-- Nullable rather than defaulted, matching fulfilled_at: "never collected" and
+-- "collected at an unknown time" are different states, and only the first one
+-- may hold storage open.
+ALTER TABLE raw_requests ADD COLUMN downloaded_at TEXT;

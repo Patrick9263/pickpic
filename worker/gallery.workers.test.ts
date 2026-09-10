@@ -7,11 +7,19 @@ import { beforeEach, describe, expect, it } from "vitest";
 import worker from "./index.ts";
 import {
   clearTestData,
+  deliverRawPhoto,
   insertEvent,
   insertHeart,
   insertPhoto,
   insertRawRequest,
+  readRawPhotoState,
 } from "./test-fixtures.ts";
+import {
+  adminRequest,
+  expectError,
+  expectMethodNotAllowed,
+  galleryRequest,
+} from "./test-request.ts";
 
 /*
  * The public gallery read, driven through the worker's own fetch handler so the
@@ -32,6 +40,7 @@ const ORIGIN = "https://pickpic.photos";
 const EVENT_ID = "event-gallery";
 const SHARE_TOKEN = "share-gallery";
 const VISITOR_TOKEN = "visitor-token-for-tests";
+const PHOTO_ID = "photo-raw-delivery";
 
 async function fetchGallery(
   shareToken: string,
@@ -242,5 +251,341 @@ describe("GET /api/galleries/:shareToken", () => {
     const response = await fetchGallery(SHARE_TOKEN, { method: "DELETE" });
 
     expect(response.status).toBe(405);
+  });
+
+  it("exposes the RAW download only to the visitor whose request was fulfilled", async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      rawRequestsEnabled: true,
+    });
+    await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
+    await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      originalFilename: "DSC01015.ARW",
+    });
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      fulfilledAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    /*
+     * A second visitor who asked but whose request has not been stamped
+     * fulfilled is the case that proves this is read per request rather than
+     * per photo: the object is right there, and they still must not see a
+     * download.
+     */
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-still-waiting",
+    });
+
+    const asRequester = (await (
+      await fetchGallery(SHARE_TOKEN, {
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      })
+    ).json()) as {
+      photos: {
+        viewerRawDownload: { filename: string; byteSize: number } | null;
+        viewerRawDownloadedAt: string | null;
+      }[];
+    };
+
+    const asWaiter = (await (
+      await fetchGallery(SHARE_TOKEN, {
+        headers: { "X-PickPic-Visitor": "visitor-token-still-waiting" },
+      })
+    ).json()) as { photos: { viewerRawDownload: unknown }[] };
+
+    const asStranger = (await (await fetchGallery(SHARE_TOKEN)).json()) as {
+      photos: { viewerRawDownload: unknown; viewerRawDownloadedAt: unknown }[];
+    };
+
+    expect(asRequester.photos[0].viewerRawDownload).toMatchObject({
+      filename: "DSC01015.ARW",
+      byteSize: 8,
+    });
+    expect(asRequester.photos[0].viewerRawDownloadedAt).toBeNull();
+    expect(asWaiter.photos[0].viewerRawDownload).toBeNull();
+    expect(asStranger.photos[0].viewerRawDownload).toBeNull();
+    expect(asStranger.photos[0].viewerRawDownloadedAt).toBeNull();
+  });
+});
+
+describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
+  const RAW_PATH = `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw`;
+
+  async function seedDeliveredRaw(options?: {
+    status?: string;
+    fulfilled?: boolean;
+  }): Promise<string> {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      status: options?.status ?? "ready",
+      rawRequestsEnabled: true,
+    });
+    await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      originalFilename: "DSC01015.ARW",
+    });
+
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      fulfilledAt:
+        options?.fulfilled === false ? undefined : new Date().toISOString(),
+    });
+
+    return storageKey;
+  }
+
+  it("serves the RAW to its requester as an uncacheable attachment", async () => {
+    await seedDeliveredRaw();
+
+    const { response } = await galleryRequest("GET", RAW_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+    );
+
+    expect(response.headers.get("Content-Type")).toBe(
+      "application/octet-stream",
+    );
+    expect(response.headers.get("Content-Disposition")).toContain(
+      'attachment; filename="DSC01015.ARW"',
+    );
+
+    /*
+     * The whole reason this route does not reuse getStoredJpeg. A year of
+     * immutable edge caching would keep a private original retrievable long
+     * after the reclaim deleted it, and would defeat the reclaim itself.
+     */
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("Accept-Ranges")).toBeNull();
+  });
+
+  it("stamps downloaded_at without immediately reclaiming the bytes", async () => {
+    const storageKey = await seedDeliveredRaw();
+
+    await galleryRequest("GET", RAW_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    const row = await env.DB.prepare(
+      "SELECT downloaded_at AS downloadedAt FROM raw_requests WHERE photo_id = ?",
+    )
+      .bind(PHOTO_ID)
+      .first<{ downloadedAt: string | null }>();
+
+    expect(row?.downloadedAt).not.toBeNull();
+
+    /*
+     * The grace period, asserted directly: a download that died halfway has
+     * to stay retryable, so serving it must not delete the object.
+     */
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.objectExists).toBe(true);
+    expect(state.rawStorageKey).toBe(storageKey);
+  });
+
+  it("stays available on a completed gallery", async () => {
+    await seedDeliveredRaw({ status: "completed" });
+
+    const { response } = await galleryRequest("GET", RAW_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("404s once the gallery is archived", async () => {
+    await seedDeliveredRaw({ status: "archived" });
+
+    const result = await galleryRequest("GET", RAW_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    expectError(result, 404, "Photo not found.");
+  });
+
+  it("404s for a visitor who never requested it", async () => {
+    await seedDeliveredRaw();
+
+    const result = await galleryRequest("GET", RAW_PATH, {
+      headers: { "X-PickPic-Visitor": "visitor-token-for-a-stranger" },
+    });
+
+    expectError(result, 404, "This RAW file is not available to download.");
+  });
+
+  it("404s for a requester whose own request is not fulfilled", async () => {
+    await seedDeliveredRaw({ fulfilled: false });
+
+    const result = await galleryRequest("GET", RAW_PATH, {
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    expectError(result, 404, "This RAW file is not available to download.");
+  });
+
+  it("400s without a visitor token", async () => {
+    await seedDeliveredRaw();
+
+    const result = await galleryRequest("GET", RAW_PATH);
+
+    expectError(result, 400, "A valid visitor token is required.");
+  });
+
+  it("405s on a non-GET method", async () => {
+    await seedDeliveredRaw();
+
+    expectMethodNotAllowed(
+      await galleryRequest("DELETE", RAW_PATH, {
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      }),
+    );
+  });
+});
+
+/*
+ * The reclaim policy end to end. These drive the iPad's own photo poll,
+ * because that is the only heartbeat the TTL half of the policy has -- there
+ * is no cron in this project, so a sweep that stopped running here would leave
+ * abandoned RAWs in R2 with nothing left to notice.
+ */
+describe("reclaiming a delivered RAW", () => {
+  const PHOTOS_PATH = `/api/admin/events/${EVENT_ID}/photos`;
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+  function agoIso(milliseconds: number): string {
+    return new Date(Date.now() - milliseconds).toISOString();
+  }
+
+  async function seedForSweep(request: {
+    fulfilledAt: string;
+    downloadedAt?: string;
+  }): Promise<string> {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      rawRequestsEnabled: true,
+    });
+    await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+    });
+
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      fulfilledAt: request.fulfilledAt,
+      downloadedAt: request.downloadedAt,
+    });
+
+    return storageKey;
+  }
+
+  it("keeps a collected RAW inside the grace period", async () => {
+    const storageKey = await seedForSweep({
+      fulfilledAt: agoIso(2 * ONE_DAY_MS),
+      downloadedAt: agoIso(ONE_DAY_MS / 2),
+    });
+
+    await adminRequest("GET", PHOTOS_PATH);
+
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.objectExists).toBe(true);
+    expect(state.rawStorageKey).toBe(storageKey);
+  });
+
+  it("reclaims a collected RAW once the grace period has passed", async () => {
+    const storageKey = await seedForSweep({
+      fulfilledAt: agoIso(3 * ONE_DAY_MS),
+      downloadedAt: agoIso(2 * ONE_DAY_MS),
+    });
+
+    await adminRequest("GET", PHOTOS_PATH);
+
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.objectExists).toBe(false);
+    expect(state.rawStorageKey).toBeNull();
+    expect(state.rawUploadedAt).toBeNull();
+    expect(state.accountStorageBytes).toBe(0);
+  });
+
+  /*
+   * The abandoned requester -- the case a download-only policy cannot bound.
+   * Nobody has collected this and nobody ever will, so only the TTL frees it.
+   */
+  it("reclaims an uncollected RAW once its TTL has elapsed", async () => {
+    const storageKey = await seedForSweep({
+      fulfilledAt: agoIso(15 * ONE_DAY_MS),
+    });
+
+    await adminRequest("GET", PHOTOS_PATH);
+
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.objectExists).toBe(false);
+    expect(state.rawStorageKey).toBeNull();
+    expect(state.accountStorageBytes).toBe(0);
+  });
+
+  it("keeps an uncollected RAW while its TTL is still running", async () => {
+    const storageKey = await seedForSweep({
+      fulfilledAt: agoIso(13 * ONE_DAY_MS),
+    });
+
+    await adminRequest("GET", PHOTOS_PATH);
+
+    expect((await readRawPhotoState(PHOTO_ID, storageKey)).objectExists).toBe(
+      true,
+    );
+  });
+
+  /*
+   * Reclaiming has to put the photo back into the state the iPad reads as
+   * "this one still needs uploading" -- otherwise a visitor who asks again
+   * after a reclaim waits forever for a RAW nothing will ever send.
+   */
+  it("lets a later request re-arm the iPad's pending count", async () => {
+    const storageKey = await seedForSweep({
+      fulfilledAt: agoIso(3 * ONE_DAY_MS),
+      downloadedAt: agoIso(2 * ONE_DAY_MS),
+    });
+
+    await adminRequest("GET", PHOTOS_PATH);
+    expect((await readRawPhotoState(PHOTO_ID, storageKey)).objectExists).toBe(
+      false,
+    );
+
+    await galleryRequest(
+      "PUT",
+      `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
+      {
+        json: { displayName: "Guest" },
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      },
+    );
+
+    const listed = await adminRequest<{
+      photos: { pendingRawRequestCount: number }[];
+    }>("GET", PHOTOS_PATH);
+
+    expect(listed.body.photos[0].pendingRawRequestCount).toBe(1);
   });
 });

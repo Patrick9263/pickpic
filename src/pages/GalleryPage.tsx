@@ -11,6 +11,7 @@ import type {
   GalleryPhotoRecord,
   GalleryStatus,
   ViewerPhotoCommentRecord,
+  ViewerRawDownloadRecord,
 } from "../types";
 import { fetchJson } from "../api";
 import "../styles/GalleryPage.css";
@@ -24,6 +25,7 @@ import {
   formatApproximateByteSize,
   getDefaultPreviewUrl,
   getOrCreateVisitorToken,
+  getRawRequestState,
   readStorageItem,
   selectPhotosById,
   writeStorageItem,
@@ -48,6 +50,14 @@ interface HeartResponse {
 
 interface RawRequestResponse {
   requested: boolean;
+
+  /*
+   * Non-null when the RAW was already sitting in R2 at request time -- a
+   * second visitor asking for a photo someone else already had delivered goes
+   * straight to "ready to download" without another round trip.
+   */
+  rawDownload: ViewerRawDownloadRecord | null;
+  rawDownloadedAt: string | null;
 }
 
 interface CommentResponse {
@@ -83,6 +93,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   } | null>(null);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
+  const [downloadingRawPhotoId, setDownloadingRawPhotoId] = useState<
+    string | null
+  >(null);
   const [togglingRawRequestPhotoId, setTogglingRawRequestPhotoId] = useState<
     string | null
   >(null);
@@ -436,8 +449,15 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       );
       return;
     }
+    /*
+     * "collected" re-requests rather than cancels: the viewer already had this
+     * RAW, it has since been reclaimed, and the only useful action left is
+     * asking for it again. Only "waiting" is a cancel.
+     */
+    const isCancelling = getRawRequestState(photo) === "waiting";
+
     let resolvedDisplayName = displayName.trim();
-    if (!photo.viewerRequestedRaw) {
+    if (!isCancelling) {
       const resolvedName = await resolveDisplayName();
 
       if (!resolvedName) {
@@ -451,7 +471,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setActionError(null);
 
     try {
-      const method = photo.viewerRequestedRaw ? "DELETE" : "PUT";
+      const method = isCancelling ? "DELETE" : "PUT";
       const body = await fetchJson<RawRequestResponse>(
         `/api/galleries/${encodeURIComponent(
           shareToken,
@@ -486,6 +506,8 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               ? {
                   ...currentPhoto,
                   viewerRequestedRaw: body.requested,
+                  viewerRawDownload: body.rawDownload ?? null,
+                  viewerRawDownloadedAt: body.rawDownloadedAt ?? null,
                 }
               : currentPhoto,
           ),
@@ -501,6 +523,104 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setTogglingRawRequestPhotoId(null);
     }
   }
+
+  /*
+   * Buffered through a Blob and an object URL rather than a plain download
+   * link, for the same reason downloadSelectedPhotos below is: the visitor
+   * token is a header, and a navigation cannot carry one. The alternative --
+   * putting a signed token in the URL -- would stream straight to disk and
+   * spend no memory, but it puts a credential somewhere it can be shared or
+   * logged, and MAX_RAW_BYTES caps what lands here at 128 MB.
+   */
+  async function downloadRawPhoto(photo: GalleryPhotoRecord): Promise<void> {
+    if (!photo.viewerRawDownload || downloadingRawPhotoId !== null) {
+      return;
+    }
+
+    const { filename } = photo.viewerRawDownload;
+
+    setDownloadingRawPhotoId(photo.id);
+    setActionError(null);
+
+    try {
+      const response = await fetch(
+        `/api/galleries/${encodeURIComponent(
+          shareToken,
+        )}/photos/${encodeURIComponent(photo.id)}/raw`,
+        {
+          cache: "no-store",
+          headers: {
+            "X-PickPic-Visitor": visitorToken,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        /*
+         * A 404 here is nearly always "the RAW was already reclaimed", so drop
+         * the stale download state as well as reporting it. That flips the
+         * button to "Request again" instead of leaving the viewer clicking a
+         * download that can never succeed.
+         */
+        if (response.status === 404) {
+          setGallery((currentGallery) =>
+            currentGallery === null
+              ? currentGallery
+              : {
+                  ...currentGallery,
+                  photos: currentGallery.photos.map((currentPhoto) =>
+                    currentPhoto.id === photo.id
+                      ? { ...currentPhoto, viewerRawDownload: null }
+                      : currentPhoto,
+                  ),
+                },
+          );
+        }
+
+        throw new Error(`Unable to download ${filename}.`);
+      }
+
+      const objectUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+
+      link.href = objectUrl;
+      link.download = filename;
+
+      document.body.append(link);
+      link.click();
+      link.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+
+      /*
+       * The worker stamped downloaded_at when it started serving, so reflect
+       * that locally rather than refetching the whole gallery for one field.
+       */
+      const downloadedAt = new Date().toISOString();
+
+      setGallery((currentGallery) =>
+        currentGallery === null
+          ? currentGallery
+          : {
+              ...currentGallery,
+              photos: currentGallery.photos.map((currentPhoto) =>
+                currentPhoto.id === photo.id
+                  ? { ...currentPhoto, viewerRawDownloadedAt: downloadedAt }
+                  : currentPhoto,
+              ),
+            },
+      );
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to download this RAW file.",
+      );
+    } finally {
+      setDownloadingRawPhotoId(null);
+    }
+  }
+
   async function submitComment(
     event: FormEvent<HTMLFormElement>,
   ): Promise<void> {
@@ -1104,6 +1224,8 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   toggleHeart={toggleHeart}
                   togglingRawRequestPhotoId={togglingRawRequestPhotoId}
                   toggleRawRequest={toggleRawRequest}
+                  downloadingRawPhotoId={downloadingRawPhotoId}
+                  downloadRawPhoto={downloadRawPhoto}
                   rawRequestsEnabled={rawRequestsEnabled}
                   priorityPhotoIds={priorityPhotoIds}
                   interactionsEnabled={interactionsEnabled}
@@ -1127,6 +1249,8 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           toggleHeart={toggleHeart}
           togglingRawRequestPhotoId={togglingRawRequestPhotoId}
           toggleRawRequest={toggleRawRequest}
+          downloadingRawPhotoId={downloadingRawPhotoId}
+          downloadRawPhoto={downloadRawPhoto}
           rawRequestsEnabled={rawRequestsEnabled}
           commentActionId={commentActionId}
           commentText={commentText}

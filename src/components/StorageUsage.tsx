@@ -58,8 +58,8 @@ function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {
           </h2>
 
           <p className="section-description">
-            Every proof, final, and preview PickPic keeps in R2, broken down by
-            the shoot holding it.
+            Every proof, final, preview, and requested original PickPic keeps in
+            R2, broken down by the shoot holding it.
           </p>
         </div>
 
@@ -120,6 +120,20 @@ function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {
             <dd>{formatStorageSize(storage.variantBytes)}</dd>
             <small>{formatCount(storage.variantCount, "variant")}</small>
           </div>
+
+          {/*
+           * Always rendered, not hidden when zero. A RAW is 10-20x the proof
+           * beside it, so it dominates the total the moment one exists, and
+           * without this row the breakdown silently summed to less than the
+           * headline figure -- which reads as a bug in the total rather than a
+           * missing category. Zero here is also the normal, healthy state: the
+           * reclaim is supposed to keep it near zero.
+           */}
+          <div>
+            <dt>Requested RAWs</dt>
+            <dd>{formatStorageSize(storage.rawBytes)}</dd>
+            <small>{formatCount(storage.rawCount, "original")}</small>
+          </div>
         </dl>
       )}
 
@@ -145,6 +159,7 @@ function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {
                   <th scope="col">Proofs</th>
                   <th scope="col">Finals</th>
                   <th scope="col">Previews</th>
+                  <th scope="col">RAWs</th>
                   <th scope="col">Total</th>
                 </tr>
               </thead>
@@ -193,6 +208,7 @@ function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {
                       <td>{formatStorageSize(eventStorage.proofBytes)}</td>
                       <td>{formatStorageSize(eventStorage.finalBytes)}</td>
                       <td>{formatStorageSize(eventStorage.variantBytes)}</td>
+                      <td>{formatStorageSize(eventStorage.rawBytes)}</td>
 
                       <td className="storage-total-cell">
                         {formatStorageSize(eventStorage.totalBytes)}

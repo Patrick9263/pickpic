@@ -1,6 +1,10 @@
 import type { GalleryPhotoGroup } from "./types";
 import type { GalleryPhotoRecord } from "../../types";
 import { useState } from "react";
+import {
+  formatApproximateByteSize,
+  getRawRequestState,
+} from "../../pages/galleryHelpers";
 type GalleryGridProps = {
   group: GalleryPhotoGroup;
   togglingPhotoId: string | null;
@@ -8,6 +12,8 @@ type GalleryGridProps = {
   toggleHeart(photo: GalleryPhotoRecord): Promise<void>;
   togglingRawRequestPhotoId: string | null;
   toggleRawRequest(photo: GalleryPhotoRecord): Promise<void>;
+  downloadingRawPhotoId: string | null;
+  downloadRawPhoto(photo: GalleryPhotoRecord): Promise<void>;
   rawRequestsEnabled: boolean;
   priorityPhotoIds: Set<string>;
   interactionsEnabled: boolean;
@@ -22,6 +28,8 @@ function GalleryGrid({
   toggleHeart,
   togglingRawRequestPhotoId,
   toggleRawRequest,
+  downloadingRawPhotoId,
+  downloadRawPhoto,
   rawRequestsEnabled,
   priorityPhotoIds,
   interactionsEnabled,
@@ -41,6 +49,8 @@ function GalleryGrid({
       {group.photos.map((photo) => {
         const isToggling = togglingPhotoId === photo.id;
         const isTogglingRawRequest = togglingRawRequestPhotoId === photo.id;
+        const rawRequestState = getRawRequestState(photo);
+        const isDownloadingRaw = downloadingRawPhotoId === photo.id;
         const isPriority = priorityPhotoIds.has(photo.id);
         const isSelected = selectedPhotoIds.has(photo.id);
         const displayedThumbnail = photo.finalPhoto
@@ -204,29 +214,64 @@ function GalleryGrid({
                 <span>{photo.heartCount}</span>
               </button>
             )}
+            {/*
+             * The "ready" state is the one exception to interactionsEnabled.
+             * A closed gallery stops taking new requests, but a RAW already
+             * delivered to this viewer stays collectable -- the same promise
+             * the closed-gallery banner makes about photos and downloads, and
+             * the worker's GET route is deliberately outside the
+             * requireOpenGallery guard to match.
+             */}
             {!isSelecting && rawRequestsEnabled && (
               <button
                 className={`gallery-raw-request-button ${
-                  photo.viewerRequestedRaw
-                    ? "gallery-raw-request-button-active"
-                    : ""
+                  rawRequestState === "none"
+                    ? ""
+                    : `gallery-raw-request-button-${rawRequestState}`
                 }`}
                 type="button"
-                disabled={!interactionsEnabled || isTogglingRawRequest}
-                onClick={() => void toggleRawRequest(photo)}
-                aria-pressed={photo.viewerRequestedRaw}
-                aria-label={
-                  !interactionsEnabled
-                    ? `Gallery closed; cannot request the RAW file for ${photo.originalFilename}`
+                disabled={
+                  rawRequestState === "ready"
+                    ? isDownloadingRaw
+                    : !interactionsEnabled || isTogglingRawRequest
+                }
+                onClick={() =>
+                  void (rawRequestState === "ready"
+                    ? downloadRawPhoto(photo)
+                    : toggleRawRequest(photo))
+                }
+                aria-pressed={
+                  rawRequestState === "ready"
+                    ? undefined
                     : photo.viewerRequestedRaw
-                      ? `Cancel RAW file request for ${photo.originalFilename}`
-                      : `Request the original RAW file for ${photo.originalFilename}`
+                }
+                aria-label={
+                  rawRequestState === "ready"
+                    ? `Download the original RAW file for ${photo.originalFilename}` +
+                      `, ${formatApproximateByteSize(
+                        photo.viewerRawDownload?.byteSize ?? 0,
+                      )}`
+                    : !interactionsEnabled
+                      ? `Gallery closed; cannot request the RAW file for ${photo.originalFilename}`
+                      : rawRequestState === "waiting"
+                        ? `Cancel RAW file request for ${photo.originalFilename}`
+                        : rawRequestState === "collected"
+                          ? `Already downloaded; request the RAW file for ${photo.originalFilename} again`
+                          : `Request the original RAW file for ${photo.originalFilename}`
                 }
                 title={
-                  interactionsEnabled ? undefined : "This gallery is closed"
+                  rawRequestState === "ready" || interactionsEnabled
+                    ? undefined
+                    : "This gallery is closed"
                 }
               >
-                <span aria-hidden="true">RAW</span>
+                <span aria-hidden="true">
+                  {rawRequestState === "ready"
+                    ? "↓ RAW"
+                    : rawRequestState === "collected"
+                      ? "RAW ✓"
+                      : "RAW"}
+                </span>
               </button>
             )}
           </article>
