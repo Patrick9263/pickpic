@@ -723,6 +723,179 @@ struct APIClient {
         }
     }
     
+    /*
+     * Delivers the original RAW for a photo a gallery viewer asked for
+     * (issue #205). Shaped like uploadFinalPhoto above, with two differences
+     * that matter.
+     *
+     * It goes through RawUploadSession rather than the shared session, so a
+     * transfer this size survives the app being backgrounded or killed. And
+     * a 413 is inspected rather than passed straight through: on a Free or
+     * Pro Cloudflare zone an oversize body never reaches the worker, so the
+     * response carries Cloudflare's HTML instead of our JSON, and reporting
+     * it as an ordinary server error would name the wrong limit.
+     */
+    func uploadRawPhoto(
+        _ stagedUpload: StagedRawUpload,
+        to photoID: String
+    ) async throws -> RawPhotoUploadResponse {
+        let fileValues =
+        try? stagedUpload.fileURL.resourceValues(
+            forKeys: [
+                .isRegularFileKey
+            ]
+        )
+
+        guard fileValues?.isRegularFile == true else {
+            throw APIClientError.preparedFileMissing(
+                stagedUpload.filename
+            )
+        }
+
+        guard
+            let encodedFilename =
+                stagedUpload.filename
+                .addingPercentEncoding(
+                    withAllowedCharacters:
+                        Self.filenameHeaderAllowed
+                )
+        else {
+            throw APIClientError.invalidUploadFilename(
+                stagedUpload.filename
+            )
+        }
+
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "photos")
+            .appending(path: photoID)
+            .appending(path: "raw")
+
+        var request = URLRequest(url: url)
+
+        request.httpMethod = "PUT"
+
+        /*
+         * The resource timeout on the background session governs how long a
+         * RAW has to finish; this only bounds the request itself.
+         */
+        request.timeoutInterval = 600
+
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+
+        request.setValue(
+            "application/octet-stream",
+            forHTTPHeaderField: "Content-Type"
+        )
+
+        applyCredentials(to: &request)
+
+        request.setValue(
+            encodedFilename,
+            forHTTPHeaderField: "X-File-Name"
+        )
+
+        request.setValue(
+            stagedUpload.sha256,
+            forHTTPHeaderField:
+                "X-File-SHA256"
+        )
+
+        request.setValue(
+            String(stagedUpload.byteSize),
+            forHTTPHeaderField:
+                "Content-Length"
+        )
+
+        let (data, response) =
+        try await RawUploadSession.shared.upload(
+            request: request,
+            fromFile: stagedUpload.fileURL
+        )
+
+        guard
+            let httpResponse =
+                response as? HTTPURLResponse
+        else {
+            throw APIClientError.invalidResponse
+        }
+
+        guard
+            (200..<300).contains(
+                httpResponse.statusCode
+            )
+        else {
+            let serverMessage =
+            try? makeDecoder().decode(
+                APIErrorResponse.self,
+                from: data
+            ).error
+
+            /*
+             * A 413 with no JSON body of ours did not come from the worker.
+             * See the note above uploadRawPhoto.
+             */
+            if
+                httpResponse.statusCode == 413,
+                serverMessage == nil
+            {
+                throw APIClientError
+                    .rawUploadRejectedByEdge(
+                        stagedUpload.filename
+                    )
+            }
+
+            let fallbackMessage =
+            HTTPURLResponse.localizedString(
+                forStatusCode:
+                    httpResponse.statusCode
+            )
+
+            throw sessionAwareError(
+                statusCode:
+                    httpResponse.statusCode,
+                message:
+                    serverMessage
+                ?? fallbackMessage
+            )
+        }
+
+        let contentType =
+        httpResponse.value(
+            forHTTPHeaderField:
+                "Content-Type"
+        )?
+            .lowercased()
+        ?? ""
+
+        guard
+            contentType.contains(
+                "application/json"
+            )
+        else {
+            throw APIClientError.unexpectedResponse
+        }
+
+        do {
+            return try makeDecoder().decode(
+                RawPhotoUploadResponse.self,
+                from: data
+            )
+        } catch {
+            print(
+                "RAW photo decoding failed:",
+                error
+            )
+
+            throw APIClientError
+                .invalidRawPhotoUploadResponse
+        }
+    }
+
     func uploadFinalVariants(
         _ variants: GeneratedFinalVariants,
         to photoID: String

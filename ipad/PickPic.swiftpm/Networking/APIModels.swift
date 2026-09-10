@@ -141,6 +141,29 @@ struct FinalVariantUploadResponse:
     let variants: ServerImageVariantSet
 }
 
+/*
+ * What the server holds for a photo whose original RAW has already been
+ * delivered. Its presence, not its contents, is what the sync pass reads —
+ * see ServerPhotoRecord.needsRawUpload.
+ */
+struct ServerRawPhotoSummary:
+    Decodable,
+    Hashable,
+    Sendable
+{
+    let originalFilename: String
+    let byteSize: Int64
+    let uploadedAt: String
+}
+
+struct RawPhotoUploadResponse:
+    Decodable,
+    Sendable
+{
+    let photoId: String
+    let rawPhoto: ServerRawPhotoSummary?
+}
+
 struct ServerPhotoRecord:
     Identifiable,
     Decodable,
@@ -153,6 +176,35 @@ struct ServerPhotoRecord:
     let workflowStatus: ServerPhotoWorkflowStatus
     let variants: ServerImageVariantSet
     let finalPhoto: ServerFinalPhotoSummary?
+
+    /*
+     * Both optional so a response missing them still decodes, in the spirit
+     * of UploadJob's hand-written init(from:) — and not hypothetically. The
+     * 201 body createPhoto returns is built from a plain PhotoRecord and
+     * carries neither field, and a device updated ahead of a worker deploy
+     * sees the same thing from every route. A non-optional `let` here would
+     * make the whole photo list fail to decode in both cases.
+     *
+     * Read through the two computed properties below rather than directly,
+     * so no caller has to remember what nil means.
+     */
+    let pendingRawRequestCount: Int?
+    let rawPhoto: ServerRawPhotoSummary?
+
+    var pendingRawRequests: Int {
+        pendingRawRequestCount ?? 0
+    }
+
+    /*
+     * rawPhoto == nil is load-bearing, not belt-and-braces. A visitor can
+     * withdraw a request and a *new* visitor can request a RAW that was
+     * already delivered, which leaves a pending row against a photo whose
+     * original is already in R2. Without this half of the test the iPad
+     * would upload the same file again on every activation sweep.
+     */
+    var needsRawUpload: Bool {
+        pendingRawRequests > 0 && rawPhoto == nil
+    }
 
     /*
      * Kept as a string rather than a Date on purpose. The server stores
@@ -433,6 +485,16 @@ enum APIClientError: LocalizedError {
     case invalidFinalPhotoUploadResponse
     case invalidFinalVariantUploadResponse
     case invalidStorageUsageResponse
+    case invalidRawPhotoUploadResponse
+
+    /*
+     * A 413 the worker did not send. Cloudflare caps a Worker's incoming
+     * request body by zone plan -- 100 MB on Free and Pro -- and rejects
+     * anything larger at the edge with its own HTML error, so the app's own
+     * 128 MB limit can pass a file the network then refuses. Distinguished
+     * from .server because the message has to point at the right ceiling.
+     */
+    case rawUploadRejectedByEdge(String)
 
     var errorDescription: String? {
         switch self {
@@ -513,6 +575,18 @@ enum APIClientError: LocalizedError {
         case .invalidStorageUsageResponse:
             return """
             PickPic returned storage figures that the app could not read.
+            """
+
+        case .invalidRawPhotoUploadResponse:
+            return """
+            PickPic returned RAW upload data that the app could not read.
+            """
+
+        case let .rawUploadRejectedByEdge(filename):
+            return """
+            \(filename) was rejected before it reached PickPic — the \
+            server's network plan caps uploads at 100 MB. Deliver this \
+            RAW another way.
             """
         }
     }

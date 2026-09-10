@@ -94,8 +94,10 @@ interface EventStorageRow {
   status: string;
   photoCount: number;
   finalCount: number;
+  rawCount: number;
   proofBytes: number;
   finalBytes: number;
+  rawBytes: number;
 }
 
 interface EventVariantStorageRow {
@@ -111,9 +113,11 @@ interface EventStorageRecord {
   photoCount: number;
   finalCount: number;
   variantCount: number;
+  rawCount: number;
   proofBytes: number;
   finalBytes: number;
   variantBytes: number;
+  rawBytes: number;
   totalBytes: number;
 }
 
@@ -144,6 +148,26 @@ interface PhotoRecord {
   variants: ImageVariantSet;
 }
 
+interface RawPhotoRecord {
+  originalFilename: string;
+  contentType: string;
+  byteSize: number;
+  uploadedAt: string;
+}
+
+/*
+ * RAW delivery state is deliberately *not* on PhotoRecord. PublicPhotoRecord
+ * extends it (see below) and the public gallery builds through the same
+ * toPhotoRecord, so a field added there ships to every gallery visitor by
+ * accident. What the gallery exposes about a delivered RAW -- and whether it
+ * exposes anything at all before the download route exists -- belongs to #209.
+ * Until then this stays on the admin side, where only the iPad reads it.
+ */
+interface AdminPhotoRecord extends PhotoRecord {
+  pendingRawRequestCount: number;
+  rawPhoto: RawPhotoRecord | null;
+}
+
 interface PhotoRow {
   id: string;
   eventId: string;
@@ -162,17 +186,33 @@ interface PhotoRow {
   longitude: number | null;
 }
 
+interface AdminPhotoRow extends PhotoRow {
+  pendingRawRequestCount: number;
+  rawOriginalFilename: string | null;
+  rawContentType: string | null;
+  rawByteSize: number | null;
+  rawUploadedAt: string | null;
+}
+
 interface StoredPhotoRow {
   storageKey: string;
   finalStorageKey: string | null;
+  rawStorageKey: string | null;
   byteSize: number;
   finalByteSize: number | null;
+  rawByteSize: number | null;
 }
 
 interface FinalPhotoUploadRow {
   eventId: string;
   finalStorageKey: string | null;
   finalByteSize: number | null;
+}
+
+interface RawPhotoUploadRow {
+  eventId: string;
+  rawStorageKey: string | null;
+  rawByteSize: number | null;
 }
 
 interface FinalPhotoKeyRow {
@@ -364,6 +404,31 @@ const MAX_PREFLIGHT_FILENAMES = 2000;
 
 const PREFLIGHT_CHUNK_SIZE = 90;
 const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
+
+/*
+ * Deliberately not MAX_FINAL_JPEG_BYTES: a lossless-compressed A7R V .ARW is
+ * 60-80 MB and an uncompressed one around 120 MB, so a RAW is 10-20x the proof
+ * JPEG that photos.byte_size measures (trap 6).
+ *
+ * There is a second ceiling above this one that we do not set. Cloudflare caps
+ * a Worker's *incoming request body* by zone plan -- 100 MB on Free and Pro,
+ * 200 MB on Business -- and that rejection happens at the edge, before this
+ * handler runs, with Cloudflare's own error page rather than our JSON. So on a
+ * Free or Pro zone the effective limit is 100 MB whatever this says, and the
+ * iPad translates an unparseable 413 into a message that names the edge rather
+ * than this constant. Keep RawUploadFileService.maximumRawBytes in the iPad app
+ * equal to this value.
+ */
+const MAX_RAW_BYTES = 128 * 1024 * 1024;
+
+const RAW_CONTENT_TYPE = "application/octet-stream";
+
+/*
+ * Named rather than inlined because the same sentence has to come back from
+ * both the declared-size precheck and the stored-size re-check, and the iPad
+ * shows it verbatim.
+ */
+const RAW_TOO_LARGE_MESSAGE = "The RAW file must be 128 MB or smaller.";
 const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
 const CAPTURED_AT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/;
@@ -716,6 +781,46 @@ function toPhotoRecord(
         }
       : null,
     comments,
+  };
+}
+
+/*
+ * The admin-only wrapper around toPhotoRecord. Kept as a separate function
+ * rather than folded into it so the public gallery response shape cannot drift
+ * onto the RAW fields by accident -- see the comment on AdminPhotoRecord.
+ */
+function toAdminPhotoRecord(
+  row: AdminPhotoRow,
+  imageBasePath: string,
+  comments: PhotoCommentRecord[] = [],
+  photoVariants: PhotoVariantsBySource = createEmptyPhotoVariants(),
+): AdminPhotoRecord {
+  const {
+    pendingRawRequestCount,
+    rawOriginalFilename,
+    rawContentType,
+    rawByteSize,
+    rawUploadedAt,
+    ...photoRow
+  } = row;
+
+  const hasRawPhoto =
+    rawOriginalFilename !== null &&
+    rawContentType !== null &&
+    rawByteSize !== null &&
+    rawUploadedAt !== null;
+
+  return {
+    ...toPhotoRecord(photoRow, imageBasePath, comments, photoVariants),
+    pendingRawRequestCount: Number(pendingRawRequestCount ?? 0),
+    rawPhoto: hasRawPhoto
+      ? {
+          originalFilename: rawOriginalFilename,
+          contentType: rawContentType,
+          byteSize: Number(rawByteSize),
+          uploadedAt: rawUploadedAt,
+        }
+      : null,
   };
 }
 
@@ -1255,8 +1360,10 @@ async function collectEventStorageKeys(
       SELECT
         storage_key AS storageKey,
         final_storage_key AS finalStorageKey,
+        raw_storage_key AS rawStorageKey,
         byte_size AS byteSize,
-        final_byte_size AS finalByteSize
+        final_byte_size AS finalByteSize,
+        raw_byte_size AS rawByteSize
       FROM photos
       WHERE event_id = ?
     `,
@@ -1285,6 +1392,7 @@ async function collectEventStorageKeys(
         ...photoResult.results.flatMap((photo) => [
           photo.storageKey,
           photo.finalStorageKey,
+          photo.rawStorageKey,
         ]),
 
         ...variantResult.results.map((variant) => variant.storageKey),
@@ -1294,7 +1402,11 @@ async function collectEventStorageKeys(
 
   const totalBytes =
     photoResult.results.reduce(
-      (sum, photo) => sum + photo.byteSize + (photo.finalByteSize ?? 0),
+      (sum, photo) =>
+        sum +
+        photo.byteSize +
+        (photo.finalByteSize ?? 0) +
+        (photo.rawByteSize ?? 0),
       0,
     ) +
     variantResult.results.reduce((sum, variant) => sum + variant.byteSize, 0);
@@ -1573,6 +1685,18 @@ async function refreshAccountStorageBytes(scope: AccountScope): Promise<void> {
  * counter createPhoto/uploadFinalPhoto/uploadPhotoVariants/deletes
  * maintain incrementally): every dashboard load writes the true sum back,
  * so any drift from a missed adjustment self-heals rather than compounding.
+ *
+ * Which is exactly why a new kind of stored object has to be added here as
+ * well as to its own upload path. Delivered RAWs (uploadRawPhoto) counted
+ * only by adjustAccountStorageBytes would survive until the next dashboard
+ * load and then be erased from the counter by this reconciliation, quietly
+ * putting the account back under its cap while the bytes were still in R2.
+ *
+ * rawBytes is reported alongside the other three, but src/components/
+ * StorageUsage.tsx does not render a row for it yet -- so its Proofs/Finals/
+ * Thumbnails breakdown will sum to less than the total once a RAW is
+ * delivered. That row is a small src/ follow-up; the cap is correct either
+ * way, which is the part that cannot wait.
  */
 async function getStorageUsage(scope: AccountScope): Promise<Response> {
   const eventResult = await scope
@@ -1584,8 +1708,10 @@ async function getStorageUsage(scope: AccountScope): Promise<Response> {
         e.status AS status,
         COUNT(p.id) AS photoCount,
         COUNT(p.final_storage_key) AS finalCount,
+        COUNT(p.raw_storage_key) AS rawCount,
         COALESCE(SUM(p.byte_size), 0) AS proofBytes,
-        COALESCE(SUM(p.final_byte_size), 0) AS finalBytes
+        COALESCE(SUM(p.final_byte_size), 0) AS finalBytes,
+        COALESCE(SUM(p.raw_byte_size), 0) AS rawBytes
       FROM events e
       LEFT JOIN photos p
         ON p.event_id = e.id
@@ -1627,10 +1753,16 @@ async function getStorageUsage(scope: AccountScope): Promise<Response> {
         photoCount: eventRow.photoCount,
         finalCount: eventRow.finalCount,
         variantCount: variants?.variantCount ?? 0,
+        rawCount: eventRow.rawCount,
         proofBytes: eventRow.proofBytes,
         finalBytes: eventRow.finalBytes,
         variantBytes,
-        totalBytes: eventRow.proofBytes + eventRow.finalBytes + variantBytes,
+        rawBytes: eventRow.rawBytes,
+        totalBytes:
+          eventRow.proofBytes +
+          eventRow.finalBytes +
+          variantBytes +
+          eventRow.rawBytes,
       };
     })
     .sort((first, second) => second.totalBytes - first.totalBytes);
@@ -1644,18 +1776,22 @@ async function getStorageUsage(scope: AccountScope): Promise<Response> {
       photoCount: running.photoCount + eventStorage.photoCount,
       finalCount: running.finalCount + eventStorage.finalCount,
       variantCount: running.variantCount + eventStorage.variantCount,
+      rawCount: running.rawCount + eventStorage.rawCount,
       proofBytes: running.proofBytes + eventStorage.proofBytes,
       finalBytes: running.finalBytes + eventStorage.finalBytes,
       variantBytes: running.variantBytes + eventStorage.variantBytes,
+      rawBytes: running.rawBytes + eventStorage.rawBytes,
       totalBytes: running.totalBytes + eventStorage.totalBytes,
     }),
     {
       photoCount: 0,
       finalCount: 0,
       variantCount: 0,
+      rawCount: 0,
       proofBytes: 0,
       finalBytes: 0,
       variantBytes: 0,
+      rawBytes: 0,
       totalBytes: 0,
     },
   );
@@ -1948,7 +2084,26 @@ async function listPhotos(
         p.captured_at AS capturedAt,
         p.latitude,
         p.longitude,
-        COUNT(h.photo_id) AS heartCount
+        p.raw_original_filename AS rawOriginalFilename,
+        p.raw_content_type AS rawContentType,
+        p.raw_byte_size AS rawByteSize,
+        p.raw_uploaded_at AS rawUploadedAt,
+        COUNT(h.photo_id) AS heartCount,
+
+        /*
+         * A correlated subquery rather than a second LEFT JOIN. Joining
+         * raw_requests beside hearts would produce one row per (heart,
+         * request) pair, and heartCount above -- a plain COUNT over the
+         * joined rows -- would silently multiply for any photo carrying
+         * both. This leaves that aggregate untouched.
+         */
+        (
+          SELECT COUNT(*)
+          FROM raw_requests r
+          WHERE
+            r.photo_id = p.id
+            AND r.fulfilled_at IS NULL
+        ) AS pendingRawRequestCount
       FROM photos p
       LEFT JOIN hearts h
         ON h.photo_id = p.id
@@ -1967,14 +2122,18 @@ async function listPhotos(
         p.final_uploaded_at,
         p.captured_at,
         p.latitude,
-        p.longitude
+        p.longitude,
+        p.raw_original_filename,
+        p.raw_content_type,
+        p.raw_byte_size,
+        p.raw_uploaded_at
       ORDER BY
         COALESCE(p.captured_at, p.created_at) DESC,
         p.created_at DESC
   `,
     )
     .bind(eventId)
-    .all<PhotoRow>();
+    .all<AdminPhotoRow>();
 
   const commentsByPhoto = await getCommentsByPhoto(scope.database, eventId);
   const variantsByPhoto = await getPhotoVariantsByEvent(
@@ -1984,7 +2143,7 @@ async function listPhotos(
   );
   return jsonResponse({
     photos: result.results.map((row) =>
-      toPhotoRecord(
+      toAdminPhotoRecord(
         row,
         ADMIN_PHOTO_IMAGE_BASE,
         (commentsByPhoto.get(row.id) ?? []).map(toPhotoCommentRecord),
@@ -2044,8 +2203,10 @@ async function deletePhoto(
       SELECT
         storage_key AS storageKey,
         final_storage_key AS finalStorageKey,
+        raw_storage_key AS rawStorageKey,
         byte_size AS byteSize,
-        final_byte_size AS finalByteSize
+        final_byte_size AS finalByteSize,
+        raw_byte_size AS rawByteSize
       FROM photos
       WHERE
         id = ?
@@ -2075,11 +2236,13 @@ async function deletePhoto(
   const totalBytes =
     photo.byteSize +
     (photo.finalByteSize ?? 0) +
+    (photo.rawByteSize ?? 0) +
     variantResult.results.reduce((sum, variant) => sum + variant.byteSize, 0);
 
   const storageKeys = [
     photo.storageKey,
     photo.finalStorageKey,
+    photo.rawStorageKey,
     ...variantResult.results.map((variant) => variant.storageKey),
   ].filter((key): key is string => key !== null);
 
@@ -3513,6 +3676,233 @@ async function uploadFinalPhoto(
   });
 }
 
+/*
+ * Accepts the original RAW for a photo a gallery viewer asked for (#205).
+ *
+ * This is the only path on which a full original leaves the iPad -- everything
+ * else in the pipeline uploads a derived proof or a delivered edit -- so it is
+ * held to the same two-step storage check as uploadFinalPhoto above rather
+ * than the cheaper declared-size check alone.
+ *
+ * Storage is per photo, not per request: one photo has one original, and every
+ * visitor who asked for it is served the same object. So a second visitor
+ * requesting an already-delivered RAW must not make the iPad send it again --
+ * which is why the batch below stamps *every* unfulfilled request rather than
+ * one, and why the iPad's own filter tests rawPhoto == nil as well as the
+ * pending count.
+ */
+async function uploadRawPhoto(
+  request: Request,
+  env: TenantEnv,
+  scope: AccountScope,
+  photoId: string,
+): Promise<Response> {
+  const photo = await scope
+    .prepare(
+      `
+      SELECT
+        event_id AS eventId,
+        raw_storage_key AS rawStorageKey,
+        raw_byte_size AS rawByteSize
+      FROM photos
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<RawPhotoUploadRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  /*
+   * What replacing an already-delivered RAW frees. Enforcement is against the
+   * net change for the same reason uploadFinalPhoto's is: re-delivering a RAW
+   * of similar size shouldn't be blocked by an account sitting near its cap.
+   */
+  const replacedRawBytes = photo.rawByteSize ?? 0;
+
+  const contentType = request.headers
+    .get("Content-Type")
+    ?.split(";")[0]
+    .trim()
+    .toLowerCase();
+
+  /*
+   * No RAW format has a registered media type, and the app must not grow a new
+   * branch here for every camera. The filename carries the format and
+   * photos.original_filename already records it (trap 6), so the body is
+   * accepted as opaque bytes.
+   */
+  if (contentType !== RAW_CONTENT_TYPE) {
+    return jsonResponse(
+      { error: `RAW uploads must be sent as ${RAW_CONTENT_TYPE}.` },
+      415,
+    );
+  }
+
+  const originalFilename = getFilename(request)?.trim();
+
+  if (
+    !originalFilename ||
+    originalFilename.length > 255 ||
+    originalFilename.includes("\0")
+  ) {
+    return jsonResponse(
+      { error: "A valid X-File-Name header is required." },
+      400,
+    );
+  }
+
+  const rawSha256 = getSourceSha256(request);
+
+  if (!rawSha256) {
+    return jsonResponse(
+      {
+        error: "A valid lowercase SHA-256 value is required in X-File-SHA256.",
+      },
+      400,
+    );
+  }
+
+  if (!request.body) {
+    return jsonResponse({ error: "The RAW file body is required." }, 400);
+  }
+
+  const declaredSize = Number(request.headers.get("Content-Length"));
+
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_RAW_BYTES) {
+    return jsonResponse({ error: RAW_TOO_LARGE_MESSAGE }, 413);
+  }
+
+  if (
+    Number.isFinite(declaredSize) &&
+    wouldExceedStorageCap(scope.account, declaredSize - replacedRawBytes)
+  ) {
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
+  }
+
+  const uploadId = crypto.randomUUID();
+
+  const newStorageKey =
+    `events/${photo.eventId}/photos/${photoId}` + `/raw/${uploadId}.raw`;
+
+  let storedObject: R2Object;
+
+  try {
+    storedObject = await env.pickpic_photos.put(newStorageKey, request.body, {
+      httpMetadata: {
+        contentType: RAW_CONTENT_TYPE,
+      },
+      customMetadata: {
+        eventId: photo.eventId,
+        photoId,
+        originalFilename,
+        variant: "raw",
+        sourceSha256: rawSha256,
+      },
+    });
+  } catch {
+    return jsonResponse({ error: "The RAW file could not be stored." }, 500);
+  }
+
+  if (storedObject.size > MAX_RAW_BYTES) {
+    await env.pickpic_photos.delete(newStorageKey);
+
+    return jsonResponse({ error: RAW_TOO_LARGE_MESSAGE }, 413);
+  }
+
+  await refreshAccountStorageBytes(scope);
+
+  if (
+    wouldExceedStorageCap(scope.account, storedObject.size - replacedRawBytes)
+  ) {
+    await env.pickpic_photos.delete(newStorageKey);
+
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
+  }
+
+  const uploadedAt = new Date().toISOString();
+
+  try {
+    await scope.database.batch([
+      scope.database
+        .prepare(
+          `
+          UPDATE photos
+          SET
+            raw_storage_key = ?,
+            raw_original_filename = ?,
+            raw_content_type = ?,
+            raw_byte_size = ?,
+            raw_uploaded_at = ?,
+            raw_sha256 = ?
+          WHERE id = ?
+        `,
+        )
+        .bind(
+          newStorageKey,
+          originalFilename,
+          RAW_CONTENT_TYPE,
+          storedObject.size,
+          uploadedAt,
+          rawSha256,
+          photoId,
+        ),
+
+      scope.database
+        .prepare(
+          `
+          UPDATE raw_requests
+          SET fulfilled_at = ?
+          WHERE
+            photo_id = ?
+            AND fulfilled_at IS NULL
+        `,
+        )
+        .bind(uploadedAt, photoId),
+    ]);
+  } catch {
+    await env.pickpic_photos.delete(newStorageKey);
+
+    return jsonResponse(
+      { error: "The RAW file metadata could not be saved." },
+      500,
+    );
+  }
+
+  await adjustAccountStorageBytes(scope, storedObject.size - replacedRawBytes);
+
+  if (photo.rawStorageKey !== null && photo.rawStorageKey !== newStorageKey) {
+    try {
+      await env.pickpic_photos.delete(photo.rawStorageKey);
+    } catch (error) {
+      console.error("Unable to remove the replaced RAW file:", error);
+    }
+  }
+
+  const rawPhoto: RawPhotoRecord = {
+    originalFilename,
+    contentType: RAW_CONTENT_TYPE,
+    byteSize: storedObject.size,
+    uploadedAt,
+  };
+
+  return jsonResponse({
+    photoId,
+    pendingRawRequestCount: 0,
+    rawPhoto,
+  });
+}
+
 function getFormInteger(formData: FormData, key: string): number | null {
   const value = formData.get(key);
 
@@ -4101,6 +4491,20 @@ async function handleAdminRequest(
     const photoId = decodeURIComponent(photoFinalMatch[1]);
 
     return uploadFinalPhoto(request, env, scope, photoId);
+  }
+
+  const photoRawMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/raw$/,
+  );
+
+  if (photoRawMatch) {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = decodeURIComponent(photoRawMatch[1]);
+
+    return uploadRawPhoto(request, env, scope, photoId);
   }
 
   const adminPhotoImageMatch = url.pathname.match(
