@@ -80,6 +80,17 @@ Any `name=` from `xcrun simctl list devices available` works; a booted simulator
 
 D1 migrations are **applied manually and deliberately stay out of CI.** Don't wire them into a workflow.
 
+**A PR carrying a migration must have that migration applied before it is merged**, not after. A push to `main` deploys all three workers (see CI/CD below), so merging first leaves a window in which the new code is live against the old schema — and every worker shares the one `pickpic-db`, so a query referencing a column that isn't there yet takes down whatever routes touch it for every deployment at once. Applying first is safe in the normal case, because an additive migration is invisible to the currently-deployed worker.
+
+The command reads `./migrations` relative to the working directory, so **run it from a checkout that actually contains the new file** — the shared repo root is on `main` and cannot see it:
+
+```bash
+cd .claude/worktrees/<name>
+npx wrangler d1 migrations apply pickpic-db --remote
+```
+
+Run from the wrong directory this reports `No migrations to apply!` — which is indistinguishable from success, and is how #210 nearly got merged ahead of its schema.
+
 ## Working sessions
 
 Patrick usually drives this repo remotely, so sessions should stay cheap. Every turn resends the accumulated context, which makes a long mixed-topic session the expensive shape — not a long task.
