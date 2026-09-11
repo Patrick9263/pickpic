@@ -502,3 +502,38 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"SKIP: no metrics recorded yet"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# count_findings(): grep -c on an existing zero-match file must read as "0", not "0\n0"
+# ---------------------------------------------------------------------------
+# grep -c prints "0" but still exits 1 when a file exists with no matches -- only a missing file
+# fails to print anything. A `grep -c ... || echo 0` fallback can't tell those apart: on the
+# zero-match case it appends a second "0", so $(( $(...) + $(...) )) sees "0\n0" as one operand and
+# dies with "syntax error in expression", which is exactly what left every FINDINGS_COUNT and every
+# metrics.csv `findings` column blank in production. Sourced directly (not run through the full
+# script) since the surrounding publish flow only runs past --dry-run and is out of scope for this
+# suite (see the file header and issue #150).
+@test "count_findings reads a zero-match file as 0, not 0\\n0" {
+  eval "$(sed -n '/^count_findings() {/,/^}/p' "$REVIEW_SCRIPT")"
+  local empty_report="$BATS_TEST_TMPDIR/empty-report.md"
+  printf 'nothing found this run\n' >"$empty_report"
+
+  result="$(count_findings "$empty_report")"
+  [ "$result" = "0" ]
+
+  result="$(count_findings "$BATS_TEST_TMPDIR/does-not-exist.md")"
+  [ "$result" = "0" ]
+
+  # The bug only ever surfaces once the value is actually used in arithmetic.
+  total=$(( $(count_findings "$empty_report") + $(count_findings "$empty_report") ))
+  [ "$total" -eq 0 ]
+}
+
+@test "count_findings counts real findings headings" {
+  eval "$(sed -n '/^count_findings() {/,/^}/p' "$REVIEW_SCRIPT")"
+  local report="$BATS_TEST_TMPDIR/report.md"
+  printf '### 1. First finding\n\nbody\n\n### 2. Second finding\n' >"$report"
+
+  result="$(count_findings "$report")"
+  [ "$result" = "2" ]
+}
