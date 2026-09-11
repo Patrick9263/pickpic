@@ -68,6 +68,7 @@
 		CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00150000000000000000 /* HashingServiceTests.swift */; };
 		CDFF00180000000000000000 /* StorageHeadroomServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */; };
 		CDFF001A0000000000000000 /* PhotoMetadataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */; };
+		CDFF00210000000000000000 /* EventFolderStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00200000000000000000 /* EventFolderStoreTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -134,6 +135,7 @@
 		CDFF00150000000000000000 /* HashingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashingServiceTests.swift; sourceTree = "<group>"; };
 		CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StorageHeadroomServiceTests.swift; sourceTree = "<group>"; };
 		CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataServiceTests.swift; sourceTree = "<group>"; };
+		CDFF00200000000000000000 /* EventFolderStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventFolderStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -214,6 +216,7 @@
 				CDFF00150000000000000000 /* HashingServiceTests.swift */,
 				CDFF00170000000000000000 /* StorageHeadroomServiceTests.swift */,
 				CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */,
+				CDFF00200000000000000000 /* EventFolderStoreTests.swift */,
 			);
 			path = PickPicTests;
 			sourceTree = "<group>";
@@ -530,6 +533,7 @@
 				CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */,
 				CDFF00180000000000000000 /* StorageHeadroomServiceTests.swift in Sources */,
 				CDFF001A0000000000000000 /* PhotoMetadataServiceTests.swift in Sources */,
+				CDFF00210000000000000000 /* EventFolderStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
