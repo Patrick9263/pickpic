@@ -1127,6 +1127,19 @@ input:focus {
   gap: 8px;
 }
 
+.event-raw-release-control {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-raw-release-hint {
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  margin: 0;
+}
+
 .event-title-row {
   align-items: stretch;
   display: flex;
