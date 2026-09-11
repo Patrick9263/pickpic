@@ -340,8 +340,15 @@ interface RawReclaimRow {
   rawByteSize: number | null;
   liveRequestCount: number;
   awaitingCount: number;
+  unreleasedCount: number;
   lastFulfilledAt: string | null;
   lastDownloadedAt: string | null;
+}
+
+interface RawReleaseCandidateRow {
+  photoId: string;
+  awaitingCount: number;
+  unreleasedCount: number;
 }
 
 interface CommentRequestBody {
@@ -519,6 +526,11 @@ const RAW_TOO_LARGE_MESSAGE = "The RAW file must be 128 MB or smaller.";
  * whose download dies partway has until the next day to retry before the
  * object goes; without it, a dropped connection on a phone would cost a fresh
  * upload of the original from the iPad.
+ *
+ * Because the grace period is a proxy for a fact the server cannot observe,
+ * the photographer can supply that fact directly and skip it --
+ * releaseCollectedRawPhotos (#219) marks the collected requests released and
+ * isRawReclaimable honours the marker ahead of this constant.
  *
  * The TTL is measured from the newest fulfilled_at rather than from
  * raw_uploaded_at so that a visitor who requests a photo whose RAW is already
@@ -1152,6 +1164,113 @@ async function setEventRawRequestsEnabled(
       rawRequestsEnabled: body.enabled,
       updatedAt,
     },
+  });
+}
+
+/*
+ * "That lot's collected -- take the bytes back now" (#219), for a whole event.
+ *
+ * Per event rather than per photo because that is the unit the workflow
+ * actually has. The photographer messages a requester once the RAWs are up and
+ * hears back once; what they then want to clear is the shoot, not a photo at a
+ * time. The marker underneath is still per request, so narrowing this to a
+ * single photo later is a different WHERE against the same column rather than a
+ * second mechanism -- which is what #217's per-request iPad view will want.
+ *
+ * A photo is only eligible when *every* live request for it carries both
+ * fulfilled_at and downloaded_at. That deliberately stops short of the other
+ * half of the issue: a RAW nobody has collected can only be released by
+ * cancelling the delivery somebody is still waiting on, which is a different
+ * and far more dangerous action than this one and should be worded as such
+ * wherever it lands. Here, "release" can never take a file out from under a
+ * viewer who has not already had it.
+ *
+ * Photos with no requests at all are skipped rather than reported: they are
+ * already reclaimed with no grace by the liveRequestCount === 0 branch, so
+ * there is nothing here to release.
+ */
+async function releaseCollectedRawPhotos(
+  env: TenantEnv,
+  scope: AccountScope,
+  eventId: string,
+): Promise<Response> {
+  if (!(await eventExists(scope, eventId))) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  const candidates = await scope
+    .prepare(
+      `
+      SELECT
+        p.id AS photoId,
+        SUM(
+          CASE
+            WHEN r.fulfilled_at IS NULL OR r.downloaded_at IS NULL
+            THEN 1
+            ELSE 0
+          END
+        ) AS awaitingCount,
+        SUM(CASE WHEN r.released_at IS NULL THEN 1 ELSE 0 END) AS unreleasedCount
+      FROM photos p
+      INNER JOIN raw_requests r
+        ON r.photo_id = p.id
+      WHERE
+        p.event_id = ?
+        AND p.account_id = :accountId
+        AND p.raw_storage_key IS NOT NULL
+      GROUP BY p.id
+    `,
+      eventId,
+    )
+    .all<RawReleaseCandidateRow>();
+
+  const releasablePhotoIds: string[] = [];
+
+  let awaitingPhotoCount = 0;
+
+  for (const row of candidates.results) {
+    if (row.awaitingCount > 0) {
+      awaitingPhotoCount += 1;
+
+      continue;
+    }
+
+    if (row.unreleasedCount > 0) {
+      releasablePhotoIds.push(row.photoId);
+    }
+  }
+
+  if (releasablePhotoIds.length > 0) {
+    const releasedAt = new Date().toISOString();
+
+    /* Chunked to stay well inside D1's bound-parameter limit. */
+    for (const chunk of chunkArray(releasablePhotoIds, PREFLIGHT_CHUNK_SIZE)) {
+      await scope.database
+        .prepare(
+          `
+          UPDATE raw_requests
+          SET released_at = ?
+          WHERE
+            released_at IS NULL
+            AND photo_id IN (${chunk.map(() => "?").join(", ")})
+        `,
+        )
+        .bind(releasedAt, ...chunk)
+        .run();
+    }
+  }
+
+  /*
+   * Awaited rather than deferred to ctx.waitUntil, unlike the sweep on the
+   * iPad's poll. This route exists to make the bytes go away now, so the
+   * response has to be able to say whether they did -- and the dashboard
+   * reloads its storage figure the moment it returns.
+   */
+  await reclaimRawPhotos(scope.database, env, "p.event_id = ?", eventId);
+
+  return jsonResponse({
+    releasedPhotoCount: releasablePhotoIds.length,
+    awaitingPhotoCount,
   });
 }
 
@@ -2882,6 +3001,7 @@ async function addRawRequest(
         created_at = ?3,
         fulfilled_at = NULL,
         downloaded_at = NULL,
+        released_at = NULL,
         notification_status = 'pending',
         notification_attempt_count = 0,
         notification_last_attempt_at = NULL,
@@ -2901,8 +3021,12 @@ async function addRawRequest(
    * since been reclaimed. Resetting the notification lease alongside it is
    * deliberate -- notifyRawRequested returns early on a 'sent' row, so without
    * the reset the photographer would never hear that the file is wanted a
-   * second time. A plain duplicate request (row present, still waiting) hits
-   * neither arm and changes nothing.
+   * second time. Clearing released_at matters for the same reason (#219): the
+   * photographer's "they've got it" was about the copy that has since been
+   * reclaimed, and left standing it would let the replacement RAW be swept the
+   * instant this visitor collects it, with no grace period behind them. A
+   * plain duplicate request (row present, still waiting) hits neither arm and
+   * changes nothing.
    */
   if (insertResult.meta.changes === 1 && fulfilledAt === null) {
     scheduleRawRequestNotification(env.DB, env, ctx, photoId, visitor.id);
@@ -3027,6 +3151,23 @@ function isRawReclaimable(row: RawReclaimRow, now: number): boolean {
     return true;
   }
 
+  /*
+   * Every live request has been collected *and* the photographer has confirmed
+   * it (#219). Checked ahead of the grace comparison rather than folded into
+   * it, because it is not a shorter grace period -- it is the fact the grace
+   * period was only ever a proxy for. The route can see a download start but
+   * never its end (migration 0021), so it waits a day; a requester who says
+   * "got it" has answered the question the day was buying an answer to.
+   *
+   * The awaitingCount veto above still runs first, so this can only fire when
+   * nobody is mid-transaction: a visitor who requests the photo after a
+   * release inserts an unreleased row and lands here as awaiting, not as
+   * released.
+   */
+  if (row.unreleasedCount === 0) {
+    return true;
+  }
+
   return (
     row.lastDownloadedAt !== null &&
     now - Date.parse(row.lastDownloadedAt) >= RAW_DOWNLOAD_GRACE_MS
@@ -3038,8 +3179,9 @@ function isRawReclaimable(row: RawReclaimRow, now: number): boolean {
  * longer justifies keeping, and gives the account its bytes back.
  *
  * This runs from public, unauthenticated request paths (the download route and
- * removeRawRequest) as well as from the iPad's poll, so it cannot take an
- * AccountScope -- there is no principal on the public side to build one from.
+ * removeRawRequest) as well as from the iPad's poll and the manual release
+ * route, so it cannot take an AccountScope -- there is no principal on the
+ * public side to build one from.
  * It reads account_id off the photo row instead and adjusts that account
  * directly. That is safe because the caller never chooses the account: the
  * filter narrows to one photo or one event, and the row itself names which
@@ -3094,6 +3236,17 @@ async function reclaimRawPhotos(
             ),
             0
           ) AS awaitingCount,
+          COALESCE(
+            SUM(
+              CASE
+                /* Same phantom-row guard as awaitingCount above. */
+                WHEN r.photo_id IS NOT NULL AND r.released_at IS NULL
+                THEN 1
+                ELSE 0
+              END
+            ),
+            0
+          ) AS unreleasedCount,
           MAX(r.fulfilled_at) AS lastFulfilledAt,
           MAX(r.downloaded_at) AS lastDownloadedAt
         FROM photos p
@@ -4975,6 +5128,20 @@ async function handleAdminRequest(
     const eventId = decodeURIComponent(adminEventRawRequestsMatch[1]);
 
     return setEventRawRequestsEnabled(request, scope, eventId);
+  }
+
+  const adminEventRawReleasesMatch = url.pathname.match(
+    /^\/api\/admin\/events\/([^/]+)\/raw-releases$/,
+  );
+
+  if (adminEventRawReleasesMatch) {
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const eventId = decodeURIComponent(adminEventRawReleasesMatch[1]);
+
+    return releaseCollectedRawPhotos(env, scope, eventId);
   }
 
   const eventPhotosPreflightMatch = url.pathname.match(

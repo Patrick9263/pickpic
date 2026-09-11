@@ -227,6 +227,13 @@ export async function insertRawRequest(seed: {
    * RAW_DELIVERY_TTL_MS without waiting or faking a clock.
    */
   downloadedAt?: string;
+
+  /*
+   * Seeds a request the photographer has already confirmed collected (#219),
+   * which is what releaseCollectedRawPhotos stamps and what lets the reclaim
+   * skip RAW_DOWNLOAD_GRACE_MS.
+   */
+  releasedAt?: string;
 }): Promise<void> {
   const visitorId = `visitor-${seed.eventId}-${seed.visitorToken}`;
   const now = new Date().toISOString();
@@ -255,9 +262,10 @@ export async function insertRawRequest(seed: {
         visitor_id,
         created_at,
         fulfilled_at,
-        downloaded_at
+        downloaded_at,
+        released_at
       )
-      VALUES (?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -266,6 +274,7 @@ export async function insertRawRequest(seed: {
       now,
       seed.fulfilledAt ?? null,
       seed.downloadedAt ?? null,
+      seed.releasedAt ?? null,
     )
     .run();
 }
