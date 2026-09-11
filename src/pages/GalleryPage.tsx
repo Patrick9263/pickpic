@@ -72,6 +72,16 @@ type GalleryFilter = "all" | "liked" | "finals";
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
 
+/*
+ * Both download paths save via a Blob + synthetic anchor click, which some
+ * in-app browsers (chat apps' built-in webviews, notably) silently no-op --
+ * no exception, no rejected promise, nothing for a catch block to see. This
+ * is shown unconditionally after every attempt because there is no reliable
+ * way to detect that case from here; see #218.
+ */
+const DOWNLOAD_STARTED_NOTICE =
+  "Download started. If nothing appears in a few seconds, this browser may not support downloads -- try opening this page in Safari or Chrome instead.";
+
 function GalleryPage({ shareToken }: GalleryPageProps) {
   const [visitorToken] = useState(() =>
     getOrCreateVisitorToken(
@@ -86,6 +96,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [gallery, setGallery] = useState<GalleryResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [downloadProgress, setDownloadProgress] = useState<{
     completed: number;
@@ -541,6 +552,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
     setDownloadingRawPhotoId(photo.id);
     setActionError(null);
+    setActionNotice(null);
 
     try {
       const response = await fetch(
@@ -591,6 +603,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       link.remove();
 
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      setActionNotice(DOWNLOAD_STARTED_NOTICE);
 
       /*
        * The worker stamped downloaded_at when it started serving, so reflect
@@ -937,6 +950,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     );
 
     setActionError(null);
+    setActionNotice(null);
     setDownloadProgress({ completed: 0, total: selectedPhotos.length });
     try {
       async function* createZipInputs() {
@@ -982,6 +996,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       link.remove();
 
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      setActionNotice(DOWNLOAD_STARTED_NOTICE);
     } catch (caughtError) {
       setActionError(
         caughtError instanceof Error
@@ -1129,6 +1144,15 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           <div className="gallery-action-error" role="alert">
             <span>{actionError}</span>
             <button type="button" onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {actionNotice && (
+          <div className="gallery-action-notice" role="status">
+            <span>{actionNotice}</span>
+            <button type="button" onClick={() => setActionNotice(null)}>
               Dismiss
             </button>
           </div>

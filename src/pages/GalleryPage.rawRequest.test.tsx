@@ -220,6 +220,13 @@ describe("GalleryPage RAW file requests", () => {
      */
     expect(requestUrl).not.toContain("visitor");
     expect(clicks[0]?.download).toBe("DSC01015.ARW");
+
+    /*
+     * A blob + anchor download gives no success signal jsdom (or a real
+     * in-app browser) can observe, so the viewer gets an explicit notice
+     * rather than silence that looks identical to success (#218).
+     */
+    await screen.findByText(/Download started/i);
   });
 
   /*
@@ -309,5 +316,7 @@ describe("GalleryPage RAW file requests", () => {
     await screen.findByRole("button", {
       name: /Already downloaded; request the RAW file for DSC01015\.ARW again/i,
     });
+
+    expect(screen.queryByText(/Download started/i)).toBe(null);
   });
 });
