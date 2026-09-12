@@ -183,7 +183,7 @@
   margin: 0;
 }
 
-input {
+input:not([type="checkbox"]):not([type="radio"]) {
   background: #fbfaf7;
   border: 1px solid #d8d5ce;
   border-radius: 11px;
