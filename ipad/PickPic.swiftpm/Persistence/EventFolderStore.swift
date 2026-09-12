@@ -4,7 +4,8 @@ import Foundation
 enum EventFolderStoreError: LocalizedError {
     case folderAccessDenied
     case selectedItemIsNotFolder
-    
+    case storageNotIntact
+
     var errorDescription: String? {
         switch self {
         case .folderAccessDenied:
@@ -14,6 +15,14 @@ enum EventFolderStoreError: LocalizedError {
             
         case .selectedItemIsNotFolder:
             return "The selected item is not a folder."
+
+        case .storageNotIntact:
+            return """
+            PickPic could not read every saved event folder, so it will \
+            not write over the file that holds them. The saved folders \
+            are still on disk, and a later version of the app may be \
+            able to read them.
+            """
         }
     }
 }
@@ -28,8 +37,34 @@ final class EventFolderStore: ObservableObject {
     
     private let storageURL: URL
     
-    init() {
-        storageURL = Self.makeStorageURL()
+    /*
+     * False once load() has seen anything it could not decode -- a
+     * malformed file, or an individual entry it had to skip.
+     *
+     * This is the load-bearing half of the fix for issue #234. load() used
+     * to answer a decode failure with `references = [:]`, and the next
+     * save() then wrote that empty map over the file, destroying every
+     * security-scoped bookmark on the device at once. Bookmarks cannot be
+     * regenerated from anything the app holds: recovery is re-picking
+     * every event folder by hand through the document picker.
+     *
+     * So a store that could not read its file completely goes read-only.
+     * Refusing to write is loud -- every call site already surfaces the
+     * throw -- and, unlike the old wipe, it is reversible: the bytes stay
+     * on disk, so a build with a corrected decoder can still recover them.
+     * Losing folder links for one session is worth far less than losing
+     * every link permanently.
+     */
+    private var isStorageIntact = true
+
+    convenience init() {
+        self.init(storageURL: Self.makeStorageURL())
+    }
+
+    init(
+        storageURL: URL
+    ) {
+        self.storageURL = storageURL
         load()
     }
     
@@ -134,15 +169,40 @@ final class EventFolderStore: ObservableObject {
                 contentsOf: storageURL
             )
             
-            references = try JSONDecoder().decode(
-                [String: EventFolderReference].self,
+            let result = try Self.decodeReferences(
                 from: data
             )
-            
-            loadErrorMessage = nil
+
+            references = result.references
+
+            guard result.skippedCount > 0 else {
+                loadErrorMessage = nil
+                return
+            }
+
+            isStorageIntact = false
+
+            let noun =
+            result.skippedCount == 1
+            ? "folder"
+            : "folders"
+
+            loadErrorMessage =
+                """
+                \(result.skippedCount) saved event \(noun) could not be \
+                read. The rest still work, but PickPic will not save \
+                changes to event folders until the whole file can be \
+                read, so nothing unreadable gets overwritten.
+                """
         } catch {
-            references = [:]
-            
+            /*
+             * Deliberately leaves `references` alone rather than emptying
+             * it. That, plus the isStorageIntact guard in persist(), is
+             * what stops a decode failure from becoming a wipe -- see the
+             * comment on isStorageIntact.
+             */
+            isStorageIntact = false
+
             loadErrorMessage =
                 """
                 Saved event folders could not be read: \
@@ -150,10 +210,72 @@ final class EventFolderStore: ObservableObject {
                 """
         }
     }
-    
+
+    /*
+     * Decodes each entry on its own so one unreadable reference costs only
+     * itself. The strict decode is tried first because it is the whole
+     * story in every normal case; the per-entry pass runs only when
+     * something is already wrong.
+     *
+     * A caller that sees skippedCount > 0 must treat the file as not
+     * intact. Salvaging keeps the readable folders usable; it is never a
+     * decision that the skipped ones are expendable -- those stay on disk.
+     */
+    static func decodeReferences(
+        from data: Data
+    ) throws -> (
+        references: [String: EventFolderReference],
+        skippedCount: Int
+    ) {
+        let decoder = JSONDecoder()
+
+        if let strict = try? decoder.decode(
+            [String: EventFolderReference].self,
+            from: data
+        ) {
+            return (strict, 0)
+        }
+
+        let salvaged = try decoder.decode(
+            [String: SalvagedReference].self,
+            from: data
+        )
+
+        var references:
+        [String: EventFolderReference] = [:]
+        var skippedCount = 0
+
+        for (eventID, entry) in salvaged {
+            guard let reference = entry.reference else {
+                skippedCount += 1
+                continue
+            }
+
+            references[eventID] = reference
+        }
+
+        return (references, skippedCount)
+    }
+
+    private struct SalvagedReference: Decodable {
+        let reference: EventFolderReference?
+
+        init(
+            from decoder: Decoder
+        ) throws {
+            reference = try? EventFolderReference(
+                from: decoder
+            )
+        }
+    }
+
     private func persist(
         _ references: [String: EventFolderReference]
     ) throws {
+        guard isStorageIntact else {
+            throw EventFolderStoreError.storageNotIntact
+        }
+
         let directoryURL =
         storageURL.deletingLastPathComponent()
         
