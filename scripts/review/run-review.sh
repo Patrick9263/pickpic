@@ -1013,6 +1013,16 @@ renumber() {
   ' "$file" >"$file.tmp" && mv "$file.tmp" "$file"
 }
 
+# grep -c on an existing file with zero matches prints "0" but still exits 1, so a naive
+# `grep -c ... || echo 0` fallback appends a second "0" and produces "0\n0" instead of "0".
+# Capture the count regardless of exit status and fall back only when it's actually empty
+# (a missing file).
+count_findings() {
+  local n
+  n="$(grep -c '^### [0-9]' "$1" 2>/dev/null)" || true
+  echo "${n:-0}"
+}
+
 if [[ "$RUN_KIND" == "sweep" ]]; then
   SWEEP_ACCUM="$STATE_DIR/.sweep-findings.md"
   PRIVATE_ACCUM="$STATE_DIR/.sweep-findings-private.md"
@@ -1130,8 +1140,7 @@ renumber "$PUBLIC_REPORT"
 renumber "$PRIVATE_REPORT"
 
 RUN_OUTCOME="ok"
-FINDINGS_COUNT=$(( $(grep -c '^### [0-9]' "$PUBLIC_REPORT" 2>/dev/null || echo 0) \
-  + $(grep -c '^### [0-9]' "$PRIVATE_REPORT" 2>/dev/null || echo 0) ))
+FINDINGS_COUNT=$(( $(count_findings "$PUBLIC_REPORT") + $(count_findings "$PRIVATE_REPORT") ))
 
 if [[ -s "$PUBLIC_REPORT" ]]; then
   ISSUE_BODY="$STATE_DIR/.issue-body.md"
