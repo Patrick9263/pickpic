@@ -451,7 +451,6 @@ interface PhotoVariantRow {
   photoId: string;
   sourceKind: PhotoVariantSource;
   variantKind: PhotoVariantKind;
-  storageKey: string;
   contentType: string;
   byteSize: number;
   width: number;
@@ -3868,7 +3867,6 @@ async function getPhotoVariantsByEvent(
         v.photo_id AS photoId,
         v.source_kind AS sourceKind,
         v.variant_kind AS variantKind,
-        v.storage_key AS storageKey,
         v.content_type AS contentType,
         v.byte_size AS byteSize,
         v.width,
