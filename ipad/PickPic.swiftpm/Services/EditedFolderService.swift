@@ -24,7 +24,24 @@ enum EditedFolderError: LocalizedError {
 enum EditedFolderService {
     static let maximumFinalJPEGBytes:
     Int64 = 50 * 1_024 * 1_024
-    
+
+    static let supportedEditedExtensions: Set<String> = [
+        "jpg",
+        "jpeg"
+    ]
+
+    /// Whether a file extension found in the `Edited` folder is one PickPic
+    /// can upload as a final. Saving (rather than exporting) from Affinity,
+    /// or exporting to the wrong format, produces a file extension outside
+    /// this set — pulled out so `scan` and its tests share one definition.
+    static func isSupportedEditedFileExtension(
+        _ fileExtension: String
+    ) -> Bool {
+        supportedEditedExtensions.contains(
+            fileExtension.lowercased()
+        )
+    }
+
     static func scan(
         reference: EventFolderReference,
         photos: [ServerPhotoRecord]
@@ -83,40 +100,55 @@ enum EditedFolderService {
                 options: [.skipsHiddenFiles]
             )
         
-        let supportedExtensions: Set<String> = [
-            "jpg",
-            "jpeg"
-        ]
-        
-        let editedFiles: [(url: URL, byteSize: Int64)] =
-        try fileURLs.compactMap {
-            (fileURL: URL)
-            throws -> (
-                url: URL,
-                byteSize: Int64
-            )? in
-            
+        var editedFiles: [(url: URL, byteSize: Int64)] = []
+        var unsupportedFormatEditedFilenames: [String] = []
+
+        for fileURL in fileURLs {
             let values =
             try fileURL.resourceValues(
                 forKeys: resourceKeys
             )
-            
+
             guard values.isRegularFile == true else {
-                return nil
+                continue
             }
-            
-            guard supportedExtensions.contains(
-                fileURL.pathExtension.lowercased()
+
+            guard isSupportedEditedFileExtension(
+                fileURL.pathExtension
             ) else {
-                return nil
+                // Present in Edited but not a format we can upload — a
+                // save-instead-of-export mistake in Affinity produces
+                // exactly this. Reported separately below rather than
+                // silently dropped, so it never reads as "missing".
+                unsupportedFormatEditedFilenames.append(
+                    fileURL.lastPathComponent
+                )
+
+                continue
             }
-            
-            return (
-                fileURL,
-                Int64(values.fileSize ?? 0)
+
+            editedFiles.append(
+                (
+                    fileURL,
+                    Int64(values.fileSize ?? 0)
+                )
             )
         }
-        
+
+        unsupportedFormatEditedFilenames.sort {
+            $0.localizedStandardCompare($1)
+            == .orderedAscending
+        }
+
+        let unsupportedFormatBaseNames: Set<String> =
+        Set(
+            unsupportedFormatEditedFilenames.map {
+                filename in
+
+                normalizedBaseName(filename)
+            }
+        )
+
         let eligiblePhotos = photos.filter { photo in
             photo.heartCount > 0
             || photo.workflowStatus == .editing
@@ -170,10 +202,17 @@ enum EditedFolderService {
                     filesByBaseName[baseName],
                 !editedMatches.isEmpty
             else {
-                missingSourceFilenames.append(
-                    photo.originalFilename
-                )
-                
+                // A same-named file exists but in an unsupported format —
+                // that's "wrong format", not "missing", and is already
+                // reported via unsupportedFormatEditedFilenames.
+                if !unsupportedFormatBaseNames.contains(
+                    baseName
+                ) {
+                    missingSourceFilenames.append(
+                        photo.originalFilename
+                    )
+                }
+
                 continue
             }
             
@@ -332,7 +371,9 @@ enum EditedFolderService {
             ambiguousMatches:
                 ambiguousMatches,
             oversizedEditedFilenames:
-                oversizedEditedFilenames
+                oversizedEditedFilenames,
+            unsupportedFormatEditedFilenames:
+                unsupportedFormatEditedFilenames
         )
     }
     
