@@ -47,6 +47,12 @@ export interface PhotoRecord {
   workflowStatus: PhotoWorkflowStatus;
   finalPhoto: FinalPhotoRecord | null;
 
+  /*
+   * Admin-only: absent on public gallery responses, which never send it
+   * (worker/index.ts keeps it off the base PhotoRecord the two sides share).
+   */
+  pendingRawRequestCount?: number;
+
   variants: ImageVariantSet;
 
   capturedAt: string | null;
