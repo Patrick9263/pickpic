@@ -178,7 +178,7 @@ struct RawUploadFileServiceValidationTests {
     func matchesTheWorkersOwnLimit() {
         #expect(
             RawUploadFileService.maximumRawBytes
-            == 128 * 1_024 * 1_024
+            == 100 * 1_024 * 1_024
         )
     }
 }

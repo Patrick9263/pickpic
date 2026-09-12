@@ -256,11 +256,11 @@ describe("PUT /api/admin/photos/:id/raw", () => {
       body: new Uint8Array(16),
       headers: {
         ...RAW_HEADERS,
-        "Content-Length": String(129 * 1024 * 1024),
+        "Content-Length": String(101 * 1024 * 1024),
       },
     });
 
-    expectError(result, 413, "The RAW file must be 128 MB or smaller.");
+    expectError(result, 413, "The RAW file must be 100 MB or smaller.");
   });
 
   it("rejects a RAW that would take the account over its cap", async () => {

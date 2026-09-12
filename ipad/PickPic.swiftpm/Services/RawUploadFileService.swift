@@ -39,10 +39,15 @@ enum RawUploadFileError: LocalizedError {
                 fromByteCount: byteSize,
                 countStyle: .file
             )
+            let formattedLimit =
+            ByteCountFormatter.string(
+                fromByteCount: RawUploadFileService.maximumRawBytes,
+                countStyle: .file
+            )
 
             return """
             \(filename) is \(formattedSize). RAW files must be \
-            128 MB or smaller.
+            \(formattedLimit) or smaller.
             """
         }
     }
@@ -55,13 +60,14 @@ enum RawUploadFileError: LocalizedError {
  */
 enum RawUploadFileService {
     /*
-     * Must stay equal to MAX_RAW_BYTES in worker/index.ts. Checking it here
-     * as well as there is not redundant: a RAW is large enough that finding
-     * out after the transfer costs minutes of the photographer's connection,
-     * and on a Free or Pro Cloudflare zone an oversize body is rejected at
-     * the edge before our own 413 can explain why.
+     * Must stay equal to MAX_RAW_BYTES in worker/index.ts, which is itself
+     * pinned to Cloudflare's Free/Pro edge cap rather than set independently
+     * (#215) -- checking it here as well as there is not redundant: a RAW is
+     * large enough that finding out after the transfer costs minutes of the
+     * photographer's connection, and an oversize body is rejected at the edge
+     * before our own 413 can explain why.
      */
-    static let maximumRawBytes: Int64 = 128 * 1_024 * 1_024
+    static let maximumRawBytes: Int64 = 100 * 1_024 * 1_024
 
     /*
      * Both the filename and the photo id arrive from the server and both are
