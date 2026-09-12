@@ -107,6 +107,7 @@ type EventCardProps = {
   wasCopied: boolean;
   isUploading: boolean;
   editRequestCount: number;
+  pendingRawRequestCount: number;
   photos: PhotoRecord[];
   deletingPhotoId: string | null;
   clearingHeartsPhotoId: string | null;
@@ -163,6 +164,7 @@ function EventCard(props: EventCardProps) {
     wasCopied,
     isUploading,
     editRequestCount,
+    pendingRawRequestCount,
     photos,
     deletingPhotoId,
     clearingHeartsPhotoId,
@@ -615,6 +617,11 @@ function EventCard(props: EventCardProps) {
           <div>
             <dt>Edit requests</dt>
             <dd>{editRequestCount}</dd>
+          </div>
+
+          <div>
+            <dt>Pending RAW requests</dt>
+            <dd>{pendingRawRequestCount}</dd>
           </div>
         </dl>
 

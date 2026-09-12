@@ -1418,6 +1418,11 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
                   const editRequestCount = photos.filter(
                     (photo) => photo.heartCount > 0,
                   ).length;
+                  const pendingRawRequestCount = photos.reduce(
+                    (total, photo) =>
+                      total + (photo.pendingRawRequestCount ?? 0),
+                    0,
+                  );
                   const photoActionInProgress = photos.some(
                     (photo) =>
                       deletingPhotoId === photo.id ||
@@ -1437,6 +1442,7 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
                       wasCopied={wasCopied}
                       isUploading={isUploading}
                       editRequestCount={editRequestCount}
+                      pendingRawRequestCount={pendingRawRequestCount}
                       photos={photos}
                       handlePhotoSelection={handlePhotoSelection}
                       handleDeletePhoto={handleDeletePhoto}
