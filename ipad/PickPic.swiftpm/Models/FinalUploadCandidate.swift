@@ -30,4 +30,5 @@ struct FinalUploadScanResult:
     let unmatchedEditedFilenames: [String]
     let ambiguousMatches: [String]
     let oversizedEditedFilenames: [String]
+    let unsupportedFormatEditedFilenames: [String]
 }

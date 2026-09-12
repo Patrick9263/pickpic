@@ -322,6 +322,8 @@ struct FinalUploadsView: View {
                 .oversizedEditedFilenames.isEmpty
                 || !result
                 .unmatchedEditedFilenames.isEmpty
+                || !result
+                .unsupportedFormatEditedFilenames.isEmpty
         {
             Section("Needs Attention") {
                 issueGroup(
@@ -361,6 +363,16 @@ struct FinalUploadsView: View {
                         .unmatchedEditedFilenames,
                     systemImage:
                         "questionmark.diamond"
+                )
+
+                issueGroup(
+                    title:
+                        "Unsupported format — export as JPEG",
+                    values:
+                        result
+                        .unsupportedFormatEditedFilenames,
+                    systemImage:
+                        "doc.badge.exclamationmark"
                 )
             }
         }
