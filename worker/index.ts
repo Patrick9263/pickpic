@@ -823,6 +823,21 @@ function getFilename(request: Request): string | null {
   }
 }
 
+/*
+ * WHATWG URL leaves an invalid percent-escape untouched in pathname instead of
+ * rejecting it, so a malformed segment (e.g. "%zz") still matches a route's
+ * regex and reaches here. Every route-parameter decode goes through this so a
+ * bad escape 404s like any other missing resource instead of throwing a
+ * URIError that falls through to routeRequest's catch as a generic 500.
+ */
+export function safeDecodePathSegment(segment: string): string | null {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return null;
+  }
+}
+
 function getVisitorToken(request: Request): string | null {
   const token = request.headers.get("X-PickPic-Visitor")?.trim();
 
@@ -5126,7 +5141,11 @@ async function handleAdminRequest(
   const adminEventMatch = url.pathname.match(/^\/api\/admin\/events\/([^/]+)$/);
 
   if (adminEventMatch) {
-    const eventId = decodeURIComponent(adminEventMatch[1]);
+    const eventId = safeDecodePathSegment(adminEventMatch[1]);
+
+    if (eventId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     if (request.method === "PUT") {
       return updateEvent(request, scope, eventId);
@@ -5148,7 +5167,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const eventId = decodeURIComponent(adminEventStatusMatch[1]);
+    const eventId = safeDecodePathSegment(adminEventStatusMatch[1]);
+
+    if (eventId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return setEventStatus(request, scope, eventId);
   }
@@ -5162,7 +5185,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const eventId = decodeURIComponent(adminEventRawRequestsMatch[1]);
+    const eventId = safeDecodePathSegment(adminEventRawRequestsMatch[1]);
+
+    if (eventId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return setEventRawRequestsEnabled(request, scope, eventId);
   }
@@ -5176,7 +5203,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const eventId = decodeURIComponent(adminEventRawReleasesMatch[1]);
+    const eventId = safeDecodePathSegment(adminEventRawReleasesMatch[1]);
+
+    if (eventId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return releaseCollectedRawPhotos(env, scope, eventId);
   }
@@ -5190,7 +5221,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const eventId = decodeURIComponent(eventPhotosPreflightMatch[1]);
+    const eventId = safeDecodePathSegment(eventPhotosPreflightMatch[1]);
+
+    if (eventId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return preflightPhotos(request, scope, eventId);
   }
@@ -5200,7 +5235,11 @@ async function handleAdminRequest(
   );
 
   if (eventPhotosMatch) {
-    const eventId = decodeURIComponent(eventPhotosMatch[1]);
+    const eventId = safeDecodePathSegment(eventPhotosMatch[1]);
+
+    if (eventId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     if (request.method === "POST") {
       return createPhoto(request, env, scope, eventId, ctx);
@@ -5228,7 +5267,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const photoId = decodeURIComponent(photoFinalMatch[1]);
+    const photoId = safeDecodePathSegment(photoFinalMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return uploadFinalPhoto(request, env, scope, photoId);
   }
@@ -5242,7 +5285,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const photoId = decodeURIComponent(photoRawMatch[1]);
+    const photoId = safeDecodePathSegment(photoRawMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return uploadRawPhoto(request, env, scope, photoId);
   }
@@ -5256,11 +5303,13 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    return getAdminPhotoImage(
-      env,
-      scope,
-      decodeURIComponent(adminPhotoImageMatch[1]),
-    );
+    const photoId = safeDecodePathSegment(adminPhotoImageMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return getAdminPhotoImage(env, scope, photoId);
   }
 
   const adminPhotoFinalImageMatch = url.pathname.match(
@@ -5272,11 +5321,13 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    return getAdminFinalPhotoImage(
-      env,
-      scope,
-      decodeURIComponent(adminPhotoFinalImageMatch[1]),
-    );
+    const photoId = safeDecodePathSegment(adminPhotoFinalImageMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return getAdminFinalPhotoImage(env, scope, photoId);
   }
 
   const adminPhotoVariantImageMatch = url.pathname.match(
@@ -5288,10 +5339,16 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
+    const photoId = safeDecodePathSegment(adminPhotoVariantImageMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
     return getAdminPhotoVariantImage(
       env,
       scope,
-      decodeURIComponent(adminPhotoVariantImageMatch[1]),
+      photoId,
       adminPhotoVariantImageMatch[2] as PhotoVariantSource,
       adminPhotoVariantImageMatch[3] as PhotoVariantKind,
     );
@@ -5304,7 +5361,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const photoId = decodeURIComponent(photoMatch[1]);
+    const photoId = safeDecodePathSegment(photoMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return deletePhoto(env, scope, photoId);
   }
@@ -5318,7 +5379,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const photoId = decodeURIComponent(photoHeartsMatch[1]);
+    const photoId = safeDecodePathSegment(photoHeartsMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return requireOwnerRole(principal) ?? clearPhotoHearts(scope, photoId);
   }
@@ -5332,7 +5397,11 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const photoId = decodeURIComponent(photoWorkflowMatch[1]);
+    const photoId = safeDecodePathSegment(photoWorkflowMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return setPhotoWorkflowStatus(request, scope, photoId);
   }
@@ -5346,11 +5415,17 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
+    const photoId = safeDecodePathSegment(adminVariantUploadMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
     return uploadPhotoVariants(
       request,
       env,
       scope,
-      decodeURIComponent(adminVariantUploadMatch[1]),
+      photoId,
       adminVariantUploadMatch[2] as PhotoVariantSource,
     );
   }
@@ -5432,11 +5507,14 @@ async function routeRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    return getGalleryPhotoImage(
-      env,
-      decodeURIComponent(galleryPhotoImageMatch[1]),
-      decodeURIComponent(galleryPhotoImageMatch[2]),
-    );
+    const shareToken = safeDecodePathSegment(galleryPhotoImageMatch[1]);
+    const photoId = safeDecodePathSegment(galleryPhotoImageMatch[2]);
+
+    if (shareToken === null || photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return getGalleryPhotoImage(env, shareToken, photoId);
   }
 
   const galleryPhotoFinalImageMatch = url.pathname.match(
@@ -5448,11 +5526,14 @@ async function routeRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    return getGalleryFinalPhotoImage(
-      env,
-      decodeURIComponent(galleryPhotoFinalImageMatch[1]),
-      decodeURIComponent(galleryPhotoFinalImageMatch[2]),
-    );
+    const shareToken = safeDecodePathSegment(galleryPhotoFinalImageMatch[1]);
+    const photoId = safeDecodePathSegment(galleryPhotoFinalImageMatch[2]);
+
+    if (shareToken === null || photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return getGalleryFinalPhotoImage(env, shareToken, photoId);
   }
 
   const galleryPhotoVariantImageMatch = url.pathname.match(
@@ -5464,10 +5545,17 @@ async function routeRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
+    const shareToken = safeDecodePathSegment(galleryPhotoVariantImageMatch[1]);
+    const photoId = safeDecodePathSegment(galleryPhotoVariantImageMatch[2]);
+
+    if (shareToken === null || photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
     return getGalleryPhotoVariantImage(
       env,
-      decodeURIComponent(galleryPhotoVariantImageMatch[1]),
-      decodeURIComponent(galleryPhotoVariantImageMatch[2]),
+      shareToken,
+      photoId,
       galleryPhotoVariantImageMatch[3] as PhotoVariantSource,
       galleryPhotoVariantImageMatch[4] as PhotoVariantKind,
     );
@@ -5485,7 +5573,11 @@ async function routeRequest(
   );
 
   if (galleryMutationMatch && request.method !== "GET") {
-    const shareToken = decodeURIComponent(galleryMutationMatch[1]);
+    const shareToken = safeDecodePathSegment(galleryMutationMatch[1]);
+
+    if (shareToken === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     const galleryGuard = await requireOpenGallery(env, shareToken);
 
@@ -5499,8 +5591,12 @@ async function routeRequest(
   );
 
   if (galleryHeartMatch) {
-    const shareToken = decodeURIComponent(galleryHeartMatch[1]);
-    const photoId = decodeURIComponent(galleryHeartMatch[2]);
+    const shareToken = safeDecodePathSegment(galleryHeartMatch[1]);
+    const photoId = safeDecodePathSegment(galleryHeartMatch[2]);
+
+    if (shareToken === null || photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     if (request.method === "PUT") {
       return addHeart(request, env, shareToken, photoId);
@@ -5518,8 +5614,12 @@ async function routeRequest(
   );
 
   if (galleryRawRequestMatch) {
-    const shareToken = decodeURIComponent(galleryRawRequestMatch[1]);
-    const photoId = decodeURIComponent(galleryRawRequestMatch[2]);
+    const shareToken = safeDecodePathSegment(galleryRawRequestMatch[1]);
+    const photoId = safeDecodePathSegment(galleryRawRequestMatch[2]);
+
+    if (shareToken === null || photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     if (request.method === "PUT") {
       return addRawRequest(request, env, ctx, shareToken, photoId);
@@ -5551,13 +5651,14 @@ async function routeRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    return getGalleryRawPhoto(
-      request,
-      env,
-      ctx,
-      decodeURIComponent(galleryRawDownloadMatch[1]),
-      decodeURIComponent(galleryRawDownloadMatch[2]),
-    );
+    const shareToken = safeDecodePathSegment(galleryRawDownloadMatch[1]);
+    const photoId = safeDecodePathSegment(galleryRawDownloadMatch[2]);
+
+    if (shareToken === null || photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return getGalleryRawPhoto(request, env, ctx, shareToken, photoId);
   }
 
   const galleryCommentMatch = url.pathname.match(
@@ -5565,9 +5666,13 @@ async function routeRequest(
   );
 
   if (galleryCommentMatch) {
-    const shareToken = decodeURIComponent(galleryCommentMatch[1]);
-    const photoId = decodeURIComponent(galleryCommentMatch[2]);
-    const commentId = decodeURIComponent(galleryCommentMatch[3]);
+    const shareToken = safeDecodePathSegment(galleryCommentMatch[1]);
+    const photoId = safeDecodePathSegment(galleryCommentMatch[2]);
+    const commentId = safeDecodePathSegment(galleryCommentMatch[3]);
+
+    if (shareToken === null || photoId === null || commentId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     if (request.method === "PUT") {
       return updateComment(request, env, shareToken, photoId, commentId);
@@ -5589,8 +5694,12 @@ async function routeRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const shareToken = decodeURIComponent(galleryCommentsMatch[1]);
-    const photoId = decodeURIComponent(galleryCommentsMatch[2]);
+    const shareToken = safeDecodePathSegment(galleryCommentsMatch[1]);
+    const photoId = safeDecodePathSegment(galleryCommentsMatch[2]);
+
+    if (shareToken === null || photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return addComment(request, env, shareToken, photoId);
   }
@@ -5602,7 +5711,11 @@ async function routeRequest(
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
-    const shareToken = decodeURIComponent(publicGalleryMatch[1]);
+    const shareToken = safeDecodePathSegment(publicGalleryMatch[1]);
+
+    if (shareToken === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
 
     return getPublicGallery(request, env, shareToken);
   }
