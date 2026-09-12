@@ -490,8 +490,10 @@ enum APIClientError: LocalizedError {
     /*
      * A 413 the worker did not send. Cloudflare caps a Worker's incoming
      * request body by zone plan -- 100 MB on Free and Pro -- and rejects
-     * anything larger at the edge with its own HTML error, so the app's own
-     * 128 MB limit can pass a file the network then refuses. Distinguished
+     * anything larger at the edge with its own HTML error before the app's
+     * own limit (now pinned equal to it, #215) is ever the deciding factor;
+     * this stays as a safety net for the difference between a file's byte
+     * size and the slightly larger multipart body it travels in. Distinguished
      * from .server because the message has to point at the right ceiling.
      */
     case rawUploadRejectedByEdge(String)

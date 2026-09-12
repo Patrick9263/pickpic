@@ -541,7 +541,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
    * token is a header, and a navigation cannot carry one. The alternative --
    * putting a signed token in the URL -- would stream straight to disk and
    * spend no memory, but it puts a credential somewhere it can be shared or
-   * logged, and MAX_RAW_BYTES caps what lands here at 128 MB.
+   * logged, and MAX_RAW_BYTES caps what lands here at 100 MB.
    */
   async function downloadRawPhoto(photo: GalleryPhotoRecord): Promise<void> {
     if (!photo.viewerRawDownload || downloadingRawPhotoId !== null) {

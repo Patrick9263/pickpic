@@ -488,25 +488,27 @@ const MAX_FINAL_JPEG_BYTES = 50 * 1024 * 1024;
  * 60-80 MB and an uncompressed one around 120 MB, so a RAW is 10-20x the proof
  * JPEG that photos.byte_size measures (trap 6).
  *
- * There is a second ceiling above this one that we do not set. Cloudflare caps
- * a Worker's *incoming request body* by zone plan -- 100 MB on Free and Pro,
- * 200 MB on Business -- and that rejection happens at the edge, before this
- * handler runs, with Cloudflare's own error page rather than our JSON. So on a
- * Free or Pro zone the effective limit is 100 MB whatever this says, and the
- * iPad translates an unparseable 413 into a message that names the edge rather
- * than this constant. Keep RawUploadFileService.maximumRawBytes in the iPad app
- * equal to this value.
+ * Pinned to Cloudflare's own ceiling rather than set independently of it.
+ * Cloudflare caps a Worker's *incoming request body* by zone plan -- 100 MB on
+ * Free and Pro, 200 MB on Business -- and that rejection happens at the edge,
+ * before this handler runs, with Cloudflare's own error page rather than our
+ * JSON. Setting this any higher than the zone's cap (as it used to be, at 128
+ * MB -- see #215) creates a dead band where every layer here believes an
+ * upload is legal and only the edge disagrees, so the RAW is rejected only
+ * after the photographer's connection has spent minutes uploading it. Keep
+ * RawUploadFileService.maximumRawBytes in the iPad app equal to this value.
  */
-const MAX_RAW_BYTES = 128 * 1024 * 1024;
+const MAX_RAW_BYTES = 100 * 1024 * 1024;
 
 const RAW_CONTENT_TYPE = "application/octet-stream";
 
 /*
  * Named rather than inlined because the same sentence has to come back from
  * both the declared-size precheck and the stored-size re-check, and the iPad
- * shows it verbatim.
+ * shows it verbatim. Built from MAX_RAW_BYTES rather than a separate literal
+ * so the two can't drift apart the next time the limit changes.
  */
-const RAW_TOO_LARGE_MESSAGE = "The RAW file must be 128 MB or smaller.";
+const RAW_TOO_LARGE_MESSAGE = `The RAW file must be ${MAX_RAW_BYTES / (1024 * 1024)} MB or smaller.`;
 
 /*
  * The two halves of the reclaim policy (#209). A delivered RAW is the single
