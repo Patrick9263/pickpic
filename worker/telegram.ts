@@ -463,6 +463,33 @@ export function scheduleRawRequestNotification(
       didWarnAboutMissingConfigurationForRawRequests = true;
     }
 
+    /*
+     * Mark the row as "not configured" by writing an explanatory message to
+     * notification_last_error. This distinguishes it from "not yet sent"
+     * (where notification_last_error is NULL), allowing operators to diagnose
+     * configuration issues without shell access to the database.
+     */
+    ctx.waitUntil(
+      database
+        .prepare(
+          `
+          UPDATE raw_requests
+          SET
+            notification_last_error = ?
+          WHERE
+            photo_id = ?
+            AND visitor_id = ?
+            AND notification_last_error IS NULL
+        `,
+        )
+        .bind(
+          "Telegram bot token and/or chat ID not configured",
+          photoId,
+          visitorId,
+        )
+        .run(),
+    );
+
     return;
   }
 
