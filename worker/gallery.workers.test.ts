@@ -319,9 +319,49 @@ describe("GET /api/galleries/:shareToken", () => {
 describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
   const RAW_PATH = `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw`;
 
+  /*
+   * Drives this one route directly instead of through galleryRequest, because
+   * the downloaded_at stamp now rides on a waitUntil that only settles once
+   * the body has drained (see getGalleryRawPhoto). The shared helper awaits
+   * waitOnExecutionContext before the caller can touch the response, so there
+   * is no reader attached when the stamp is being waited on -- fine for eight
+   * bytes, a deadlock for anything past the stream's internal buffer. Reading
+   * or cancelling first is the order this route actually needs, and it is also
+   * how a real client behaves.
+   */
+  async function driveRawDownload(
+    consume: (response: Response) => Promise<unknown>,
+    visitorToken: string = VISITOR_TOKEN,
+  ): Promise<Response> {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new IncomingRequest(`${ORIGIN}${RAW_PATH}`, {
+        headers: { "X-PickPic-Visitor": visitorToken },
+      }),
+      env,
+      ctx,
+    );
+
+    await consume(response);
+    await waitOnExecutionContext(ctx);
+
+    return response;
+  }
+
+  async function readDownloadedAt(): Promise<string | null> {
+    const row = await env.DB.prepare(
+      "SELECT downloaded_at AS downloadedAt FROM raw_requests WHERE photo_id = ?",
+    )
+      .bind(PHOTO_ID)
+      .first<{ downloadedAt: string | null }>();
+
+    return row?.downloadedAt ?? null;
+  }
+
   async function seedDeliveredRaw(options?: {
     status?: string;
     fulfilled?: boolean;
+    bytes?: Uint8Array;
   }): Promise<string> {
     await insertEvent({
       id: EVENT_ID,
@@ -335,6 +375,7 @@ describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
       photoId: PHOTO_ID,
       eventId: EVENT_ID,
       originalFilename: "DSC01015.ARW",
+      bytes: options?.bytes,
     });
 
     await insertRawRequest({
@@ -351,15 +392,13 @@ describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
   it("serves the RAW to its requester as an uncacheable attachment", async () => {
     await seedDeliveredRaw();
 
-    const { response } = await galleryRequest("GET", RAW_PATH, {
-      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    const response = await driveRawDownload(async (streaming) => {
+      expect(new Uint8Array(await streaming.arrayBuffer())).toEqual(
+        new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+      );
     });
 
     expect(response.status).toBe(200);
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
-      new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
-    );
-
     expect(response.headers.get("Content-Type")).toBe(
       "application/octet-stream",
     );
@@ -376,20 +415,12 @@ describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
     expect(response.headers.get("Accept-Ranges")).toBeNull();
   });
 
-  it("stamps downloaded_at without immediately reclaiming the bytes", async () => {
+  it("stamps downloaded_at once the body has been collected", async () => {
     const storageKey = await seedDeliveredRaw();
 
-    await galleryRequest("GET", RAW_PATH, {
-      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
-    });
+    await driveRawDownload((response) => response.arrayBuffer());
 
-    const row = await env.DB.prepare(
-      "SELECT downloaded_at AS downloadedAt FROM raw_requests WHERE photo_id = ?",
-    )
-      .bind(PHOTO_ID)
-      .first<{ downloadedAt: string | null }>();
-
-    expect(row?.downloadedAt).not.toBeNull();
+    expect(await readDownloadedAt()).not.toBeNull();
 
     /*
      * The grace period, asserted directly: a download that died halfway has
@@ -400,12 +431,45 @@ describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
     expect(state.rawStorageKey).toBe(storageKey);
   });
 
+  /*
+   * The #239 case, and the reason the stamp moved off the start of the
+   * request: a transfer that dies partway must not read as collected, because
+   * #220's per-event release deletes on exactly that reading with no grace
+   * period behind it.
+   */
+  it("leaves downloaded_at unstamped when the transfer is abandoned", async () => {
+    /*
+     * Deliberately larger than the response stream's internal buffer. A
+     * payload small enough to sit in it whole would drain with no reader
+     * attached, and the cancel below would land after the stamp rather than
+     * instead of it -- the test would pass for the wrong reason, or flake.
+     */
+    const storageKey = await seedDeliveredRaw({
+      bytes: new Uint8Array(512 * 1024),
+    });
+
+    const response = await driveRawDownload((streaming) =>
+      streaming.body!.cancel(),
+    );
+
+    /*
+     * Pinned so the assertion below cannot pass because the route refused the
+     * request -- an unstamped 404 would look identical.
+     */
+    expect(response.status).toBe(200);
+    expect(await readDownloadedAt()).toBeNull();
+
+    /* And the bytes are still there for the retry. */
+    const state = await readRawPhotoState(PHOTO_ID, storageKey);
+    expect(state.objectExists).toBe(true);
+  });
+
   it("stays available on a completed gallery", async () => {
     await seedDeliveredRaw({ status: "completed" });
 
-    const { response } = await galleryRequest("GET", RAW_PATH, {
-      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
-    });
+    const response = await driveRawDownload((streaming) =>
+      streaming.arrayBuffer(),
+    );
 
     expect(response.status).toBe(200);
   });

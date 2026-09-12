@@ -3980,6 +3980,7 @@ async function getGalleryFinalPhotoImage(
 async function getGalleryRawPhoto(
   request: Request,
   env: Env,
+  ctx: ExecutionContext,
   shareToken: string,
   photoId: string,
 ): Promise<Response> {
@@ -4037,39 +4038,47 @@ async function getGalleryRawPhoto(
   }
 
   /*
-   * Stamped before the body streams, because a started download is all this
-   * route can observe -- see migration 0021. RAW_DOWNLOAD_GRACE_MS is what
-   * makes that honest: the stamp starts a clock, it does not free the bytes.
+   * The stamp rides on the body draining, not on the request arriving, which
+   * supersedes migration 0021's note that the end of a transfer cannot be
+   * observed here (#239). It can, in the one sense that matters: piping R2's
+   * body through a FixedLengthStream gives a promise that resolves only after
+   * exactly `object.size` bytes have been accepted downstream, and the runtime
+   * applies the client connection's backpressure the whole way. A transfer
+   * that dies at 80% on venue Wi-Fi rejects instead, leaving downloaded_at
+   * NULL -- so the button still reads "Download RAW" and nothing behind it has
+   * been spent.
+   *
+   * This got sharper with #220, which gave the photographer a release that
+   * skips RAW_DOWNLOAD_GRACE_MS outright. Its eligibility rule reads
+   * downloaded_at as "collected", so a stamp written for a transfer nobody
+   * ever received meant a per-event release could delete those bytes with no
+   * retry window at all.
+   *
+   * It is still not an acknowledgement from the browser -- the last hop out of
+   * the edge is not ours to see -- which is exactly why the grace period stays
+   * rather than being tightened on the back of this.
    */
-  const downloadedAt = new Date().toISOString();
+  const relay = new FixedLengthStream(object.size);
 
-  try {
-    await env.DB.prepare(
-      `
-        UPDATE raw_requests
-        SET downloaded_at = ?
-        WHERE
-          photo_id = ?
-          AND visitor_id = ?
-      `,
-    )
-      .bind(downloadedAt, photoId, rawRequest.visitorId)
-      .run();
-  } catch (error) {
-    /*
-     * Serve it anyway. Losing the stamp costs storage-days -- the TTL still
-     * collects it -- while refusing the download costs the visitor the file
-     * they were promised.
-     */
-    console.error("Unable to record a RAW file download:", error);
-  }
+  ctx.waitUntil(
+    object.body.pipeTo(relay.writable).then(
+      () => recordRawDownload(env, photoId, rawRequest.visitorId),
+      (error) => {
+        /*
+         * Every interrupted download lands here, so this is a normal outcome
+         * rather than a fault: say so quietly, leave the stamp unwritten, and
+         * let the viewer retry against bytes that are still there.
+         */
+        console.warn("A RAW file download did not complete:", error);
+      },
+    ),
+  );
 
   /*
-   * Deliberately no reclaim sweep here, for two reasons that reinforce each
-   * other. It could not fire anyway -- the stamp written a few lines above
-   * restarts the grace clock for this very photo, so the predicate is always
-   * false immediately after a download. And if it ever could fire, it would
-   * be deleting the R2 object this response is still streaming from. The
+   * Deliberately no reclaim sweep here. It would be deleting the R2 object
+   * this response is still streaming from -- and now that the stamp lands
+   * after the drain rather than before it, the grace clock that used to make
+   * the predicate trivially false has not even started at this point. The
    * bytes are collected by the sweep on the iPad's photo poll instead.
    */
 
@@ -4100,10 +4109,40 @@ async function getGalleryRawPhoto(
    * have removed the object underneath it; a retry of the whole file is both
    * simpler to reason about and what the grace period is sized for.
    */
-  return new Response(object.body, {
+  return new Response(relay.readable, {
     status: 200,
     headers,
   });
+}
+
+/*
+ * Writes the collection stamp for a RAW the visitor has now actually received.
+ *
+ * Runs from a waitUntil after the response has already gone, which is what
+ * makes swallowing the error the right call here: there is no request left to
+ * fail, the visitor has their file either way, and losing the stamp only costs
+ * storage-days because RAW_DELIVERY_TTL_MS still collects the object.
+ */
+async function recordRawDownload(
+  env: Env,
+  photoId: string,
+  visitorId: string,
+): Promise<void> {
+  try {
+    await env.DB.prepare(
+      `
+        UPDATE raw_requests
+        SET downloaded_at = ?
+        WHERE
+          photo_id = ?
+          AND visitor_id = ?
+      `,
+    )
+      .bind(new Date().toISOString(), photoId, visitorId)
+      .run();
+  } catch (error) {
+    console.error("Unable to record a RAW file download:", error);
+  }
 }
 
 async function uploadFinalPhoto(
@@ -5517,6 +5556,7 @@ async function routeRequest(
     return getGalleryRawPhoto(
       request,
       env,
+      ctx,
       decodeURIComponent(galleryRawDownloadMatch[1]),
       decodeURIComponent(galleryRawDownloadMatch[2]),
     );

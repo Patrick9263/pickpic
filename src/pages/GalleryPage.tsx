@@ -606,8 +606,11 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setActionNotice(DOWNLOAD_STARTED_NOTICE);
 
       /*
-       * The worker stamped downloaded_at when it started serving, so reflect
-       * that locally rather than refetching the whole gallery for one field.
+       * Only reached once response.blob() has resolved, meaning the whole
+       * body arrived -- which is the same condition the worker now stamps
+       * downloaded_at on (#239), so reflecting it locally cannot get ahead of
+       * the server the way it did when the stamp was written at request time.
+       * A field this small is not worth refetching the whole gallery for.
        */
       const downloadedAt = new Date().toISOString();
 
