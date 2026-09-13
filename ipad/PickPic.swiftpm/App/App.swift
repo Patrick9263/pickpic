@@ -424,6 +424,12 @@ struct PickPicApp: App {
                     syncedEventCount += 1
                 }
 
+                for filename in result?.fileResult.failedFilenames ?? [] {
+                    print(
+                        "To Edit sync could not copy \(filename) in event \(reference.eventID)."
+                    )
+                }
+
                 /*
                  * Handed the photos the pass above already fetched, so
                  * delivering RAWs costs no second round trip per event.
