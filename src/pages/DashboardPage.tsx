@@ -227,6 +227,8 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
   const [rawReleaseSummaries, setRawReleaseSummaries] = useState<
     Record<string, string>
   >({});
+  const [cancelingRawDeliveryPhotoId, setCancelingRawDeliveryPhotoId] =
+    useState<string | null>(null);
   const [updatingEventTitleId, setUpdatingEventTitleId] = useState<
     string | null
   >(null);
@@ -1116,6 +1118,63 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
     }
   }
 
+  async function handleCancelRawDelivery(
+    eventId: string,
+    photo: PhotoRecord,
+  ): Promise<void> {
+    const awaitingCount = photo.awaitingRawDownloadCount ?? 0;
+    const shouldCancel = window.confirm(
+      `Cancel the undelivered RAW for "${photo.originalFilename}"? ` +
+        `It will be deleted from storage, and ${
+          awaitingCount === 1
+            ? "the requester who hasn't"
+            : "requesters who haven't"
+        } downloaded it yet will need to ask again.`,
+    );
+
+    if (!shouldCancel) {
+      return;
+    }
+
+    setCancelingRawDeliveryPhotoId(photo.id);
+    setError(null);
+
+    try {
+      await fetchJson<{ photoId: string; cancelledRequestCount: number }>(
+        `/api/admin/photos/${encodeURIComponent(photo.id)}/raw-requests`,
+        {
+          method: "DELETE",
+        },
+      );
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventId]: (currentPhotos[eventId] ?? []).map((currentPhoto) =>
+          currentPhoto.id === photo.id
+            ? {
+                ...currentPhoto,
+                awaitingRawDownloadCount: 0,
+              }
+            : currentPhoto,
+        ),
+      }));
+
+      /*
+       * Mirrors handleReleaseCollectedRaws: the route reclaims before it
+       * answers, so the freed bytes are already off the account by now.
+       */
+      void loadStorageUsage();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to cancel the RAW delivery.",
+      );
+    } finally {
+      setCancelingRawDeliveryPhotoId(null);
+    }
+  }
+
   async function handleRenameEvent(
     eventRecord: EventRecord,
     title: string,
@@ -1501,6 +1560,8 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
                         rawReleaseSummaries[eventRecord.id] ?? null
                       }
                       handleReleaseCollectedRaws={handleReleaseCollectedRaws}
+                      cancelingRawDeliveryPhotoId={cancelingRawDeliveryPhotoId}
+                      handleCancelRawDelivery={handleCancelRawDelivery}
                       handleSetEventRawRequestsEnabled={
                         handleSetEventRawRequestsEnabled
                       }

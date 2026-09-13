@@ -169,6 +169,14 @@ interface RawPhotoRecord {
  */
 interface AdminPhotoRecord extends PhotoRecord {
   pendingRawRequestCount: number;
+
+  /*
+   * Fulfilled requests nobody has downloaded or had released -- also the
+   * population #221's cancel action targets (see cancelUndeliveredRawRequests
+   * below). Zero whenever raw_storage_key is null, since a request only gets
+   * fulfilled_at stamped once the RAW actually lands (addRawRequest,
+   * uploadRawPhoto).
+   */
   awaitingRawDownloadCount: number;
   rawPhoto: RawPhotoRecord | null;
 }
@@ -2394,10 +2402,11 @@ async function listPhotos(
 
         /*
          * A delivery the photographer would strand by disabling RAW requests
-         * (#237): fulfilled, not yet collected, and not already released --
-         * the same "outstanding" reading isRawReclaimable uses for the
-         * per-event release button, but per photo here so the toggle's
-         * confirmation can name what is actually at risk.
+         * (#237), and also #221's cancel target: fulfilled, not yet
+         * collected, and not already released -- the same "outstanding"
+         * reading isRawReclaimable uses for the per-event release button, but
+         * per photo here so the toggle's confirmation can name what is
+         * actually at risk.
          */
         (
           SELECT COUNT(*)
@@ -3429,6 +3438,76 @@ async function clearPhotoHearts(
   return jsonResponse({
     photoId,
     heartCount: 0,
+  });
+}
+
+/*
+ * "I fulfilled the wrong photo" / "the requester forgot" (#221), for one
+ * photo. This is the other half of releaseCollectedRawPhotos (#219) that
+ * issue deliberately left out: taking back a RAW nobody has downloaded yet,
+ * rather than one every live requester has already collected.
+ *
+ * That difference means this can't reuse released_at the way #219 does.
+ * isRawReclaimable's awaitingCount veto (the first real check it runs) counts
+ * any live row with downloaded_at IS NULL, full stop -- it never looks at
+ * released_at, which only starts to matter once every row already has a
+ * downloaded_at. Stamping released_at on an undelivered row would leave it
+ * vetoing reclaim forever, achieving nothing. So this deletes the row
+ * outright instead, exactly like removeRawRequest already does for a visitor
+ * who withdraws their own request -- and for the same reason: a withdrawn or
+ * cancelled request has no history worth keeping, unlike a collected one.
+ *
+ * Scoped to fulfilled_at IS NOT NULL because an unfulfilled request (nobody
+ * has uploaded anything yet) is a request to decline, not a delivery to
+ * cancel -- a different action this issue doesn't cover. Scoped to one photo,
+ * not the event, because the issue is explicit that a blanket per-event
+ * cancel would revoke every outstanding delivery in a shoot in one click.
+ */
+async function cancelUndeliveredRawRequests(
+  env: TenantEnv,
+  scope: AccountScope,
+  photoId: string,
+): Promise<Response> {
+  const photo = await scope
+    .prepare(
+      `
+      SELECT id
+      FROM photos
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<{ id: string }>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const result = await scope.database
+    .prepare(
+      `
+      DELETE FROM raw_requests
+      WHERE
+        photo_id = ?
+        AND fulfilled_at IS NOT NULL
+        AND downloaded_at IS NULL
+    `,
+    )
+    .bind(photoId)
+    .run();
+
+  /*
+   * Awaited rather than deferred, matching releaseCollectedRawPhotos: this
+   * route exists to make the bytes go away now, and the dashboard's storage
+   * figure reloads the moment it returns.
+   */
+  await reclaimRawPhotos(scope.database, env, "p.id = ?", photoId);
+
+  return jsonResponse({
+    photoId,
+    cancelledRequestCount: result.meta.changes ?? 0,
   });
 }
 
@@ -5454,6 +5533,27 @@ async function handleAdminRequest(
     }
 
     return requireOwnerRole(principal) ?? clearPhotoHearts(scope, photoId);
+  }
+
+  const photoRawRequestsMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/raw-requests$/,
+  );
+
+  if (photoRawRequestsMatch) {
+    if (request.method !== "DELETE") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = safeDecodePathSegment(photoRawRequestsMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return (
+      requireOwnerRole(principal) ??
+      cancelUndeliveredRawRequests(env, scope, photoId)
+    );
   }
 
   const photoWorkflowMatch = url.pathname.match(

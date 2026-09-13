@@ -119,6 +119,7 @@ type EventCardProps = {
   updatingEventRawRequestsId: string | null;
   releasingEventRawsId: string | null;
   rawReleaseSummary: string | null;
+  cancelingRawDeliveryPhotoId: string | null;
   updatingEventTitleId: string | null;
   deletingEventId: string | null;
   clearingEventPhotosId: string | null;
@@ -135,6 +136,7 @@ type EventCardProps = {
     enabled: boolean,
   ): Promise<void>;
   handleReleaseCollectedRaws(eventRecord: EventRecord): Promise<void>;
+  handleCancelRawDelivery(eventId: string, photo: PhotoRecord): Promise<void>;
   handleRepairPhotoVariants(eventId: string, photo: PhotoRecord): Promise<void>;
   handleFinalPhotoSelection(
     eventId: string,
@@ -176,6 +178,8 @@ function EventCard(props: EventCardProps) {
     releasingEventRawsId,
     rawReleaseSummary,
     handleReleaseCollectedRaws,
+    cancelingRawDeliveryPhotoId,
+    handleCancelRawDelivery,
     handleSetPhotoWorkflowStatus,
     handlePhotoSelection,
     handleDeletePhoto,
@@ -959,6 +963,20 @@ function EventCard(props: EventCardProps) {
                           {clearingHeartsPhotoId === photo.id
                             ? "Clearing…"
                             : "Clear hearts"}
+                        </button>
+                      )}
+                      {(photo.awaitingRawDownloadCount ?? 0) > 0 && (
+                        <button
+                          className="cancel-raw-delivery-button"
+                          type="button"
+                          disabled={cancelingRawDeliveryPhotoId === photo.id}
+                          onClick={() =>
+                            void handleCancelRawDelivery(eventRecord.id, photo)
+                          }
+                        >
+                          {cancelingRawDeliveryPhotoId === photo.id
+                            ? "Cancelling…"
+                            : "Cancel undelivered RAW"}
                         </button>
                       )}
 

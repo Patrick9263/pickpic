@@ -56,7 +56,8 @@ export interface PhotoRecord {
   /*
    * Admin-only, same reasoning as pendingRawRequestCount above: fulfilled RAW
    * requests this photo's requesters have neither downloaded nor had
-   * released, i.e. what a "disable RAW requests" toggle would strand.
+   * released, i.e. what a "disable RAW requests" toggle would strand. Also
+   * what gates showing #221's "cancel this delivery" action on a photo.
    */
   awaitingRawDownloadCount?: number;
 

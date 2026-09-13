@@ -662,6 +662,22 @@ button:disabled {
   text-decoration: underline;
 }
 
+.cancel-raw-delivery-button {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: #a43830;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 2px 0;
+}
+
+.cancel-raw-delivery-button:hover:not(:disabled) {
+  background: transparent;
+  color: #76241e;
+  text-decoration: underline;
+}
+
 .photo-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1000,11 +1016,13 @@ input:focus {
   color: var(--color-danger);
 }
 
-.delete-photo-button {
+.delete-photo-button,
+.cancel-raw-delivery-button {
   color: var(--color-danger);
 }
 
-.delete-photo-button:hover:not(:disabled) {
+.delete-photo-button:hover:not(:disabled),
+.cancel-raw-delivery-button:hover:not(:disabled) {
   color: #ffc0bb;
 }
 
