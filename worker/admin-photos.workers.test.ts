@@ -321,6 +321,67 @@ describe("PUT /api/admin/photos/:id/raw", () => {
   });
 });
 
+describe("POST /api/admin/events/:id/photos", () => {
+  const UPLOAD_EVENT_ID = "event-photos-upload-memo";
+
+  const jpegHeaders = (filename: string, seed: string) => ({
+    "Content-Type": "image/jpeg",
+    "X-File-Name": filename,
+    "X-File-SHA256": testSha256(seed),
+  });
+
+  it("opens a draft event once, then skips reopening it for later uploads in the same isolate", async () => {
+    await insertEvent({
+      id: UPLOAD_EVENT_ID,
+      shareToken: "share-photos-upload-memo",
+      status: "draft",
+    });
+
+    const first = await adminRequest(
+      "POST",
+      `/api/admin/events/${UPLOAD_EVENT_ID}/photos`,
+      { body: new Uint8Array(16), headers: jpegHeaders("a.jpg", "memo-a") },
+    );
+
+    expect(first.status).toBe(201);
+
+    const afterFirstUpload = await env.DB.prepare(
+      `SELECT status FROM events WHERE id = ?`,
+    )
+      .bind(UPLOAD_EVENT_ID)
+      .first<{ status: string }>();
+
+    expect(afterFirstUpload?.status).toBe("ready");
+
+    /*
+     * Simulate the event being reset to draft after the isolate already
+     * memoized it as opened -- a real photographer can't do this, but it's
+     * the only way to observe the skip from outside: without the memo, this
+     * second upload would flip status back to 'ready' the same way the
+     * first one did.
+     */
+    await env.DB.prepare(`UPDATE events SET status = 'draft' WHERE id = ?`)
+      .bind(UPLOAD_EVENT_ID)
+      .run();
+
+    const second = await adminRequest(
+      "POST",
+      `/api/admin/events/${UPLOAD_EVENT_ID}/photos`,
+      { body: new Uint8Array(16), headers: jpegHeaders("b.jpg", "memo-b") },
+    );
+
+    expect(second.status).toBe(201);
+
+    const afterSecondUpload = await env.DB.prepare(
+      `SELECT status FROM events WHERE id = ?`,
+    )
+      .bind(UPLOAD_EVENT_ID)
+      .first<{ status: string }>();
+
+    expect(afterSecondUpload?.status).toBe("draft");
+  });
+});
+
 describe("DELETE /api/admin/events/:id/photos", () => {
   it("deletes every photo on the event and reports the count", async () => {
     await insertPhoto({ id: "photo-a", eventId: EVENT_ID });
