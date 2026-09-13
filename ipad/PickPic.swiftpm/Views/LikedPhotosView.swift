@@ -17,6 +17,9 @@ struct LikedPhotosView: View {
     @EnvironmentObject private var finishedEdits:
     FinishedEditsWatcher
 
+    @EnvironmentObject private var rawRequestStatus:
+    RawRequestStatusStore
+
     @StateObject private var viewModel =
     LikedPhotosViewModel()
     
@@ -40,6 +43,8 @@ struct LikedPhotosView: View {
             if folderReference != nil {
                 automaticSyncSection
             }
+
+            pendingRawRequestsSection
 
             likedPhotosSection
             
@@ -319,6 +324,76 @@ struct LikedPhotosView: View {
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+        }
+    }
+
+    /*
+     * Answers "what has been asked for and not yet sent?" (#217). Before
+     * this, needsRawUpload was computed server-side and consumed entirely
+     * inside the background sweep — nothing rendered it, so the only
+     * in-app signal was a toast that appeared after a delivery already
+     * succeeded.
+     */
+    private var pendingRawRequestsSection: some View {
+        Section {
+            if viewModel.pendingRawUploadPhotos.isEmpty {
+                Label(
+                    "Nothing outstanding",
+                    systemImage: "checkmark.circle"
+                )
+                .foregroundStyle(.secondary)
+            } else {
+                ForEach(
+                    viewModel.pendingRawUploadPhotos
+                ) { photo in
+                    Text(photo.originalFilename)
+                }
+            }
+
+            if let failure =
+                rawRequestStatus
+                    .failuresByEventID[event.id] {
+                if !failure.failedFilenames.isEmpty {
+                    Label(
+                        "Delivery failed: "
+                        + failure.failedFilenames
+                            .joined(separator: ", "),
+                        systemImage:
+                            "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.red)
+                }
+
+                if !failure.missingFilenames.isEmpty {
+                    Label(
+                        "Not found in the event folder: "
+                        + failure.missingFilenames
+                            .joined(separator: ", "),
+                        systemImage:
+                            "questionmark.folder"
+                    )
+                    .foregroundStyle(.orange)
+                }
+
+                LabeledContent(
+                    "As of",
+                    value:
+                        failure.checkedAt
+                        .formatted(
+                            date: .omitted,
+                            time: .shortened
+                        )
+                )
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text(
+                "RAW Requests (\(viewModel.pendingRawUploadPhotos.count))"
+            )
+        } footer: {
+            Text(
+                "Originals PickPic sends automatically to viewers who asked for them. A failure or a missing file here clears once it's resolved and the next automatic check runs."
+            )
         }
     }
 
