@@ -288,15 +288,20 @@ confident recommendation drawn from six rows will be acted on and is worse than 
 
 Every run appends one row to `~/.claude/pickpic-review/metrics.csv` — timestamp, mode, kind, target,
 outcome, model, effort, scan count, findings, before/after budget for both windows, duration, the
-issue it posted, and an `implemented` column holding one entry per issue attempted
-(`<issue>:<pr>:<model>/<effort>`, or `:no-pr:`, `:failed:`, or `:deferred-budget`). That is a
-separate column from the posted issue because a run can now do both. New columns are appended at the
-end and readers count from the front, so rows written before a column existed simply end early —
-`render_bar_chart` relies on this, and so does the trends prompt. It is written from an `EXIT` trap, so **skips and failures are recorded as
-faithfully as successes**: how often the job stands down and why is the more interesting trend than
-what a successful run costs. Budget figures are integer percentages, so a single row is coarse, but
-across weeks it answers whether sweeps are getting more expensive and how much of the weekly window
-this job really consumes.
+issue it posted, an `implemented` column holding one entry per issue attempted
+(`<issue>:<pr>:<model>/<effort>`, or `:no-pr:`, `:failed:`, or `:deferred-budget`), and a `source`
+column of `scheduled` or `manual` — set by whether `--scheduled` was passed, which only the three
+LaunchAgent plists do. That lets the Sunday trends run separate the automated pacing it's actually
+auditing from ad-hoc runs Patrick or Claude kicked off by hand, which don't respect the same
+one-run-per-morning weight ladder (running the script twice in a row picks up wherever the first
+run's budget left off, since the weight ceiling resets per invocation rather than per day). The
+`implemented` column is separate from the posted issue because a run can now do both. New columns
+are appended at the end and readers count from the front, so rows written before a column existed
+simply end early — `render_bar_chart` relies on this, and so does the trends prompt. It is written
+from an `EXIT` trap, so **skips and failures are recorded as faithfully as successes**: how often the
+job stands down and why is the more interesting trend than what a successful run costs. Budget
+figures are integer percentages, so a single row is coarse, but across weeks it answers whether
+sweeps are getting more expensive and how much of the weekly window this job really consumes.
 
 Logs are in `~/Library/Logs/claude-review-*.log` and `~/.claude/pickpic-review/logs/`; reports are
 kept in `~/.claude/pickpic-review/reports/`. An unparseable `/usage` aborts the run and logs loudly

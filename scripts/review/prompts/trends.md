@@ -5,13 +5,24 @@ This is not a code review. The subject is the job itself: whether its thresholds
 and whether it is producing work worth the budget it spends. The data is appended below — the
 metrics CSV it writes on every run, and every issue in the repository.
 
-Two things about reading that CSV. Rows written before the `implemented` column existed simply end
-early — count columns from the front, not the back. And the backlog figure the job gates on changed
-meaning: it used to count every unlabelled open issue, which swept in Patrick's hand-written feature
-backlog and stood the weekday runs down for reasons that had nothing to do with this job; it now
-counts only findings still unread inside open `review-report` issues. Older `skip-backlog-full` rows
-were therefore produced under a stricter, differently-shaped rule than current ones — do not read a
-trend across that boundary without saying so.
+Three things about reading that CSV. Rows written before the `implemented` column (or the `source`
+column after it) existed simply end early — count columns from the front, not the back, and treat a
+missing `source` as unknown rather than assuming "manual". And the backlog figure the job gates on
+changed meaning: it used to count every unlabelled open issue, which swept in Patrick's hand-written
+feature backlog and stood the weekday runs down for reasons that had nothing to do with this job; it
+now counts only findings still unread inside open `review-report` issues. Older `skip-backlog-full`
+rows were therefore produced under a stricter, differently-shaped rule than current ones — do not
+read a trend across that boundary without saying so.
+
+`source` is `scheduled` for the three launchd-triggered runs and `manual` for anything Patrick or
+Claude ran by hand from a terminal. A manual run doesn't respect the ladder's one-run-per-morning
+pacing — running it twice in a row picks up wherever the first run's weight budget left off — so it
+can look like the scheduler is spending faster or clearing the ready queue quicker than it actually
+does unattended. **When computing cost-per-run, skip behaviour, or anything about the automated
+pacing itself, restrict to `source = scheduled` rows and say so.** Manual rows are still worth a
+callout of their own — e.g. if hand-run passes are doing work the schedule isn't getting to, or if
+their outcomes diverge sharply from scheduled ones — but keep the two counted separately rather than
+blending them into one trend.
 
 ## The question that matters most
 
