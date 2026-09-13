@@ -70,6 +70,7 @@
 		CDFF001A0000000000000000 /* PhotoMetadataServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */; };
 		CDFF00210000000000000000 /* EventFolderStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00200000000000000000 /* EventFolderStoreTests.swift */; };
 		CDFF00230000000000000000 /* EditedFolderServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00220000000000000000 /* EditedFolderServiceTests.swift */; };
+		CDBB00010000000000000000 /* ToEditSyncServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDBB00020000000000000000 /* ToEditSyncServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -138,6 +139,7 @@
 		CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataServiceTests.swift; sourceTree = "<group>"; };
 		CDFF00200000000000000000 /* EventFolderStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventFolderStoreTests.swift; sourceTree = "<group>"; };
 		CDFF00220000000000000000 /* EditedFolderServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedFolderServiceTests.swift; sourceTree = "<group>"; };
+		CDBB00020000000000000000 /* ToEditSyncServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToEditSyncServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -220,6 +222,7 @@
 				CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */,
 				CDFF00200000000000000000 /* EventFolderStoreTests.swift */,
 				CDFF00220000000000000000 /* EditedFolderServiceTests.swift */,
+				CDBB00020000000000000000 /* ToEditSyncServiceTests.swift */,
 			);
 			path = PickPicTests;
 			sourceTree = "<group>";
@@ -538,6 +541,7 @@
 				CDFF001A0000000000000000 /* PhotoMetadataServiceTests.swift in Sources */,
 				CDFF00210000000000000000 /* EventFolderStoreTests.swift in Sources */,
 				CDFF00230000000000000000 /* EditedFolderServiceTests.swift in Sources */,
+				CDBB00010000000000000000 /* ToEditSyncServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

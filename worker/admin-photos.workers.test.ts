@@ -22,7 +22,7 @@ interface PhotoListBody {
     id: string;
     heartCount: number;
     pendingRawRequestCount: number;
-    awaitingCollectionCount: number;
+    awaitingRawDownloadCount: number;
     rawPhoto: {
       originalFilename: string;
       contentType: string;
@@ -154,32 +154,6 @@ describe("GET /api/admin/events/:id/photos", () => {
     expect(photoById(result.body, "photo-a").pendingRawRequestCount).toBe(1);
   });
 
-  it("counts a fulfilled request as awaiting collection until it is downloaded", async () => {
-    await insertPhoto({ id: "photo-a", eventId: EVENT_ID });
-
-    await insertRawRequest({
-      photoId: "photo-a",
-      eventId: EVENT_ID,
-      visitorToken: "visitor-token-one____",
-      fulfilledAt: "2026-09-09T00:00:00.000Z",
-    });
-
-    await insertRawRequest({
-      photoId: "photo-a",
-      eventId: EVENT_ID,
-      visitorToken: "visitor-token-two____",
-      fulfilledAt: "2026-09-09T00:00:00.000Z",
-      downloadedAt: "2026-09-09T01:00:00.000Z",
-    });
-
-    const result = await adminRequest<PhotoListBody>(
-      "GET",
-      `/api/admin/events/${EVENT_ID}/photos`,
-    );
-
-    expect(photoById(result.body, "photo-a").awaitingCollectionCount).toBe(1);
-  });
-
   it("reports a photo with no RAW requests as zero rather than absent", async () => {
     await insertPhoto({ id: "photo-a", eventId: EVENT_ID });
 
@@ -189,6 +163,54 @@ describe("GET /api/admin/events/:id/photos", () => {
     );
 
     expect(photoById(result.body, "photo-a").pendingRawRequestCount).toBe(0);
+  });
+
+  /*
+   * #237: this is what a "disable RAW requests" confirmation needs to warn
+   * about -- a delivery sitting in R2 that nobody has collected yet, and
+   * that disabling the toggle would strand rather than take back.
+   */
+  it("counts a fulfilled RAW request as awaiting only until it is downloaded or released", async () => {
+    await insertPhoto({ id: "photo-a", eventId: EVENT_ID });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-awaiting",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+    });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-collected",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+      downloadedAt: "2026-09-10T00:00:00.000Z",
+    });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-released",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+      releasedAt: "2026-09-11T00:00:00.000Z",
+    });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-pending",
+    });
+
+    const result = await adminRequest<PhotoListBody>(
+      "GET",
+      `/api/admin/events/${EVENT_ID}/photos`,
+    );
+
+    const photo = photoById(result.body, "photo-a");
+
+    expect(photo.awaitingRawDownloadCount).toBe(1);
+    expect(photo.pendingRawRequestCount).toBe(1);
   });
 });
 
@@ -347,6 +369,67 @@ describe("PUT /api/admin/photos/:id/raw", () => {
     expectMethodNotAllowed(
       await adminRequest("GET", "/api/admin/photos/photo-a/raw"),
     );
+  });
+});
+
+describe("POST /api/admin/events/:id/photos", () => {
+  const UPLOAD_EVENT_ID = "event-photos-upload-memo";
+
+  const jpegHeaders = (filename: string, seed: string) => ({
+    "Content-Type": "image/jpeg",
+    "X-File-Name": filename,
+    "X-File-SHA256": testSha256(seed),
+  });
+
+  it("opens a draft event once, then skips reopening it for later uploads in the same isolate", async () => {
+    await insertEvent({
+      id: UPLOAD_EVENT_ID,
+      shareToken: "share-photos-upload-memo",
+      status: "draft",
+    });
+
+    const first = await adminRequest(
+      "POST",
+      `/api/admin/events/${UPLOAD_EVENT_ID}/photos`,
+      { body: new Uint8Array(16), headers: jpegHeaders("a.jpg", "memo-a") },
+    );
+
+    expect(first.status).toBe(201);
+
+    const afterFirstUpload = await env.DB.prepare(
+      `SELECT status FROM events WHERE id = ?`,
+    )
+      .bind(UPLOAD_EVENT_ID)
+      .first<{ status: string }>();
+
+    expect(afterFirstUpload?.status).toBe("ready");
+
+    /*
+     * Simulate the event being reset to draft after the isolate already
+     * memoized it as opened -- a real photographer can't do this, but it's
+     * the only way to observe the skip from outside: without the memo, this
+     * second upload would flip status back to 'ready' the same way the
+     * first one did.
+     */
+    await env.DB.prepare(`UPDATE events SET status = 'draft' WHERE id = ?`)
+      .bind(UPLOAD_EVENT_ID)
+      .run();
+
+    const second = await adminRequest(
+      "POST",
+      `/api/admin/events/${UPLOAD_EVENT_ID}/photos`,
+      { body: new Uint8Array(16), headers: jpegHeaders("b.jpg", "memo-b") },
+    );
+
+    expect(second.status).toBe(201);
+
+    const afterSecondUpload = await env.DB.prepare(
+      `SELECT status FROM events WHERE id = ?`,
+    )
+      .bind(UPLOAD_EVENT_ID)
+      .first<{ status: string }>();
+
+    expect(afterSecondUpload?.status).toBe("draft");
   });
 });
 

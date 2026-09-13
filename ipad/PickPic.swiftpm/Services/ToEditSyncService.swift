@@ -11,7 +11,8 @@ struct ToEditSyncResult:
     
     let syncedFilenames: Set<String>
     let missingFilenames: [String]
-    
+    let failedFilenames: [String]
+
     let syncedAt: Date
 }
 
@@ -353,6 +354,7 @@ enum ToEditSyncService {
         var alreadyPresentCount = 0
         var syncedFilenames: Set<String> = []
         var missingFilenames: [String] = []
+        var failedFilenames: [String] = []
         
         for photo in likedPhotos {
             let filename = photo.originalFilename
@@ -428,42 +430,57 @@ enum ToEditSyncService {
                 continue
             }
 
-            let sourceHash =
-            try HashingService.sha256Hex(
-                for: sourceURL
-            )
+            do {
+                let sourceHash =
+                try HashingService.sha256Hex(
+                    for: sourceURL
+                )
 
-            try FileManager.default.copyItem(
-                at: sourceURL,
-                to: destinationURL
-            )
+                try FileManager.default.copyItem(
+                    at: sourceURL,
+                    to: destinationURL
+                )
 
-            let destinationHash =
-            try HashingService.sha256Hex(
-                for: destinationURL
-            )
+                let destinationHash =
+                try HashingService.sha256Hex(
+                    for: destinationURL
+                )
 
-            guard sourceHash == destinationHash else {
+                guard sourceHash == destinationHash else {
+                    try? FileManager.default.removeItem(
+                        at: destinationURL
+                    )
+
+                    throw ToEditSyncError
+                        .verificationFailed(filename)
+                }
+
+                /*
+                 * Best-effort: the verified copy in To Edit is what makes
+                 * the sync correct. A source that can't be removed (a
+                 * read-only file provider, say) just means this file's
+                 * storage isn't reclaimed yet, not that the sync failed.
+                 */
+                try? FileManager.default.removeItem(
+                    at: sourceURL
+                )
+
+                movedPhotoCount += 1
+                syncedFilenames.insert(filename)
+            } catch {
+                /*
+                 * One unreadable RAW — an iCloud Drive placeholder that
+                 * hasn't downloaded is the realistic case — must not stall
+                 * every other liked photo behind it in the same pass.
+                 * Reported the same way missingFilenames already is,
+                 * rather than aborting the whole sync (#233).
+                 */
                 try? FileManager.default.removeItem(
                     at: destinationURL
                 )
 
-                throw ToEditSyncError
-                    .verificationFailed(filename)
+                failedFilenames.append(filename)
             }
-
-            /*
-             * Best-effort: the verified copy in To Edit is what makes
-             * the sync correct. A source that can't be removed (a
-             * read-only file provider, say) just means this file's
-             * storage isn't reclaimed yet, not that the sync failed.
-             */
-            try? FileManager.default.removeItem(
-                at: sourceURL
-            )
-
-            movedPhotoCount += 1
-            syncedFilenames.insert(filename)
         }
 
         return ToEditSyncResult(
@@ -473,6 +490,7 @@ enum ToEditSyncService {
             reclaimedPhotoCount: reclaimedPhotoCount,
             syncedFilenames: syncedFilenames,
             missingFilenames: missingFilenames,
+            failedFilenames: failedFilenames,
             syncedAt: Date()
         )
     }

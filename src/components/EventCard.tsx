@@ -965,7 +965,7 @@ function EventCard(props: EventCardProps) {
                             : "Clear hearts"}
                         </button>
                       )}
-                      {(photo.awaitingCollectionCount ?? 0) > 0 && (
+                      {(photo.awaitingRawDownloadCount ?? 0) > 0 && (
                         <button
                           className="cancel-raw-delivery-button"
                           type="button"
