@@ -56,6 +56,15 @@ export interface AppleIdentity {
   email: string | null;
 }
 
+/*
+ * The iPad app's bundle identifier, kept in sync by hand with
+ * ipad/PickPic.xcodeproj/project.pbxproj's PRODUCT_BUNDLE_IDENTIFIER and
+ * ipad/PickPic.swiftpm/Package.swift's bundleIdentifier. It is public --
+ * Apple hands it to anyone who inspects the shipped app -- so there is
+ * nothing gained by threading it through configuration.
+ */
+const APPLE_BUNDLE_ID = "photos.pickpic.app";
+
 const APPLE_ISSUER = "https://appleid.apple.com";
 
 const APPLE_AUTHORIZE_URL = `${APPLE_ISSUER}/auth/authorize`;
@@ -129,6 +138,44 @@ export function resolveAppleConfig(
   }
 
   return { clientId, redirectUri, teamId, keyId, privateKey };
+}
+
+export interface AppSiteAssociation {
+  applinks: {
+    details: Array<{ appID: string; paths: string[] }>;
+  };
+}
+
+/*
+ * Null when APPLE_TEAM_ID is unset, so the route can 404 rather than publish
+ * an association file naming no team -- a file Apple would then cache against
+ * a broken app ID. Deliberately independent of resolveAppleConfig: this file
+ * has nothing to do with Sign in with Apple's OAuth flow, only the same
+ * Apple Developer team, so it should work even on a deployment that hasn't
+ * configured SIWA's client id, redirect URI or signing key.
+ *
+ * Scoped to /sign-in* so the universal link claims only the tap-to-sign-in
+ * path, not every gallery URL on app.pickpic.photos.
+ */
+export function buildAppleAppSiteAssociation(
+  environment: Pick<AppleEnvironment, "APPLE_TEAM_ID">,
+): AppSiteAssociation | null {
+  const teamId = environment.APPLE_TEAM_ID?.trim();
+
+  if (!teamId) {
+    return null;
+  }
+
+  return {
+    applinks: {
+      details: [
+        {
+          appID: `${teamId}.${APPLE_BUNDLE_ID}`,
+          paths: ["/sign-in*"],
+        },
+      ],
+    },
+  };
 }
 
 export function buildAppleAuthorizeUrl(
