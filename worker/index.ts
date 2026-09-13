@@ -981,6 +981,37 @@ async function openDraftEventForUpload(
     .run();
 }
 
+/*
+ * A 1,500-frame shoot calls this once per photo, but only the first upload
+ * for an event can possibly need to flip it out of 'draft' or send the
+ * upload-started notification -- every later call in the same isolate is a
+ * pointless D1 write plus a pointless waitUntil read. A per-isolate memo
+ * skips both after the first: a burst from one shoot reuses the isolate and
+ * pays the cost once, a cold isolate pays it again exactly like before.
+ *
+ * Deriving "first upload" from the UPDATE's own affected-row count was
+ * rejected -- it would never fire for an event the photographer published
+ * manually before uploading, since that UPDATE's WHERE clause would already
+ * match nothing on the very first photo.
+ */
+const eventsMarkedUploadStarted = new Set<string>();
+
+async function markEventUploadStarted(
+  scope: AccountScope,
+  env: TenantEnv,
+  ctx: ExecutionContext,
+  eventId: string,
+): Promise<void> {
+  if (eventsMarkedUploadStarted.has(eventId)) {
+    return;
+  }
+
+  eventsMarkedUploadStarted.add(eventId);
+
+  await openDraftEventForUpload(scope, eventId);
+  scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
+}
+
 async function eventExists(
   scope: AccountScope,
   eventId: string,
@@ -2140,8 +2171,7 @@ async function createPhoto(
   const duplicatePhoto = await findDuplicatePhoto(scope, eventId, sourceSha256);
 
   if (duplicatePhoto) {
-    await openDraftEventForUpload(scope, eventId);
-    scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
+    await markEventUploadStarted(scope, env, ctx, eventId);
 
     return jsonResponse({
       duplicate: true,
@@ -2251,8 +2281,7 @@ async function createPhoto(
     );
 
     if (duplicateAfterInsert) {
-      await openDraftEventForUpload(scope, eventId);
-      scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
+      await markEventUploadStarted(scope, env, ctx, eventId);
 
       return jsonResponse({
         duplicate: true,
@@ -2270,8 +2299,7 @@ async function createPhoto(
   }
 
   await adjustAccountStorageBytes(scope, storedObject.size);
-  await openDraftEventForUpload(scope, eventId);
-  scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
+  await markEventUploadStarted(scope, env, ctx, eventId);
 
   const photo: PhotoRecord = {
     id: photoId,
