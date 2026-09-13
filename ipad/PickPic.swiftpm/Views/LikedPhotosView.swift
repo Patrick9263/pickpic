@@ -462,6 +462,31 @@ struct LikedPhotosView: View {
                 }
             }
             
+            if !result.failedFilenames.isEmpty {
+                VStack(
+                    alignment: .leading,
+                    spacing: 6
+                ) {
+                    Label(
+                    """
+                    Could not be copied \
+                    (\(result.failedFilenames.count))
+                    """,
+                    systemImage:
+                        "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+
+                    ForEach(
+                        result.failedFilenames,
+                        id: \.self
+                    ) { filename in
+                        Text(filename)
+                            .font(.caption)
+                    }
+                }
+            }
+
             if !viewModel.workflowUpdateFailures.isEmpty {
                 VStack(
                     alignment: .leading,
