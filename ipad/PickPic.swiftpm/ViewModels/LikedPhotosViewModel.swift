@@ -50,6 +50,26 @@ final class LikedPhotosViewModel:
         .count
     }
 
+    /*
+     * Same photos RawRequestSyncService.sync will act on next activation —
+     * this reads the already-fetched list rather than asking the server
+     * again, so the count on screen matches what the background sweep will
+     * see (#217).
+     */
+    var pendingRawUploadPhotos: [ServerPhotoRecord] {
+        photos
+            .filter { photo in
+                photo.needsRawUpload
+            }
+            .sorted { first, second in
+                first.originalFilename
+                    .localizedStandardCompare(
+                        second.originalFilename
+                    )
+                == .orderedAscending
+            }
+    }
+
     func load(
         eventID: String,
         using configuration:

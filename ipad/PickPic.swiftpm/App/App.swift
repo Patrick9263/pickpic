@@ -74,6 +74,43 @@ final class AppFeedbackStore:
     }
 }
 
+/*
+ * Holds the outcome of the most recent RawRequestSyncService pass per
+ * event. Before this, a missing file or a failed upload only ever reached
+ * a print() statement — invisible on a device running detached (#217).
+ * LikedPhotosView reads this so a failure stays visible until the next
+ * sweep either clears or replaces it, rather than existing only as a line
+ * in the Xcode console.
+ */
+@MainActor
+final class RawRequestStatusStore: ObservableObject {
+    struct Failure: Equatable {
+        let missingFilenames: [String]
+        let failedFilenames: [String]
+        let checkedAt: Date
+    }
+
+    @Published private(set)
+    var failuresByEventID: [String: Failure] = [:]
+
+    func record(
+        eventID: String,
+        missingFilenames: [String],
+        failedFilenames: [String]
+    ) {
+        guard !missingFilenames.isEmpty || !failedFilenames.isEmpty else {
+            failuresByEventID[eventID] = nil
+            return
+        }
+
+        failuresByEventID[eventID] = Failure(
+            missingFilenames: missingFilenames,
+            failedFilenames: failedFilenames,
+            checkedAt: Date()
+        )
+    }
+}
+
 @MainActor
 final class NetworkMonitor: ObservableObject {
     @Published private(set)
@@ -159,6 +196,9 @@ struct PickPicApp: App {
     @StateObject private var feedback =
     AppFeedbackStore()
 
+    @StateObject private var rawRequestStatus =
+    RawRequestStatusStore()
+
     @StateObject private var networkMonitor =
     NetworkMonitor()
 
@@ -178,6 +218,7 @@ struct PickPicApp: App {
                 .environmentObject(eventFolders)
                 .environmentObject(feedback)
                 .environmentObject(finishedEdits)
+                .environmentObject(rawRequestStatus)
                 .task {
                     BackgroundUploadSession.shared
                         .setRestoredCompletionHandler { completion in
@@ -462,6 +503,12 @@ struct PickPicApp: App {
                             "RAW delivery could not find \(filename) in event \(reference.eventID)."
                         )
                     }
+
+                    rawRequestStatus.record(
+                        eventID: reference.eventID,
+                        missingFilenames: rawResult.missingFilenames,
+                        failedFilenames: rawResult.failures
+                    )
                 }
             } catch APIClientError.server(404, _) {
                 /*
