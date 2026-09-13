@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appleStateCookieHeader,
+  buildAppleAppSiteAssociation,
   buildAppleAuthorizeUrl,
   clearedAppleStateCookieHeader,
   readAppleStateCookie,
@@ -78,6 +79,44 @@ describe("resolveAppleConfig", () => {
         APPLE_CLIENT_ID: "  photos.pickpic.signin\n",
       })?.clientId,
     ).toBe("photos.pickpic.signin");
+  });
+});
+
+describe("buildAppleAppSiteAssociation", () => {
+  it("returns null when APPLE_TEAM_ID is unset", () => {
+    expect(buildAppleAppSiteAssociation({})).toBe(null);
+  });
+
+  it("counts a whitespace-only team id as unset", () => {
+    expect(buildAppleAppSiteAssociation({ APPLE_TEAM_ID: "   " })).toBe(null);
+  });
+
+  it("names the app ID as <team id>.<bundle id>", () => {
+    const association = buildAppleAppSiteAssociation({
+      APPLE_TEAM_ID: "TEAM123456",
+    });
+
+    expect(association?.applinks.details[0]?.appID).toBe(
+      "TEAM123456.photos.pickpic.app",
+    );
+  });
+
+  it("scopes paths to /sign-in* so it doesn't capture every gallery URL", () => {
+    const association = buildAppleAppSiteAssociation({
+      APPLE_TEAM_ID: "TEAM123456",
+    });
+
+    expect(association?.applinks.details[0]?.paths).toEqual(["/sign-in*"]);
+  });
+
+  it("trims the surrounding whitespace a pasted secret arrives with", () => {
+    const association = buildAppleAppSiteAssociation({
+      APPLE_TEAM_ID: "  TEAM123456\n",
+    });
+
+    expect(association?.applinks.details[0]?.appID).toBe(
+      "TEAM123456.photos.pickpic.app",
+    );
   });
 });
 

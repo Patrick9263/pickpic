@@ -4,6 +4,10 @@ import {
   type AuthEnvironment,
 } from "./auth.ts";
 import {
+  buildAppleAppSiteAssociation,
+  type AppleEnvironment,
+} from "./apple.ts";
+import {
   resolveAccountDatabase,
   resolveAccountForPrincipal,
   type AccountRecord,
@@ -5452,6 +5456,27 @@ async function routeRequest(
   ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
+
+  /*
+   * Unauthenticated and independent of AUTH_MODE: Apple's CDN fetches this
+   * from whichever origin the universal link names, before any app is
+   * involved, so it cannot be gated behind a session or Access check.
+   */
+  if (url.pathname === "/.well-known/apple-app-site-association") {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const association = buildAppleAppSiteAssociation(
+      env as Env & AppleEnvironment,
+    );
+
+    if (!association) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return jsonResponse(association);
+  }
 
   /*
    * Ahead of the admin block because these are the routes that mint the
