@@ -9,6 +9,7 @@
     <array>
         <string>/Users/patrick/Dev/pickpic/scripts/review/run-review.sh</string>
         <string>surplus</string>
+        <string>--scheduled</string>
     </array>
 
     <key>WorkingDirectory</key>

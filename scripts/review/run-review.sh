@@ -8,9 +8,15 @@
 #   run-review.sh daily      rotating single-surface analysis  (Mon-Thu 6:10am)
 #   run-review.sh surplus    ready-issue implementation, else full sweep  (Fri/Sat 6:10am)
 #   run-review.sh <mode> --dry-run    print the decision and exit without calling Claude
+#   run-review.sh <mode> --scheduled  tag the metrics row as launchd-triggered, not run by hand
 #
 # The governing constraint is budget: Patrick's interactive daytime capacity comes first, so this
 # job refuses to run rather than eating into it. See the gates in decide_depth() below.
+#
+# The three LaunchAgents pass --scheduled; a plain invocation from a terminal does not, and the
+# `source` column in metrics.csv records the difference. That is what lets the Sunday trends run
+# tell an ad-hoc manual pass -- which doesn't respect the weekday/surplus weight ladder the way a
+# single daily launchd firing does -- apart from the automated pacing it actually audits.
 
 set -euo pipefail
 
@@ -46,12 +52,16 @@ MODE="${1:-daily}"
 shift 2>/dev/null || true
 DRY_RUN="no"
 TARGET_OVERRIDE=""
+RUN_SOURCE="manual"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN="yes"; shift ;;
     # Run one named area on demand, rather than whatever the weekday rotation would pick. The valid
     # names are the focus list at the top of prompts/daily.md.
     --target) TARGET_OVERRIDE="${2:-}"; shift 2 ;;
+    # Passed only by the LaunchAgent plists. Its absence, not its presence, is the meaningful default:
+    # anything typed by hand -- including a `--dry-run` check -- is "manual" unless told otherwise.
+    --scheduled) RUN_SOURCE="scheduled"; shift ;;
     *) shift ;;
   esac
 done
@@ -120,16 +130,16 @@ DID_IMPLEMENT="no"
 record_metrics() {
   [[ "$DRY_RUN" == "yes" ]] && return 0
   if [[ ! -f "$METRICS_FILE" ]]; then
-    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private,implemented\n' >"$METRICS_FILE"
+    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private,implemented,source\n' >"$METRICS_FILE"
   fi
   local wb="${BUDGET_BEFORE_WEEK:-}" wa="${BUDGET_AFTER_WEEK:-}" wd=""
   [[ -n "$wb" && -n "$wa" && "$wa" != "?" ]] && wd=$(( wa - wb ))
-  printf '%s,%s,%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$MODE" "${RUN_KIND:-}" "${TARGET:-}" "$RUN_OUTCOME" \
     "${MODEL:-}" "${EFFORT:-}" "$SCANS_DONE" "$FINDINGS_COUNT" \
     "$wb" "$wa" "$wd" "${BUDGET_BEFORE_SESSION:-}" "${BUDGET_AFTER_SESSION:-}" \
     "$(( $(date +%s) - START_EPOCH ))" "$ISSUE_REF" "$ISSUE_REF_PRIVATE" \
-    "${IMPLEMENTED_REF:-}" >>"$METRICS_FILE"
+    "${IMPLEMENTED_REF:-}" "$RUN_SOURCE" >>"$METRICS_FILE"
 }
 
 # Renders one row per recorded run for a numeric column of $METRICS_FILE, as a small ASCII gauge:
@@ -403,7 +413,7 @@ decide_depth
 BUDGET_BEFORE_WEEK="$WEEK_PCT"
 BUDGET_BEFORE_SESSION="$SESSION_PCT"
 
-log "mode=$MODE week=${WEEK_PCT}% session=${SESSION_PCT}% depth=$DEPTH"
+log "mode=$MODE source=$RUN_SOURCE week=${WEEK_PCT}% session=${SESSION_PCT}% depth=$DEPTH"
 
 if [[ "$DEPTH" == "skip" ]]; then
   RUN_OUTCOME="skip-weekly-ceiling"
