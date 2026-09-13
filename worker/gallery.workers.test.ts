@@ -245,6 +245,62 @@ describe("GET /api/galleries/:shareToken", () => {
     expect(asStranger.photos[0].viewerRequestedRaw).toBe(false);
   });
 
+  /*
+   * #237: disabling RAW requests must stop new asks (addRawRequest's own
+   * gate), not blind a visitor to a request they already made. Before the
+   * fix, the whole per-visitor raw_requests query was skipped once the event
+   * flag went false, so this visitor's fulfilled download would have vanished
+   * from the response along with it.
+   */
+  it("keeps reporting a visitor's own RAW request after the event disables new requests", async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      rawRequestsEnabled: true,
+    });
+    await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
+    await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      originalFilename: "DSC01015.ARW",
+    });
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      fulfilledAt: "2026-02-01T00:00:00.000Z",
+    });
+
+    /*
+     * A direct UPDATE rather than a second insertEvent call, which would
+     * violate the primary key -- this is meant to simulate the photographer
+     * flipping the dashboard toggle on an event that already has state.
+     */
+    await env.DB.prepare(
+      "UPDATE events SET raw_requests_enabled = 0 WHERE id = ?",
+    )
+      .bind(EVENT_ID)
+      .run();
+
+    const body = (await (
+      await fetchGallery(SHARE_TOKEN, {
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      })
+    ).json()) as {
+      event: { rawRequestsEnabled: boolean };
+      photos: {
+        viewerRequestedRaw: boolean;
+        viewerRawDownload: { filename: string } | null;
+      }[];
+    };
+
+    expect(body.event.rawRequestsEnabled).toBe(false);
+    expect(body.photos[0].viewerRequestedRaw).toBe(true);
+    expect(body.photos[0].viewerRawDownload).toMatchObject({
+      filename: "DSC01015.ARW",
+    });
+  });
+
   it("405s on a non-GET method", async () => {
     await insertEvent({ id: EVENT_ID, shareToken: SHARE_TOKEN });
 
@@ -502,6 +558,28 @@ describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
     });
 
     expectError(result, 404, "This RAW file is not available to download.");
+  });
+
+  /*
+   * #237: the toggle only governs whether a *new* request can be created.
+   * Before the fix this route also 404d an already-fulfilled request the
+   * moment the event's flag went false, stranding a viewer mid-delivery with
+   * no way to collect bytes the iPad had already sent.
+   */
+  it("stays downloadable for a fulfilled requester after the event disables new requests", async () => {
+    await seedDeliveredRaw();
+
+    await env.DB.prepare(
+      "UPDATE events SET raw_requests_enabled = 0 WHERE id = ?",
+    )
+      .bind(EVENT_ID)
+      .run();
+
+    const response = await driveRawDownload((streaming) =>
+      streaming.arrayBuffer(),
+    );
+
+    expect(response.status).toBe(200);
   });
 
   it("400s without a visitor token", async () => {

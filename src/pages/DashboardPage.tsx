@@ -1009,6 +1009,36 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
     eventRecord: EventRecord,
     enabled: boolean,
   ): Promise<void> {
+    if (!enabled && eventRecord.rawRequestsEnabled) {
+      const awaitingRawDownloadCount = (
+        photosByEvent[eventRecord.id] ?? []
+      ).reduce(
+        (total, photo) => total + (photo.awaitingRawDownloadCount ?? 0),
+        0,
+      );
+
+      /*
+       * Distinct from the archive confirmation above: this warns about a
+       * delivery already sitting in R2 for a viewer to collect, not about
+       * making the gallery itself unreachable. Disabling still stops new
+       * requests either way -- the wording just says what is actually at
+       * risk (#237).
+       */
+      if (awaitingRawDownloadCount > 0) {
+        const shouldDisable = window.confirm(
+          `${awaitingRawDownloadCount} delivered RAW file${
+            awaitingRawDownloadCount === 1 ? "" : "s"
+          } in "${
+            eventRecord.title
+          }" ${awaitingRawDownloadCount === 1 ? "hasn't" : "haven't"} been downloaded yet. Turning off requests will not take them back -- those viewers can still collect them. Continue?`,
+        );
+
+        if (!shouldDisable) {
+          return;
+        }
+      }
+    }
+
     setUpdatingEventRawRequestsId(eventRecord.id);
     setError(null);
 

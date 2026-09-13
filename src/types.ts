@@ -53,6 +53,13 @@ export interface PhotoRecord {
    */
   pendingRawRequestCount?: number;
 
+  /*
+   * Admin-only, same reasoning as pendingRawRequestCount above: fulfilled RAW
+   * requests this photo's requesters have neither downloaded nor had
+   * released, i.e. what a "disable RAW requests" toggle would strand.
+   */
+  awaitingRawDownloadCount?: number;
+
   variants: ImageVariantSet;
 
   capturedAt: string | null;

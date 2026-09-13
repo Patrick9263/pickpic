@@ -6,7 +6,7 @@ import {
   createFetchJsonRouter,
   type FetchJsonRouter,
 } from "../testing/fetchJsonRouter";
-import { makeEvent, makeStorageUsage } from "../testing/factories";
+import { makeEvent, makePhoto, makeStorageUsage } from "../testing/factories";
 import {
   stubClipboardWriteText,
   userCancels,
@@ -170,6 +170,109 @@ describe("DashboardPage", () => {
     );
 
     expect(statusCall?.body).toEqual({ status: "archived" });
+  });
+
+  it("warns before disabling RAW requests when a delivery is still awaiting download, and sends nothing if cancelled", async () => {
+    const readyEvent = makeReadyTripEvent({ rawRequestsEnabled: true });
+
+    const router = setUpDashboard({
+      events: [readyEvent],
+      photosByEvent: {
+        [readyEvent.id]: [makePhoto({ awaitingRawDownloadCount: 2 })],
+      },
+    });
+
+    render(<DashboardPage />);
+
+    const toggle = (await screen.findByLabelText(
+      "Allow viewers to request original RAW files",
+    )) as HTMLInputElement;
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    fireEvent.click(toggle);
+
+    expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("2"));
+    expect(
+      router.calls.some(
+        (call) => call.method === "PUT" && call.url.includes("/raw-requests"),
+      ),
+    ).toBe(false);
+  });
+
+  it("disables RAW requests once the outstanding-delivery warning is confirmed", async () => {
+    const readyEvent = makeReadyTripEvent({ rawRequestsEnabled: true });
+
+    const router = setUpDashboard({
+      events: [readyEvent],
+      photosByEvent: {
+        [readyEvent.id]: [makePhoto({ awaitingRawDownloadCount: 1 })],
+      },
+    });
+
+    router.put<{ event: EventRecord }>(
+      /\/api\/admin\/events\/event-1\/raw-requests$/,
+      { event: { ...readyEvent, rawRequestsEnabled: false } },
+    );
+
+    render(<DashboardPage />);
+
+    const toggle = (await screen.findByLabelText(
+      "Allow viewers to request original RAW files",
+    )) as HTMLInputElement;
+
+    userConfirms();
+
+    fireEvent.click(toggle);
+
+    const rawRequestsCall = await vi.waitFor(() => {
+      const call = router.calls.find(
+        (candidate) =>
+          candidate.method === "PUT" && candidate.url.includes("/raw-requests"),
+      );
+      if (!call) {
+        throw new Error("raw-requests PUT not sent yet");
+      }
+      return call;
+    });
+
+    expect(rawRequestsCall.body).toEqual({ enabled: false });
+  });
+
+  it("disables RAW requests with no confirmation when nothing is outstanding", async () => {
+    const readyEvent = makeReadyTripEvent({ rawRequestsEnabled: true });
+
+    const router = setUpDashboard({
+      events: [readyEvent],
+      photosByEvent: {
+        [readyEvent.id]: [makePhoto({ awaitingRawDownloadCount: 0 })],
+      },
+    });
+
+    router.put<{ event: EventRecord }>(
+      /\/api\/admin\/events\/event-1\/raw-requests$/,
+      { event: { ...readyEvent, rawRequestsEnabled: false } },
+    );
+
+    const confirmSpy = vi.spyOn(window, "confirm");
+
+    render(<DashboardPage />);
+
+    const toggle = (await screen.findByLabelText(
+      "Allow viewers to request original RAW files",
+    )) as HTMLInputElement;
+
+    fireEvent.click(toggle);
+
+    await vi.waitFor(() => {
+      expect(
+        router.calls.some(
+          (call) => call.method === "PUT" && call.url.includes("/raw-requests"),
+        ),
+      ).toBe(true);
+    });
+
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it("copies the gallery share link built from VITE_PUBLIC_APP_ORIGIN, then resets the copied indicator", async () => {
