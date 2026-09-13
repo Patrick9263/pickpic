@@ -18,17 +18,36 @@
 # Any other value is refused outright: a typo must fail closed.
 AUTH_MODE=session
 
-# Transactional sender for magic-link emails. Leave unset in development and the
-# link is printed to the worker console instead of being emailed -- a fallback
-# that only ever applies to a request that arrived on localhost.
+# Transactional sender for every email this worker sends. Leave unset in
+# development and the link is printed to the worker console instead of being
+# emailed -- a fallback that only ever applies to a request that arrived on
+# localhost.
 #
 # In production this is a secret (`wrangler secret put RESEND_API_KEY`), never a
-# var in wrangler.jsonc.
+# var in wrangler.jsonc -- and it is needed on ALL THREE deployments, not just
+# the one serving /api/auth/*. Gallery mail (#224) is sent by the public worker
+# when a viewer requests a RAW, and by the admin/app worker when the iPad
+# delivers one, so `wrangler secret put RESEND_API_KEY` has to be run for the
+# default and admin environments as well as app.
+#
+# A missing key is fatal for sign-in mail and deliberately not fatal for gallery
+# mail: a RAW that uploaded successfully must never be reported as a failed
+# upload because the notification bounced.
 # RESEND_API_KEY=re_...
 
 # Must be an address on a domain verified with Resend, or every send is
 # rejected. Defaults to "PickPic <login@pickpic.photos>".
 # MAGIC_LINK_FROM=PickPic <login@pickpic.photos>
+
+# The sender for gallery mail -- RAW request confirmations and delivery links.
+# Defaults to "PickPic <photos@pickpic.photos>", which is why it is not set in
+# wrangler.jsonc for any of the three deployments.
+#
+# Separate from MAGIC_LINK_FROM on purpose, and worth keeping that way: this
+# mail goes to event guests who never asked for a PickPic account and may well
+# mark it as spam, while sign-in deliverability is load-bearing for every
+# customer. Same verified domain, so a new address here needs no Resend setup.
+# RAW_DELIVERY_FROM=PickPic <photos@pickpic.photos>
 
 # The single shared code /api/auth/signup requires, and the whole of its access
 # control. Signing up is the one unauthenticated way to create an account, and

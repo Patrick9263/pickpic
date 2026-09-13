@@ -947,6 +947,43 @@
   color: var(--color-success);
 }
 
+/*
+ * Deliberately quieter than "waiting": nothing has been requested yet, and this
+ * state is an instruction to go and look at an inbox rather than a report of
+ * progress.
+ */
+.lightbox-raw-request-button-confirming {
+  background: transparent;
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.lightbox-raw-request-email {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  margin: 8px 0 0;
+}
+
+/*
+ * A link rather than a button visually. It sits under a row of real buttons and
+ * must not read as a third action competing with them -- the address is the
+ * thing being shown, and this is the small print beside it.
+ */
+.lightbox-raw-request-email-change {
+  background: none;
+  border: 0;
+  color: var(--color-accent);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.lightbox-raw-request-email-change:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .photo-version-controls {
   align-items: center;
   display: flex;

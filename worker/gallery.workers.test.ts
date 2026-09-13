@@ -768,7 +768,13 @@ describe("reclaiming a delivered RAW", () => {
       "PUT",
       `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
       {
-        json: { displayName: "Guest" },
+        /*
+         * The address insertRawRequest seeded, so this is the same viewer
+         * asking again rather than a new one -- and it is already confirmed for
+         * the event, which is what lets the request through without another
+         * round trip through the mail.
+         */
+        json: { displayName: "Guest", email: `${VISITOR_TOKEN}@example.com` },
         headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
       },
     );

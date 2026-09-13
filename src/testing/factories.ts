@@ -61,6 +61,8 @@ export function makeGalleryPhoto(
     viewerRequestedRaw: false,
     viewerRawDownload: null,
     viewerRawDownloadedAt: null,
+    viewerRawRequestEmail: null,
+    viewerRawConfirmationPending: false,
     ...overrides,
   };
 }

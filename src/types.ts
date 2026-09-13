@@ -94,6 +94,20 @@ export interface GalleryPhotoRecord extends Omit<PhotoRecord, "comments"> {
    */
   viewerRawDownload: ViewerRawDownloadRecord | null;
   viewerRawDownloadedAt: string | null;
+
+  /*
+   * The address this viewer's own request carries, shown back to them so a
+   * mistyped one is visible and correctable. Scoped server-side to their own
+   * row, so it never carries anybody else's.
+   */
+  viewerRawRequestEmail: string | null;
+
+  /*
+   * True between asking and clicking the link that proves the address. It comes
+   * from the server rather than component state because the viewer leaves for
+   * their mail app in between and returns to a reloaded page.
+   */
+  viewerRawConfirmationPending: boolean;
 }
 
 export interface UploadBatchProgress {

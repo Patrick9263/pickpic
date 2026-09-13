@@ -112,7 +112,7 @@ export function formatApproximateByteSize(byteSize: number): string {
 }
 
 /*
- * The RAW request button's four states, derived in one place because three
+ * The RAW request button's five states, derived in one place because three
  * call sites need them to agree: GalleryPage picks the HTTP method from this,
  * and GalleryGrid and GalleryLightbox each render their own button from it.
  *
@@ -120,13 +120,20 @@ export function formatApproximateByteSize(byteSize: number): string {
  * after download (#209). Without it, a viewer whose file has been deleted
  * again shows as "requested" -- indistinguishable from someone still waiting
  * for a RAW that is on its way.
+ *
+ * "confirming" is the address-proving step (#224): asked for, but no request
+ * exists yet on the server and none will until the emailed link is clicked.
  */
-export type RawRequestState = "none" | "waiting" | "ready" | "collected";
+export type RawRequestState =
+  "none" | "confirming" | "waiting" | "ready" | "collected";
 
 export function getRawRequestState(
   photo: Pick<
     GalleryPhotoRecord,
-    "viewerRequestedRaw" | "viewerRawDownload" | "viewerRawDownloadedAt"
+    | "viewerRequestedRaw"
+    | "viewerRawDownload"
+    | "viewerRawDownloadedAt"
+    | "viewerRawConfirmationPending"
   >,
 ): RawRequestState {
   /*
@@ -139,11 +146,17 @@ export function getRawRequestState(
     return "ready";
   }
 
-  if (!photo.viewerRequestedRaw) {
-    return "none";
+  if (photo.viewerRequestedRaw) {
+    return photo.viewerRawDownloadedAt === null ? "waiting" : "collected";
   }
 
-  return photo.viewerRawDownloadedAt === null ? "waiting" : "collected";
+  /*
+   * Ranked below every real request state and not above "none", because a
+   * pending confirmation can outlive the request it was for: asking again after
+   * the RAW was reclaimed writes a real row while a stale pending row may still
+   * sit there unexpired. Whatever actually exists on the server wins.
+   */
+  return photo.viewerRawConfirmationPending ? "confirming" : "none";
 }
 
 export function createArchiveFilename(title: string): string {
