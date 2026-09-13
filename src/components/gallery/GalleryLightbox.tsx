@@ -532,7 +532,14 @@ function GalleryLightbox({
 
               <span>{selectedPhoto.heartCount}</span>
             </button>
-            {rawRequestsEnabled && (
+            {/*
+             * Not gated purely on rawRequestsEnabled -- see the matching
+             * comment in GalleryGrid. A request this viewer already made
+             * must stay visible and (for "ready"/"waiting") actionable after
+             * the photographer disables new requests, or disabling strands
+             * whoever is mid-delivery (#237). Only "none" is gated on it.
+             */}
+            {(rawRequestsEnabled || rawRequestState !== "none") && (
               <button
                 className={`lightbox-raw-request-button ${
                   rawRequestState === "none"
@@ -543,8 +550,12 @@ function GalleryLightbox({
                 disabled={
                   rawRequestState === "ready"
                     ? downloadingRawPhotoId === selectedPhoto.id
-                    : !interactionsEnabled ||
-                      togglingRawRequestPhotoId === selectedPhoto.id
+                    : rawRequestState === "waiting"
+                      ? !interactionsEnabled ||
+                        togglingRawRequestPhotoId === selectedPhoto.id
+                      : !interactionsEnabled ||
+                        togglingRawRequestPhotoId === selectedPhoto.id ||
+                        !rawRequestsEnabled
                 }
                 onClick={() =>
                   void (rawRequestState === "ready"

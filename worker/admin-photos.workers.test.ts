@@ -20,6 +20,7 @@ interface PhotoListBody {
     id: string;
     heartCount: number;
     pendingRawRequestCount: number;
+    awaitingRawDownloadCount: number;
     rawPhoto: {
       originalFilename: string;
       contentType: string;
@@ -160,6 +161,54 @@ describe("GET /api/admin/events/:id/photos", () => {
     );
 
     expect(photoById(result.body, "photo-a").pendingRawRequestCount).toBe(0);
+  });
+
+  /*
+   * #237: this is what a "disable RAW requests" confirmation needs to warn
+   * about -- a delivery sitting in R2 that nobody has collected yet, and
+   * that disabling the toggle would strand rather than take back.
+   */
+  it("counts a fulfilled RAW request as awaiting only until it is downloaded or released", async () => {
+    await insertPhoto({ id: "photo-a", eventId: EVENT_ID });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-awaiting",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+    });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-collected",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+      downloadedAt: "2026-09-10T00:00:00.000Z",
+    });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-released",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+      releasedAt: "2026-09-11T00:00:00.000Z",
+    });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-pending",
+    });
+
+    const result = await adminRequest<PhotoListBody>(
+      "GET",
+      `/api/admin/events/${EVENT_ID}/photos`,
+    );
+
+    const photo = photoById(result.body, "photo-a");
+
+    expect(photo.awaitingRawDownloadCount).toBe(1);
+    expect(photo.pendingRawRequestCount).toBe(1);
   });
 });
 

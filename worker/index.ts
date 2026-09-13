@@ -169,6 +169,7 @@ interface RawPhotoRecord {
  */
 interface AdminPhotoRecord extends PhotoRecord {
   pendingRawRequestCount: number;
+  awaitingRawDownloadCount: number;
   rawPhoto: RawPhotoRecord | null;
 }
 
@@ -192,6 +193,7 @@ interface PhotoRow {
 
 interface AdminPhotoRow extends PhotoRow {
   pendingRawRequestCount: number;
+  awaitingRawDownloadCount: number;
   rawOriginalFilename: string | null;
   rawContentType: string | null;
   rawByteSize: number | null;
@@ -928,6 +930,7 @@ function toAdminPhotoRecord(
 ): AdminPhotoRecord {
   const {
     pendingRawRequestCount,
+    awaitingRawDownloadCount,
     rawOriginalFilename,
     rawContentType,
     rawByteSize,
@@ -944,6 +947,7 @@ function toAdminPhotoRecord(
   return {
     ...toPhotoRecord(photoRow, imageBasePath, comments, photoVariants),
     pendingRawRequestCount: Number(pendingRawRequestCount ?? 0),
+    awaitingRawDownloadCount: Number(awaitingRawDownloadCount ?? 0),
     rawPhoto: hasRawPhoto
       ? {
           originalFilename: rawOriginalFilename,
@@ -2358,7 +2362,24 @@ async function listPhotos(
           WHERE
             r.photo_id = p.id
             AND r.fulfilled_at IS NULL
-        ) AS pendingRawRequestCount
+        ) AS pendingRawRequestCount,
+
+        /*
+         * A delivery the photographer would strand by disabling RAW requests
+         * (#237): fulfilled, not yet collected, and not already released --
+         * the same "outstanding" reading isRawReclaimable uses for the
+         * per-event release button, but per photo here so the toggle's
+         * confirmation can name what is actually at risk.
+         */
+        (
+          SELECT COUNT(*)
+          FROM raw_requests r
+          WHERE
+            r.photo_id = p.id
+            AND r.fulfilled_at IS NOT NULL
+            AND r.downloaded_at IS NULL
+            AND r.released_at IS NULL
+        ) AS awaitingRawDownloadCount
       FROM photos p
       LEFT JOIN hearts h
         ON h.photo_id = p.id
@@ -2644,40 +2665,45 @@ async function getPublicGallery(
       heartedPhotoIds.add(row.photoId);
     }
 
-    if (rawRequestsEnabled) {
-      /*
-       * Joined to photos rather than read off the main photo query, so every
-       * RAW field stays behind this visitor-scoped WHERE. The main query feeds
-       * toPhotoRecord, which builds the admin dashboard's records too -- a RAW
-       * column added there would reach every visitor for every photo, which is
-       * the trap migration 0020's own comment left standing for #209.
-       */
-      const rawRequestResult = await env.DB.prepare(
-        `
-          SELECT
-            r.photo_id AS photoId,
-            r.fulfilled_at AS fulfilledAt,
-            r.downloaded_at AS downloadedAt,
-            p.raw_storage_key AS rawStorageKey,
-            p.raw_original_filename AS rawOriginalFilename,
-            p.raw_byte_size AS rawByteSize
-          FROM raw_requests r
-          INNER JOIN gallery_visitors v
-            ON v.id = r.visitor_id
-          INNER JOIN photos p
-            ON p.id = r.photo_id
-          WHERE
-            v.event_id = ?
-            AND v.visitor_token = ?
-        `,
-      )
-        .bind(event.id, visitorToken)
-        .all<RawRequestedPhotoRow>();
+    /*
+     * Not gated on rawRequestsEnabled. This is scoped to the visitor's own
+     * existing rows, so it can only ever surface a request that visitor
+     * already made while the event had requests enabled -- toggling the
+     * event off afterwards stops new asks (addRawRequest's own gate) but
+     * must not blind a visitor to a delivery already in flight or waiting to
+     * be collected (#237).
+     *
+     * Joined to photos rather than read off the main photo query, so every
+     * RAW field stays behind this visitor-scoped WHERE. The main query feeds
+     * toPhotoRecord, which builds the admin dashboard's records too -- a RAW
+     * column added there would reach every visitor for every photo, which is
+     * the trap migration 0020's own comment left standing for #209.
+     */
+    const rawRequestResult = await env.DB.prepare(
+      `
+        SELECT
+          r.photo_id AS photoId,
+          r.fulfilled_at AS fulfilledAt,
+          r.downloaded_at AS downloadedAt,
+          p.raw_storage_key AS rawStorageKey,
+          p.raw_original_filename AS rawOriginalFilename,
+          p.raw_byte_size AS rawByteSize
+        FROM raw_requests r
+        INNER JOIN gallery_visitors v
+          ON v.id = r.visitor_id
+        INNER JOIN photos p
+          ON p.id = r.photo_id
+        WHERE
+          v.event_id = ?
+          AND v.visitor_token = ?
+      `,
+    )
+      .bind(event.id, visitorToken)
+      .all<RawRequestedPhotoRow>();
 
-      for (const row of rawRequestResult.results) {
-        rawRequestedPhotoIds.add(row.photoId);
-        rawRequestsByPhotoId.set(row.photoId, row);
-      }
+    for (const row of rawRequestResult.results) {
+      rawRequestedPhotoIds.add(row.photoId);
+      rawRequestsByPhotoId.set(row.photoId, row);
     }
   }
 
@@ -4025,7 +4051,15 @@ async function getGalleryRawPhoto(
     404,
   );
 
-  if (!photo.rawRequestsEnabled || photo.rawStorageKey === null) {
+  /*
+   * Not gated on photo.rawRequestsEnabled. The event's current toggle only
+   * governs whether a *new* request can be created (addRawRequest's own
+   * gate) -- a request already fulfilled here must stay downloadable after
+   * the photographer disables new requests, or disabling strands whoever is
+   * mid-delivery with no way back in (#237). The fulfilledAt check just below
+   * is what actually decides whether this visitor has anything to collect.
+   */
+  if (photo.rawStorageKey === null) {
     return unavailable;
   }
 
