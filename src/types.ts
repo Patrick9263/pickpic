@@ -53,6 +53,13 @@ export interface PhotoRecord {
    */
   pendingRawRequestCount?: number;
 
+  /*
+   * Fulfilled RAW requests nobody has downloaded yet. Same admin-only
+   * treatment as pendingRawRequestCount above -- this is what gates showing
+   * the "cancel this delivery" action on a photo.
+   */
+  awaitingCollectionCount?: number;
+
   variants: ImageVariantSet;
 
   capturedAt: string | null;

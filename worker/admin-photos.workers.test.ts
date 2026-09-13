@@ -2,10 +2,12 @@ import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearTestData,
+  deliverRawPhoto,
   insertEvent,
   insertHeart,
   insertPhoto,
   insertRawRequest,
+  readRawPhotoState,
   setAccountStorageCap,
   testSha256,
 } from "./test-fixtures.ts";
@@ -20,6 +22,7 @@ interface PhotoListBody {
     id: string;
     heartCount: number;
     pendingRawRequestCount: number;
+    awaitingCollectionCount: number;
     rawPhoto: {
       originalFilename: string;
       contentType: string;
@@ -149,6 +152,32 @@ describe("GET /api/admin/events/:id/photos", () => {
     );
 
     expect(photoById(result.body, "photo-a").pendingRawRequestCount).toBe(1);
+  });
+
+  it("counts a fulfilled request as awaiting collection until it is downloaded", async () => {
+    await insertPhoto({ id: "photo-a", eventId: EVENT_ID });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-one____",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+    });
+
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-two____",
+      fulfilledAt: "2026-09-09T00:00:00.000Z",
+      downloadedAt: "2026-09-09T01:00:00.000Z",
+    });
+
+    const result = await adminRequest<PhotoListBody>(
+      "GET",
+      `/api/admin/events/${EVENT_ID}/photos`,
+    );
+
+    expect(photoById(result.body, "photo-a").awaitingCollectionCount).toBe(1);
   });
 
   it("reports a photo with no RAW requests as zero rather than absent", async () => {
@@ -404,6 +433,196 @@ describe("DELETE /api/admin/photos/:id", () => {
     await insertPhoto({ id: "photo-solo", eventId: EVENT_ID });
 
     const result = await adminRequest("GET", "/api/admin/photos/photo-solo");
+
+    expectMethodNotAllowed(result);
+  });
+});
+
+describe("DELETE /api/admin/photos/:id/raw-requests", () => {
+  interface CancelBody {
+    photoId: string;
+    cancelledRequestCount: number;
+  }
+
+  function agoIso(milliseconds: number): string {
+    return new Date(Date.now() - milliseconds).toISOString();
+  }
+
+  it("cancels an undownloaded delivery and frees its bytes in the same request", async () => {
+    await insertPhoto({ id: "photo-undelivered", eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: "photo-undelivered",
+      eventId: EVENT_ID,
+    });
+
+    await insertRawRequest({
+      photoId: "photo-undelivered",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-undelivered___",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+    });
+
+    const result = await adminRequest<CancelBody>(
+      "DELETE",
+      "/api/admin/photos/photo-undelivered/raw-requests",
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({
+      photoId: "photo-undelivered",
+      cancelledRequestCount: 1,
+    });
+
+    const state = await readRawPhotoState("photo-undelivered", storageKey);
+    expect(state.objectExists).toBe(false);
+    expect(state.rawStorageKey).toBeNull();
+
+    const remaining = await env.DB.prepare(
+      `
+        SELECT COUNT(*) AS count
+        FROM raw_requests
+        WHERE photo_id = ?
+      `,
+    )
+      .bind("photo-undelivered")
+      .first<{ count: number }>();
+
+    expect(remaining?.count).toBe(0);
+  });
+
+  /*
+   * Cancelling an unfulfilled request would be declining it outright, which
+   * is a different action this route doesn't cover -- only a delivery that
+   * has actually landed can be cancelled.
+   */
+  it("leaves an unfulfilled request alone", async () => {
+    await insertPhoto({ id: "photo-unfulfilled", eventId: EVENT_ID });
+
+    await insertRawRequest({
+      photoId: "photo-unfulfilled",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-unfulfilled__",
+    });
+
+    const result = await adminRequest<CancelBody>(
+      "DELETE",
+      "/api/admin/photos/photo-unfulfilled/raw-requests",
+    );
+
+    expect(result.body.cancelledRequestCount).toBe(0);
+
+    const remaining = await env.DB.prepare(
+      `
+        SELECT COUNT(*) AS count
+        FROM raw_requests
+        WHERE photo_id = ?
+      `,
+    )
+      .bind("photo-unfulfilled")
+      .first<{ count: number }>();
+
+    expect(remaining?.count).toBe(1);
+  });
+
+  /*
+   * Releasing (#219) already covers a request somebody has collected --
+   * cancelling must not reach past it and take back a download that already
+   * succeeded.
+   */
+  it("leaves an already-downloaded request alone", async () => {
+    await insertPhoto({ id: "photo-downloaded", eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: "photo-downloaded",
+      eventId: EVENT_ID,
+    });
+
+    await insertRawRequest({
+      photoId: "photo-downloaded",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-downloaded___",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+      downloadedAt: agoIso(60 * 1000),
+    });
+
+    const result = await adminRequest<CancelBody>(
+      "DELETE",
+      "/api/admin/photos/photo-downloaded/raw-requests",
+    );
+
+    expect(result.body.cancelledRequestCount).toBe(0);
+    expect(
+      (await readRawPhotoState("photo-downloaded", storageKey)).objectExists,
+    ).toBe(true);
+  });
+
+  /*
+   * One visitor already has the file and is inside their release/grace
+   * window; a second visitor's stale, uncollected request must not be able
+   * to pull the object out from under them.
+   */
+  it("keeps the RAW while another requester still has a live, collected request", async () => {
+    await insertPhoto({ id: "photo-two-visitors", eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: "photo-two-visitors",
+      eventId: EVENT_ID,
+    });
+
+    await insertRawRequest({
+      photoId: "photo-two-visitors",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-collected____",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+      downloadedAt: agoIso(60 * 1000),
+    });
+    await insertRawRequest({
+      photoId: "photo-two-visitors",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-uncollected__",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+    });
+
+    const result = await adminRequest<CancelBody>(
+      "DELETE",
+      "/api/admin/photos/photo-two-visitors/raw-requests",
+    );
+
+    expect(result.body.cancelledRequestCount).toBe(1);
+    expect(
+      (await readRawPhotoState("photo-two-visitors", storageKey)).objectExists,
+    ).toBe(true);
+
+    const remaining = await env.DB.prepare(
+      `
+        SELECT visitor_id AS visitorId
+        FROM raw_requests
+        WHERE photo_id = ?
+      `,
+    )
+      .bind("photo-two-visitors")
+      .all<{ visitorId: string }>();
+
+    expect(remaining.results).toHaveLength(1);
+  });
+
+  it("404s for a photo that doesn't exist", async () => {
+    const result = await adminRequest(
+      "DELETE",
+      "/api/admin/photos/no-such-photo/raw-requests",
+    );
+
+    expectError(result, 404, "Photo not found.");
+  });
+
+  it("405s on a non-DELETE method", async () => {
+    await insertPhoto({ id: "photo-solo", eventId: EVENT_ID });
+
+    const result = await adminRequest(
+      "GET",
+      "/api/admin/photos/photo-solo/raw-requests",
+    );
 
     expectMethodNotAllowed(result);
   });
