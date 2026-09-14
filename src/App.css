@@ -382,9 +382,9 @@ button:disabled {
 
 .event-card-header {
   align-items: start;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .event-card-summary {
@@ -470,7 +470,7 @@ button:disabled {
 .created-date {
   color: #8a867e;
   font-size: 0.75rem;
-  justify-self: end;
+  margin-left: auto;
   text-align: right;
   white-space: nowrap;
 }
