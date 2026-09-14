@@ -370,7 +370,7 @@ button:disabled {
     auto
     minmax(0, 1fr)
     auto;
-  max-height: min(900px, calc(100dvh - 48px));
+  max-height: min(900px, calc(100svh - 48px));
   overflow: hidden;
   padding: 0;
 }
@@ -1384,7 +1384,7 @@ input:focus {
   }
 
   .event-card-scroll-region {
-    max-height: min(62dvh, 560px);
+    max-height: min(62svh, 560px);
     overflow-y: auto;
     padding-right: 17px;
   }
