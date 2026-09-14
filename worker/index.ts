@@ -1977,16 +1977,17 @@ async function listEvents(scope: AccountScope): Promise<Response> {
         share_token AS shareToken,
         status,
         created_at AS createdAt,
-        updated_at AS updatedAt
+        updated_at AS updatedAt,
+        raw_requests_enabled AS rawRequestsEnabled
       FROM events
       WHERE account_id = :accountId
       ORDER BY created_at DESC
     `,
     )
-    .all<EventRecord>();
+    .all<EventQueryRow>();
 
   return jsonResponse({
-    events: result.results,
+    events: result.results.map(toEventRecord),
   });
 }
 
@@ -3313,6 +3314,17 @@ async function writeRawRequest(
   const previous = emailRow ?? visitorRow;
 
   /*
+   * getGalleryRawPhoto's header-based route only ever recognises the row's
+   * actual visitor_id (by design -- see its own comment on device
+   * independence coming from the emailed link, not the header route). When a
+   * genuinely different browser asks under the same proven address for a
+   * photo someone else here already owns, targetVisitorId stays with that
+   * original owner, and this caller ends up with no row it can use its own
+   * visitor token to fetch from.
+   */
+  const requestingVisitorOwnsRow = targetVisitorId === visitorId;
+
+  /*
    * Attaching keeps the existing row's visitor rather than moving it to whoever
    * asked most recently. The first device stays the one the in-page UI
    * recognises, and the second is served by the emailed link -- moving it would
@@ -3430,6 +3442,12 @@ async function writeRawRequest(
    * no-op did. That includes the mail below: re-sending it would retire the
    * link already sitting in the viewer's inbox for no reason, which is worse
    * than doing nothing.
+   *
+   * That "changes nothing" claim only holds when this caller already owns
+   * the row. A different browser hitting this same fallthrough under the
+   * same proven address for a photo it has never touched *does* need
+   * something -- its own working link -- which is why the mail below also
+   * fires for it despite nothing here being written.
    */
   if (notifyPhotographer) {
     scheduleRawRequestNotification(env.DB, env, ctx, photoId, targetVisitorId);
@@ -3440,33 +3458,53 @@ async function writeRawRequest(
    * toViewerRawDownload returns null without one, so it is the whole answer
    * here -- there is no case where a row is collectable and this is null.
    *
-   * Gated on !previous || addressCorrected so a plain duplicate never reaches
-   * here: sendRawReadyEmail mints a fresh token and overwrites
-   * download_token_hash unconditionally, so calling it for a row that was
-   * already fulfilled and unchanged would silently retire whatever link was
-   * mailed the first time.
+   * Gated on !previous || addressCorrected || !requestingVisitorOwnsRow. The
+   * first two are the instant-fulfil case and the corrected-address case,
+   * where the previous link has just been retired and the viewer would
+   * otherwise be left with nothing. The third is a genuinely different
+   * browser under the same address (see requestingVisitorOwnsRow above) --
+   * without a mail of its own it would be told below that a download is
+   * ready and then 404 the moment it tried, since it holds no visitor token
+   * the header route recognises. Everything else is the true no-op the
+   * comment above describes: sendRawReadyEmail mints a fresh token and
+   * overwrites download_token_hash unconditionally, so calling it for a row
+   * this caller already owns, already fulfilled and unchanged, would
+   * silently retire whatever link was mailed the first time.
    */
-  if (fulfilledAt !== null && (!previous || addressCorrected)) {
-    /*
-     * Mail the link whenever there is something to collect: the instant-fulfil
-     * case, and the corrected-address case where the previous link has just
-     * been retired and the viewer would otherwise be left with nothing.
-     */
+  if (
+    fulfilledAt !== null &&
+    (!previous || addressCorrected || !requestingVisitorOwnsRow)
+  ) {
     scheduleRawReadyEmail(request, env, ctx, photoId, targetVisitorId);
   }
 
   /*
-   * Only survives an untouched row. The ask-again arm clears the stamp, and a
-   * fresh insert never had one.
+   * Only survives an untouched row this caller actually owns. The ask-again
+   * arm clears the stamp, a fresh insert never had one, and a caller that
+   * does not own the row (below) gets neither -- it has nothing of its own
+   * to report.
    */
   const downloadedAt =
-    previous && !notifyPhotographer ? previous.downloadedAt : null;
+    previous && !notifyPhotographer && requestingVisitorOwnsRow
+      ? previous.downloadedAt
+      : null;
 
+  /*
+   * A caller that does not own the row cannot use its own visitor token to
+   * fetch from getGalleryRawPhoto's header route, so claiming a download is
+   * ready here would be a dead link the instant it tried -- device
+   * independence for it comes from the mail just sent above instead. It
+   * still reads as "requested" rather than "confirming": the address is
+   * genuinely proven and the file genuinely exists, just not through this
+   * browser.
+   */
   return jsonResponse({
     requested: true,
     confirmationPending: false,
     email,
-    rawDownload: toViewerRawDownload(galleryPhoto, fulfilledAt),
+    rawDownload: requestingVisitorOwnsRow
+      ? toViewerRawDownload(galleryPhoto, fulfilledAt)
+      : null,
     rawDownloadedAt: downloadedAt,
   });
 }

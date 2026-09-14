@@ -75,6 +75,7 @@ interface RawRequestBody {
   requested: boolean;
   confirmationPending?: boolean;
   email?: string;
+  rawDownload?: unknown;
 }
 
 function requestRaw(
@@ -276,6 +277,54 @@ describe("the address is the identity, not the browser", () => {
       .first<{ visitorToken: string }>();
 
     expect(row?.visitorToken).toBe(VISITOR_TOKEN);
+  });
+
+  /*
+   * The instant-fulfil version of the test above. getGalleryRawPhoto's
+   * header-based route only ever recognises the row's actual visitor_id, so
+   * a second browser that does not own it cannot use that route -- claiming
+   * a download is ready for it would be a dead link the moment it tried.
+   * Device independence has to come from its own mail instead.
+   */
+  it("gives a second browser its own mail rather than a dead in-page link", async () => {
+    await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      originalFilename: "DSC01015.ARW",
+    });
+
+    await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
+    await galleryRequest("GET", pathOf(mail.sent[0]));
+
+    const sentBefore = mail.sent.length;
+
+    const fromLaptop = await requestRaw(OTHER_VISITOR_TOKEN, GUEST_EMAIL);
+
+    expect(fromLaptop.body.requested).toBe(true);
+    expect(fromLaptop.body.rawDownload ?? null).toBeNull();
+
+    /*
+     * It still needs a way to actually get the file, so it gets a mail of its
+     * own rather than nothing.
+     */
+    expect(mail.sent.length).toBe(sentBefore + 1);
+
+    const laptopsOwnLink = pathOf(mail.sent[mail.sent.length - 1]);
+
+    expect((await driveTokenDownload(laptopsOwnLink)).status).toBe(200);
+
+    /*
+     * And the honesty check: the laptop's own visitor token genuinely cannot
+     * reach the file through the header route, confirming the null above
+     * was not just cosmetic.
+     */
+    const laptopHeaderAttempt = await galleryRequest(
+      "GET",
+      RAW_REQUEST_PATH.replace("/raw-request", "/raw"),
+      { headers: { "X-PickPic-Visitor": OTHER_VISITOR_TOKEN } },
+    );
+
+    expect(laptopHeaderAttempt.status).toBe(404);
   });
 
   /*

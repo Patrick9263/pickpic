@@ -134,6 +134,44 @@ describe("POST /api/admin/events", () => {
   });
 });
 
+interface EventListBody {
+  events: Array<{ id: string; rawRequestsEnabled: boolean }>;
+}
+
+describe("GET /api/admin/events", () => {
+  /*
+   * listEvents' own SELECT once omitted raw_requests_enabled entirely, so
+   * every listed event read back as rawRequestsEnabled: undefined --
+   * falsy, so the dashboard checkbox always rendered unchecked on load
+   * regardless of what PUT .../raw-requests had actually saved. The write
+   * itself worked; only the read that populates the toggle on a fresh page
+   * load was wrong, which made a real, persisted setting look like it had
+   * silently reverted.
+   */
+  it("reflects a persisted rawRequestsEnabled rather than always reading false", async () => {
+    const created = await adminRequest<EventBody>("POST", "/api/admin/events", {
+      json: { title: "Reads back enabled" },
+    });
+
+    await adminRequest(
+      "PUT",
+      `/api/admin/events/${created.body.event.id}/raw-requests`,
+      { json: { enabled: true } },
+    );
+
+    const listed = await adminRequest<EventListBody>(
+      "GET",
+      "/api/admin/events",
+    );
+
+    const event = listed.body.events.find(
+      (candidate) => candidate.id === created.body.event.id,
+    );
+
+    expect(event?.rawRequestsEnabled).toBe(true);
+  });
+});
+
 describe("PUT /api/admin/events/:id/status", () => {
   const EVENT_ID = "event-status";
 
