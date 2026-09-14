@@ -52,7 +52,10 @@ type GalleryLightboxProps = {
   togglingPhotoId: string | null;
   toggleHeart: (photo: GalleryPhotoRecord) => Promise<void>;
   togglingRawRequestPhotoId: string | null;
-  toggleRawRequest: (photo: GalleryPhotoRecord) => Promise<void>;
+  toggleRawRequest: (
+    photo: GalleryPhotoRecord,
+    changeEmail?: boolean,
+  ) => Promise<void>;
   downloadingRawPhotoId: string | null;
   downloadRawPhoto: (photo: GalleryPhotoRecord) => Promise<void>;
   rawRequestsEnabled: boolean;
@@ -592,11 +595,41 @@ function GalleryLightbox({
                         ? "RAW file requested"
                         : rawRequestState === "collected"
                           ? "Downloaded · Request again"
-                          : "Request RAW file"}
+                          : rawRequestState === "confirming"
+                            ? "Check your email"
+                            : "Request RAW file"}
                 </span>
               </button>
             )}
           </div>
+
+          {/*
+           * The address the file is going to, shown back to the viewer with a
+           * way to correct it. This is the only place a typo becomes visible:
+           * the symptom otherwise is silence, and the viewer has no reason to
+           * suspect the address rather than the photographer.
+           *
+           * Offered in "collected" too, and that state is the reason this is
+           * not simply part of the button. There, the button re-requests rather
+           * than cancels, so without this there would be no way to fix an
+           * address once the file had been delivered.
+           */}
+          {selectedPhoto.viewerRawRequestEmail !== null && (
+            <p className="lightbox-raw-request-email">
+              <span>Sent to {selectedPhoto.viewerRawRequestEmail}</span>{" "}
+              <button
+                className="lightbox-raw-request-email-change"
+                type="button"
+                disabled={
+                  !interactionsEnabled ||
+                  togglingRawRequestPhotoId === selectedPhoto.id
+                }
+                onClick={() => void toggleRawRequest(selectedPhoto, true)}
+              >
+                Change
+              </button>
+            </p>
+          )}
           <GalleryComments
             selectedPhoto={selectedPhoto}
             commentActionId={commentActionId}

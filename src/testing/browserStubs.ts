@@ -13,6 +13,27 @@ export function userPrompts(value: string | null): void {
 }
 
 /*
+ * For flows that ask more than one thing. A RAW request collects a name and an
+ * email address in sequence, and a single mocked return value answers the
+ * second question with the first question's answer -- which the email shape
+ * check then rejects, silently ending the flow under test.
+ *
+ * Matched on a substring of the prompt text so a test states which answer goes
+ * with which question rather than depending on call order.
+ */
+export function userPromptsEach(answers: Record<string, string | null>): void {
+  vi.spyOn(window, "prompt").mockImplementation((message) => {
+    for (const [pattern, answer] of Object.entries(answers)) {
+      if ((message ?? "").includes(pattern)) {
+        return answer;
+      }
+    }
+
+    return null;
+  });
+}
+
+/*
  * jsdom doesn't implement the Clipboard API at all (no `navigator.clipboard`
  * property, not even a stub that throws), so this defines it rather than
  * spying on an existing one.

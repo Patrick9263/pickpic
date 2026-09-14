@@ -1,8 +1,15 @@
 import {
   handleAuthRequest,
+  normalizeEmail,
   requireAdminPrincipal,
   type AuthEnvironment,
 } from "./auth.ts";
+import { generateAuthToken, hashAuthToken } from "./session.ts";
+import {
+  escapeHtml,
+  sendGalleryEmail,
+  type EmailEnvironment,
+} from "./email.ts";
 import {
   buildAppleAppSiteAssociation,
   type AppleEnvironment,
@@ -12,7 +19,11 @@ import {
   resolveAccountForPrincipal,
   type AccountRecord,
 } from "./accounts.ts";
-import { requireOwnerRole, type AdminPrincipal } from "./access.ts";
+import {
+  isLocalRequest,
+  requireOwnerRole,
+  type AdminPrincipal,
+} from "./access.ts";
 import {
   scheduleUploadStartedNotification,
   scheduleRawRequestNotification,
@@ -62,6 +73,7 @@ interface HeartRequestBody {
 
 interface RawRequestRequestBody {
   displayName?: unknown;
+  email?: unknown;
 }
 
 interface EventRecord {
@@ -279,6 +291,23 @@ interface PublicPhotoRecord extends Omit<PhotoRecord, "comments"> {
    */
   viewerRawDownload: ViewerRawDownloadRecord | null;
   viewerRawDownloadedAt: string | null;
+
+  /*
+   * The address this viewer's own request carries, shown back to them so a typo
+   * is visible and correctable (#224). Scoped to their own row exactly like the
+   * fields above, so it can never surface somebody else's address -- which is
+   * also why it stays null for a second browser that has attached to a row it
+   * does not own.
+   */
+  viewerRawRequestEmail: string | null;
+
+  /*
+   * True between asking and clicking the confirmation link. It has to come from
+   * the server rather than component state because the whole point of that step
+   * is that the viewer leaves for their mail app and comes back to a reloaded
+   * page.
+   */
+  viewerRawConfirmationPending: boolean;
 }
 
 interface PublicGalleryResponse {
@@ -315,11 +344,53 @@ interface HeartCountRow {
 
 interface RawRequestedPhotoRow {
   photoId: string;
+  email: string | null;
   fulfilledAt: string | null;
   downloadedAt: string | null;
   rawStorageKey: string | null;
   rawOriginalFilename: string | null;
   rawByteSize: number | null;
+}
+
+interface PendingConfirmationPhotoRow {
+  photoId: string;
+  email: string;
+}
+
+/*
+ * One existing raw_requests row, in the shape addRawRequest's resolution needs.
+ * visitorId is here because attaching to an address's existing row deliberately
+ * keeps that row's original visitor rather than moving it to whoever asked
+ * last.
+ */
+interface RawRequestResolutionRow {
+  visitorId: string;
+  email: string | null;
+  fulfilledAt: string | null;
+  downloadedAt: string | null;
+}
+
+interface RawConfirmationRow {
+  id: string;
+  eventId: string;
+  photoId: string;
+  email: string;
+  visitorToken: string;
+  displayName: string;
+  expiresAt: string;
+}
+
+/*
+ * What the "your RAW is ready" mail needs, gathered in one query per photo
+ * rather than per recipient.
+ */
+interface RawDeliveryRecipientRow {
+  visitorId: string;
+  email: string;
+  displayName: string;
+  eventTitle: string;
+  shareToken: string;
+  filename: string;
 }
 
 /*
@@ -554,6 +625,42 @@ const RAW_TOO_LARGE_MESSAGE = `The RAW file must be ${MAX_RAW_BYTES / (1024 * 10
  */
 const RAW_DOWNLOAD_GRACE_MS = 24 * 60 * 60 * 1000;
 const RAW_DELIVERY_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/*
+ * How long a viewer has to click the confirmation link (#224). Far longer than
+ * a sign-in link's minutes, deliberately: this grants no session and no
+ * authority beyond being mailed a download link for a gallery whose share link
+ * the holder already has, and a guest who reads their mail that evening should
+ * not have to start the request over.
+ */
+const RAW_CONFIRMATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/*
+ * Anyone holding a share link can cause gallery mail to be sent to an address
+ * they typed, so these caps are the only thing between a public gallery and a
+ * mail amplifier pointed at the domain every customer's sign-in deliverability
+ * depends on.
+ *
+ * Two-sided on purpose. The per-address cap alone bounds nothing -- fifty
+ * different addresses are fifty fresh budgets -- so the per-visitor cap is the
+ * one that actually stops amplification, while the per-address cap is what
+ * stops one address being buried by requests across many photos. Both are sized
+ * to leave room for a genuine correction or a guest collecting several RAWs
+ * from one shoot.
+ */
+const RAW_EMAIL_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
+const RAW_EMAIL_CAP_PER_ADDRESS = 12;
+const RAW_EMAIL_CAP_PER_VISITOR = 12;
+
+/*
+ * Hardcoded rather than derived from the incoming request, matching
+ * PUBLIC_GALLERY_BASE_URL in telegram.ts and for the same reason: the delivery
+ * mail is sent from whichever worker fulfils the request, and for the iPad's
+ * upload path that is admin.pickpic.photos or app.pickpic.photos. A link built
+ * from the request's own origin would point a gallery viewer at an origin that
+ * will not serve them.
+ */
+const PUBLIC_GALLERY_ORIGIN = "https://pickpic.photos";
 
 const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
@@ -2681,6 +2788,10 @@ async function getPublicGallery(
   const heartedPhotoIds = new Set<string>();
   const rawRequestedPhotoIds = new Set<string>();
   const rawRequestsByPhotoId = new Map<string, RawRequestedPhotoRow>();
+  const pendingConfirmationsByPhotoId = new Map<
+    string,
+    PendingConfirmationPhotoRow
+  >();
   const rawRequestsEnabled = Boolean(event.rawRequestsEnabled);
 
   if (visitorToken) {
@@ -2720,6 +2831,7 @@ async function getPublicGallery(
       `
         SELECT
           r.photo_id AS photoId,
+          r.email AS email,
           r.fulfilled_at AS fulfilledAt,
           r.downloaded_at AS downloadedAt,
           p.raw_storage_key AS rawStorageKey,
@@ -2741,6 +2853,35 @@ async function getPublicGallery(
     for (const row of rawRequestResult.results) {
       rawRequestedPhotoIds.add(row.photoId);
       rawRequestsByPhotoId.set(row.photoId, row);
+    }
+
+    /*
+     * Requests this browser has asked for but not yet confirmed (#224). Read
+     * from the server rather than held in the page, because the viewer leaves
+     * for their mail app between the two steps and comes back to a fresh load
+     * -- without this the button would have forgotten what it was waiting for.
+     *
+     * Expired rows are filtered here rather than deleted: this is a GET on the
+     * hot gallery path, and a stale row costs nothing beyond being ignored
+     * until the next request for that photo replaces it.
+     */
+    const pendingResult = await env.DB.prepare(
+      `
+        SELECT
+          photo_id AS photoId,
+          email AS email
+        FROM raw_request_confirmations
+        WHERE
+          event_id = ?
+          AND visitor_token = ?
+          AND expires_at > ?
+      `,
+    )
+      .bind(event.id, visitorToken, new Date().toISOString())
+      .all<PendingConfirmationPhotoRow>();
+
+    for (const row of pendingResult.results) {
+      pendingConfirmationsByPhotoId.set(row.photoId, row);
     }
   }
 
@@ -2788,6 +2929,20 @@ async function getPublicGallery(
           rawRequest?.fulfilledAt ?? null,
         ),
         viewerRawDownloadedAt: rawRequest?.downloadedAt ?? null,
+
+        /*
+         * Falls back to the pending row's address so the viewer can see and
+         * correct a typo during the one window where it matters most -- before
+         * they have clicked anything and while "nothing arrived" is the only
+         * symptom they have.
+         */
+        viewerRawRequestEmail:
+          rawRequest?.email ??
+          pendingConfirmationsByPhotoId.get(photo.id)?.email ??
+          null,
+        viewerRawConfirmationPending: pendingConfirmationsByPhotoId.has(
+          photo.id,
+        ),
       };
     }),
   };
@@ -3028,6 +3183,20 @@ async function addRawRequest(
     );
   }
 
+  /*
+   * Required, not optional-with-a-fallback (#224). An optional address would
+   * leave the browser token as the identity for anyone who skipped it, which is
+   * exactly the half of #222 this is meant to close.
+   */
+  const email = normalizeEmail(body.email);
+
+  if (!email) {
+    return jsonResponse(
+      { error: "Enter a valid email address to request the original file." },
+      400,
+    );
+  }
+
   const galleryPhoto = await findPhotoInShare(env, shareToken, photoId);
 
   if (!galleryPhoto) {
@@ -3041,7 +3210,24 @@ async function addRawRequest(
     );
   }
 
-  const now = new Date().toISOString();
+  /*
+   * An address that already has a request somewhere in this event has already
+   * been through the confirmation step, because nothing else ever writes a
+   * raw_requests row -- so that row *is* the record of confirmation, and there
+   * is no separate table of confirmed addresses to keep in step with it.
+   */
+  if (!(await isAddressConfirmedInEvent(env, galleryPhoto.eventId, email))) {
+    return startRawRequestConfirmation(
+      request,
+      env,
+      ctx,
+      galleryPhoto,
+      photoId,
+      visitorToken,
+      displayName,
+      email,
+    );
+  }
 
   const visitor = await upsertGalleryVisitor(
     env,
@@ -3057,6 +3243,39 @@ async function addRawRequest(
     );
   }
 
+  return writeRawRequest(
+    request,
+    env,
+    ctx,
+    galleryPhoto,
+    photoId,
+    visitor.id,
+    email,
+  );
+}
+
+/*
+ * Writes (or re-points) the one raw_requests row that belongs to this address,
+ * having established that the address is confirmed for this event.
+ *
+ * This replaces what used to be a single ON CONFLICT(photo_id, visitor_id)
+ * upsert, and it has to: there are now two uniqueness constraints over this
+ * table -- the surviving primary key, and 0023's unique index on
+ * (photo_id, email) -- and SQLite's ON CONFLICT can only name one of them. The
+ * other does not take the update arm, it raises. So the row is resolved by an
+ * explicit read first, and each of the four cases is written out.
+ */
+async function writeRawRequest(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  galleryPhoto: GalleryPhotoRow,
+  photoId: string,
+  visitorId: string,
+  email: string,
+): Promise<Response> {
+  const now = new Date().toISOString();
+
   /*
    * A request for a photo whose RAW is already sitting in R2 is fulfilled the
    * moment it is made -- the same object serves every requester (migration
@@ -3070,55 +3289,174 @@ async function addRawRequest(
    */
   const fulfilledAt = galleryPhoto.rawStorageKey === null ? null : now;
 
-  const insertResult = await env.DB.prepare(
+  const existing = await env.DB.prepare(
     `
-      INSERT INTO raw_requests (
-        photo_id,
-        visitor_id,
-        created_at,
-        fulfilled_at
-      )
-      VALUES (?1, ?2, ?3, ?4)
-      ON CONFLICT(photo_id, visitor_id)
-      DO UPDATE SET
-        created_at = ?3,
-        fulfilled_at = NULL,
-        downloaded_at = NULL,
-        released_at = NULL,
-        notification_status = 'pending',
-        notification_attempt_count = 0,
-        notification_last_attempt_at = NULL,
-        notification_sent_at = NULL,
-        notification_last_error = NULL
+      SELECT
+        visitor_id AS visitorId,
+        email AS email,
+        fulfilled_at AS fulfilledAt,
+        downloaded_at AS downloadedAt
+      FROM raw_requests
       WHERE
-        raw_requests.fulfilled_at IS NOT NULL
-        AND ?4 IS NULL
+        photo_id = ?1
+        AND (email = ?2 OR visitor_id = ?3)
     `,
   )
-    .bind(photoId, visitor.id, now, fulfilledAt)
-    .run();
+    .bind(photoId, email, visitorId)
+    .all<RawRequestResolutionRow>();
+
+  const emailRow = existing.results.find((row) => row.email === email) ?? null;
+  const visitorRow =
+    existing.results.find((row) => row.visitorId === visitorId) ?? null;
+
+  const targetVisitorId = emailRow?.visitorId ?? visitorId;
+  const previous = emailRow ?? visitorRow;
 
   /*
-   * The DO UPDATE arm is "ask again", and it fires in exactly one situation:
-   * this visitor already had a fulfilled request and the RAW behind it has
-   * since been reclaimed. Resetting the notification lease alongside it is
-   * deliberate -- notifyRawRequested returns early on a 'sent' row, so without
-   * the reset the photographer would never hear that the file is wanted a
-   * second time. Clearing released_at matters for the same reason (#219): the
-   * photographer's "they've got it" was about the copy that has since been
-   * reclaimed, and left standing it would let the replacement RAW be swept the
-   * instant this visitor collects it, with no grace period behind them. A
-   * plain duplicate request (row present, still waiting) hits neither arm and
-   * changes nothing.
+   * Attaching keeps the existing row's visitor rather than moving it to whoever
+   * asked most recently. The first device stays the one the in-page UI
+   * recognises, and the second is served by the emailed link -- moving it would
+   * silently take the in-page download away from the browser that asked.
+   *
+   * The one row that has to go is a *different* row belonging to this browser:
+   * that is the duplicate #222 is about. It is spared when it carries a
+   * downloaded_at, because that stamp is the only record of who actually
+   * collected the bytes (#220) and a collected row cannot hold storage open
+   * anyway, so keeping it as history costs nothing.
    */
-  if (insertResult.meta.changes === 1 && fulfilledAt === null) {
-    scheduleRawRequestNotification(env.DB, env, ctx, photoId, visitor.id);
+  if (emailRow && visitorRow && visitorRow.visitorId !== emailRow.visitorId) {
+    if (visitorRow.downloadedAt === null) {
+      await env.DB.prepare(
+        `
+          DELETE FROM raw_requests
+          WHERE
+            photo_id = ?
+            AND visitor_id = ?
+        `,
+      )
+        .bind(photoId, visitorRow.visitorId)
+        .run();
+    }
   }
+
+  let notifyPhotographer = false;
+
+  if (!previous) {
+    await env.DB.prepare(
+      `
+        INSERT INTO raw_requests (
+          photo_id,
+          visitor_id,
+          email,
+          created_at,
+          fulfilled_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+      `,
+    )
+      .bind(photoId, targetVisitorId, email, now, fulfilledAt)
+      .run();
+
+    notifyPhotographer = fulfilledAt === null;
+  } else if (previous.fulfilledAt !== null && fulfilledAt === null) {
+    /*
+     * "Ask again": this address already had a fulfilled request and the RAW
+     * behind it has since been reclaimed. Resetting the notification lease
+     * alongside it is deliberate -- notifyRawRequested returns early on a 'sent'
+     * row, so without the reset the photographer would never hear that the file
+     * is wanted a second time. Clearing released_at matters for the same reason
+     * (#219): the photographer's "they've got it" was about the copy that has
+     * since been reclaimed, and left standing it would let the replacement RAW
+     * be swept the instant this visitor collects it, with no grace period
+     * behind them. Clearing the download token retires the link in the last
+     * delivery email, which would otherwise be a credential for bytes that no
+     * longer exist and, after the re-delivery, for bytes that do.
+     */
+    await env.DB.prepare(
+      `
+        UPDATE raw_requests
+        SET
+          email = ?3,
+          created_at = ?4,
+          fulfilled_at = NULL,
+          downloaded_at = NULL,
+          released_at = NULL,
+          download_token_hash = NULL,
+          delivery_email_sent_at = NULL,
+          notification_status = 'pending',
+          notification_attempt_count = 0,
+          notification_last_attempt_at = NULL,
+          notification_sent_at = NULL,
+          notification_last_error = NULL
+        WHERE
+          photo_id = ?1
+          AND visitor_id = ?2
+      `,
+    )
+      .bind(photoId, previous.visitorId, email, now)
+      .run();
+
+    notifyPhotographer = true;
+  } else if (previous.email !== email) {
+    /*
+     * An address correction on a row that is still live -- someone mistyped and
+     * has come back to fix it. Retiring the token is the load-bearing half: if
+     * the RAW was already delivered, a working download link is sitting in the
+     * wrong inbox, and only overwriting the hash takes it away. A fresh one is
+     * minted and mailed to the corrected address just below.
+     */
+    await env.DB.prepare(
+      `
+        UPDATE raw_requests
+        SET
+          email = ?3,
+          download_token_hash = NULL,
+          delivery_email_sent_at = NULL
+        WHERE
+          photo_id = ?1
+          AND visitor_id = ?2
+      `,
+    )
+      .bind(photoId, previous.visitorId, email)
+      .run();
+  }
+
+  /*
+   * A plain duplicate -- same address, row present, still waiting -- falls
+   * through all three arms and changes nothing, exactly as the old upsert's
+   * no-op did.
+   */
+  if (notifyPhotographer) {
+    scheduleRawRequestNotification(env.DB, env, ctx, photoId, targetVisitorId);
+  }
+
+  /*
+   * fulfilledAt is non-null exactly when the RAW is already in R2, and
+   * toViewerRawDownload returns null without one, so it is the whole answer
+   * here -- there is no case where a row is collectable and this is null.
+   */
+  if (fulfilledAt !== null) {
+    /*
+     * Mail the link whenever there is something to collect: the instant-fulfil
+     * case, and the corrected-address case where the previous link has just
+     * been retired and the viewer would otherwise be left with nothing.
+     */
+    scheduleRawReadyEmail(request, env, ctx, photoId, targetVisitorId);
+  }
+
+  /*
+   * Only survives an untouched row. The ask-again arm clears the stamp, and a
+   * fresh insert never had one.
+   */
+  const downloadedAt =
+    previous && !notifyPhotographer ? previous.downloadedAt : null;
 
   return jsonResponse({
     requested: true,
+    confirmationPending: false,
+    email,
     rawDownload: toViewerRawDownload(galleryPhoto, fulfilledAt),
-    rawDownloadedAt: null,
+    rawDownloadedAt: downloadedAt,
   });
 }
 
@@ -3144,6 +3482,539 @@ function toViewerRawDownload(
       Date.parse(fulfilledAt) + RAW_DELIVERY_TTL_MS,
     ).toISOString(),
   };
+}
+
+/*
+ * Whether this address has already proved itself in this event.
+ *
+ * There is no table of confirmed addresses, and deliberately so: a raw_requests
+ * row carrying the address *is* the proof, because confirmRawRequest is the only
+ * thing that ever writes one. That also self-cleans -- a viewer whose every
+ * request was withdrawn (removeRawRequest) or cancelled by the photographer
+ * (#221) leaves no trace in the event and simply confirms again, which is the
+ * right answer rather than a bug.
+ */
+async function isAddressConfirmedInEvent(
+  env: Env,
+  eventId: string,
+  email: string,
+): Promise<boolean> {
+  const row = await env.DB.prepare(
+    `
+      SELECT 1 AS found
+      FROM raw_requests r
+      INNER JOIN photos p
+        ON p.id = r.photo_id
+      WHERE
+        p.event_id = ?
+        AND r.email = ?
+      LIMIT 1
+    `,
+  )
+    .bind(eventId, email)
+    .first<{ found: number }>();
+
+  return row !== null;
+}
+
+/*
+ * The unproven half of a request. Nothing about the requester is written into
+ * raw_requests or gallery_visitors yet -- the pending row holds the visitor
+ * token and display name until the address is proved, the same rule
+ * auth_signup_tokens follows and for a sharper reason: a request nobody can
+ * collect keeps isRawReclaimable's awaitingCount veto true and pins ~120 MB for
+ * the full RAW_DELIVERY_TTL_MS. A typo must therefore cost one undeliverable
+ * email and nothing else.
+ */
+async function startRawRequestConfirmation(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  galleryPhoto: GalleryPhotoRow,
+  photoId: string,
+  visitorToken: string,
+  displayName: string,
+  email: string,
+): Promise<Response> {
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  /*
+   * Counted before anything is deleted, and this order is the whole cap.
+   * Replacing the pending row first and counting afterwards would mean asking
+   * for the same photo over and over -- each time with a different address --
+   * never accumulated a count at all, which is precisely the amplification the
+   * cap exists to stop.
+   */
+  const capped = await hasReachedGalleryEmailCap(
+    env,
+    galleryPhoto.eventId,
+    email,
+    visitorToken,
+  );
+
+  if (!capped) {
+    /*
+     * A second attempt adds a row rather than replacing the first, which is
+     * what gives the cap above something to count -- a replace-in-place would
+     * hold the count at one however many addresses were tried.
+     *
+     * Leaving both live costs nothing: every pending row for this photo
+     * redeems to the same request, and the first redemption deletes the rest
+     * for that address anyway. A row for a *different* address staying live is
+     * correct, since proving that address is exactly what it was issued for.
+     */
+    const token = generateAuthToken();
+
+    await env.DB.prepare(
+      `
+        INSERT INTO raw_request_confirmations (
+          id,
+          token_hash,
+          event_id,
+          photo_id,
+          email,
+          visitor_token,
+          display_name,
+          created_at,
+          expires_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+      .bind(
+        crypto.randomUUID(),
+        await hashAuthToken(token),
+        galleryPhoto.eventId,
+        photoId,
+        email,
+        visitorToken,
+        displayName,
+        nowIso,
+        new Date(now.getTime() + RAW_CONFIRMATION_TTL_MS).toISOString(),
+      )
+      .run();
+
+    ctx.waitUntil(
+      sendGalleryEmailSafely(request, env, {
+        kind: "raw-confirm",
+        to: email,
+        url: `${PUBLIC_GALLERY_ORIGIN}/api/galleries/${encodeURIComponent(
+          galleryPhoto.shareToken,
+        )}/raw-confirm?t=${encodeURIComponent(token)}`,
+        eventTitle: galleryPhoto.eventTitle,
+        filename:
+          galleryPhoto.rawOriginalFilename ?? galleryPhoto.originalFilename,
+        displayName,
+      }),
+    );
+  }
+
+  /*
+   * The response is identical whether or not the cap suppressed the send. The
+   * cap exists to stop a share link being used as a mail amplifier, and a
+   * response that said "not sent" would tell the amplifier exactly when to
+   * start again -- while a viewer who hit it genuinely is told to check their
+   * mail, which is what they should do.
+   */
+  return jsonResponse({
+    requested: false,
+    confirmationPending: true,
+    email,
+    rawDownload: null,
+    rawDownloadedAt: null,
+  });
+}
+
+/*
+ * Redeems a confirmation link and completes the request behind it.
+ *
+ * A browser lands here from a mail client, so every outcome renders HTML rather
+ * than JSON, and the success case redirects into the gallery instead of leaving
+ * the viewer looking at an API response.
+ *
+ * Note what this deliberately does *not* do: adopt the clicking browser as the
+ * requester. The pending row names the browser that made the request, and
+ * confirming from a laptop must not move the request off the phone it was made
+ * on -- the worker cannot read the clicking browser's localStorage anyway, and
+ * transplanting a visitor token through a URL would make a forwarded email a
+ * browser-identity credential. Device independence is what the download link in
+ * the delivery mail is for.
+ */
+async function confirmRawRequest(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  url: URL,
+  shareToken: string,
+): Promise<Response> {
+  const token = url.searchParams.get("t")?.trim();
+
+  const expired = galleryMessagePage(
+    "This confirmation link has expired",
+    "Open the gallery again and ask for the file — it only takes a moment, and a fresh link will be on its way.",
+    400,
+  );
+
+  if (!token) {
+    return expired;
+  }
+
+  const confirmation = await env.DB.prepare(
+    `
+      SELECT
+        c.id AS id,
+        c.event_id AS eventId,
+        c.photo_id AS photoId,
+        c.email AS email,
+        c.visitor_token AS visitorToken,
+        c.display_name AS displayName,
+        c.expires_at AS expiresAt
+      FROM raw_request_confirmations c
+      INNER JOIN events e
+        ON e.id = c.event_id
+      WHERE
+        c.token_hash = ?
+        AND e.share_token = ?
+    `,
+  )
+    .bind(await hashAuthToken(token), shareToken)
+    .first<RawConfirmationRow>();
+
+  if (!confirmation) {
+    return expired;
+  }
+
+  /*
+   * Single-use, and deleted before anything else happens so a double click
+   * cannot run the write twice. The row is gone either way -- an expired token
+   * is not worth keeping around to be tried again.
+   */
+  await env.DB.prepare(
+    `
+      DELETE FROM raw_request_confirmations
+      WHERE id = ?
+    `,
+  )
+    .bind(confirmation.id)
+    .run();
+
+  if (Date.parse(confirmation.expiresAt) <= Date.now()) {
+    return expired;
+  }
+
+  /*
+   * Re-read the photo through the same choke point the request itself used, so
+   * a gallery that was archived, or a photo deleted, between asking and
+   * confirming takes the request away with it.
+   */
+  const galleryPhoto = await findPhotoInShare(
+    env,
+    shareToken,
+    confirmation.photoId,
+  );
+
+  if (!galleryPhoto) {
+    return galleryMessagePage(
+      "This gallery is no longer available",
+      "The photographer has closed it or removed the photo, so the original file cannot be sent.",
+      404,
+    );
+  }
+
+  const visitor = await upsertGalleryVisitor(
+    env,
+    confirmation.eventId,
+    confirmation.visitorToken,
+    confirmation.displayName,
+  );
+
+  if (!visitor) {
+    return galleryMessagePage(
+      "Something went wrong",
+      "The request could not be saved. Open the gallery and try again.",
+      500,
+    );
+  }
+
+  /*
+   * Any other pending link for this address in this event is now redundant --
+   * the address is proved, so the rest would only be a second way to confirm
+   * something that no longer needs confirming.
+   */
+  await env.DB.prepare(
+    `
+      DELETE FROM raw_request_confirmations
+      WHERE
+        event_id = ?
+        AND email = ?
+    `,
+  )
+    .bind(confirmation.eventId, confirmation.email)
+    .run();
+
+  await writeRawRequest(
+    request,
+    env,
+    ctx,
+    galleryPhoto,
+    confirmation.photoId,
+    visitor.id,
+    confirmation.email,
+  );
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: `/g/${encodeURIComponent(shareToken)}?photo=${encodeURIComponent(
+        confirmation.photoId,
+      )}`,
+      "Cache-Control": "private, no-store",
+    },
+  });
+}
+
+/*
+ * Whether this event has already sent as much mail as it may on behalf of this
+ * address or this browser. See RAW_EMAIL_CAP_WINDOW_MS for why both halves are
+ * needed.
+ *
+ * Confirmation sends are counted through the pending rows and delivery sends
+ * through raw_requests, so the two paths share one budget -- otherwise the
+ * cheaper path would simply be used twice as hard.
+ */
+async function hasReachedGalleryEmailCap(
+  env: Env,
+  eventId: string,
+  email: string,
+  visitorToken: string,
+): Promise<boolean> {
+  const since = new Date(Date.now() - RAW_EMAIL_CAP_WINDOW_MS).toISOString();
+
+  const counts = await env.DB.prepare(
+    `
+      SELECT
+        (
+          SELECT COUNT(*)
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          WHERE
+            p.event_id = ?1
+            AND r.email = ?2
+            AND r.delivery_email_sent_at > ?4
+        ) + (
+          SELECT COUNT(*)
+          FROM raw_request_confirmations c
+          WHERE
+            c.event_id = ?1
+            AND c.email = ?2
+            AND c.created_at > ?4
+        ) AS addressCount,
+        (
+          SELECT COUNT(*)
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          INNER JOIN gallery_visitors v ON v.id = r.visitor_id
+          WHERE
+            p.event_id = ?1
+            AND v.visitor_token = ?3
+            AND r.delivery_email_sent_at > ?4
+        ) + (
+          SELECT COUNT(*)
+          FROM raw_request_confirmations c
+          WHERE
+            c.event_id = ?1
+            AND c.visitor_token = ?3
+            AND c.created_at > ?4
+        ) AS visitorCount
+    `,
+  )
+    .bind(eventId, email, visitorToken, since)
+    .first<{ addressCount: number; visitorCount: number }>();
+
+  if (!counts) {
+    return false;
+  }
+
+  return (
+    counts.addressCount >= RAW_EMAIL_CAP_PER_ADDRESS ||
+    counts.visitorCount >= RAW_EMAIL_CAP_PER_VISITOR
+  );
+}
+
+/*
+ * Mails the download link for one fulfilled request, and stamps that it did.
+ *
+ * Everything here is best-effort and nothing it does may reach the caller. It
+ * runs behind the iPad's RAW upload response and behind a viewer's request, and
+ * a RAW that was stored successfully must never be reported as a failed upload
+ * because Resend was slow or unconfigured -- the file is there either way, and
+ * the viewer can still collect it in the gallery.
+ *
+ * The plaintext token exists only inside this function. It is minted here,
+ * mailed here, and only its hash is written down -- which is also why the mail
+ * cannot be re-sent later from stored state: a resend mints a new token and
+ * retires the old link, exactly as an address correction does.
+ */
+async function sendRawReadyEmail(
+  request: Request,
+  env: Env,
+  photoId: string,
+  visitorId: string,
+): Promise<void> {
+  try {
+    const recipient = await env.DB.prepare(
+      `
+        SELECT
+          r.visitor_id AS visitorId,
+          r.email AS email,
+          v.display_name AS displayName,
+          v.visitor_token AS visitorToken,
+          e.id AS eventId,
+          e.title AS eventTitle,
+          e.share_token AS shareToken,
+          COALESCE(p.raw_original_filename, p.original_filename) AS filename
+        FROM raw_requests r
+        INNER JOIN gallery_visitors v
+          ON v.id = r.visitor_id
+        INNER JOIN photos p
+          ON p.id = r.photo_id
+        INNER JOIN events e
+          ON e.id = p.event_id
+        WHERE
+          r.photo_id = ?
+          AND r.visitor_id = ?
+          AND r.email IS NOT NULL
+          AND r.fulfilled_at IS NOT NULL
+      `,
+    )
+      .bind(photoId, visitorId)
+      .first<
+        RawDeliveryRecipientRow & { eventId: string; visitorToken: string }
+      >();
+
+    if (!recipient) {
+      return;
+    }
+
+    if (
+      await hasReachedGalleryEmailCap(
+        env,
+        recipient.eventId,
+        recipient.email,
+        recipient.visitorToken,
+      )
+    ) {
+      return;
+    }
+
+    const token = generateAuthToken();
+
+    /*
+     * Stamped before the send rather than after it. A send that throws has
+     * still consumed the budget the cap is protecting, and a delivery mail that
+     * silently retried on every poll of the photo list would be the exact
+     * amplifier the cap exists to prevent.
+     */
+    await env.DB.prepare(
+      `
+        UPDATE raw_requests
+        SET
+          download_token_hash = ?,
+          delivery_email_sent_at = ?
+        WHERE
+          photo_id = ?
+          AND visitor_id = ?
+      `,
+    )
+      .bind(
+        await hashAuthToken(token),
+        new Date().toISOString(),
+        photoId,
+        visitorId,
+      )
+      .run();
+
+    await sendGalleryEmailSafely(request, env, {
+      kind: "raw-ready",
+      to: recipient.email,
+      url:
+        `${PUBLIC_GALLERY_ORIGIN}/api/galleries/${encodeURIComponent(
+          recipient.shareToken,
+        )}/photos/${encodeURIComponent(photoId)}/raw` +
+        `?t=${encodeURIComponent(token)}`,
+      eventTitle: recipient.eventTitle,
+      filename: recipient.filename,
+      displayName: recipient.displayName,
+    });
+  } catch (error) {
+    console.error("Unable to send a RAW delivery email:", error);
+  }
+}
+
+function scheduleRawReadyEmail(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  photoId: string,
+  visitorId: string,
+): void {
+  ctx.waitUntil(sendRawReadyEmail(request, env, photoId, visitorId));
+}
+
+/*
+ * The console fallback is localhost-only, exactly as it is for sign-in mail, so
+ * a production deployment without RESEND_API_KEY cannot write working download
+ * links into the observability log. Off localhost that throws, and this is where
+ * the throw stops: see sendRawReadyEmail for why gallery mail swallows what auth
+ * mail turns into a 500.
+ */
+async function sendGalleryEmailSafely(
+  request: Request,
+  env: Env,
+  email: Parameters<typeof sendGalleryEmail>[1],
+): Promise<void> {
+  try {
+    await sendGalleryEmail(
+      env as EmailEnvironment,
+      email,
+      isLocalRequest(request),
+    );
+  } catch (error) {
+    console.error(`Unable to send a ${email.kind} email:`, error);
+  }
+}
+
+/*
+ * A whole-page response for the two routes a viewer reaches by clicking a link
+ * in an email rather than by fetch: the confirmation redemption and the
+ * token-authenticated download. A JSON error body is the right answer to the
+ * gallery's own fetches and the wrong one in a browser window, where it reads
+ * as a broken link rather than an expired one.
+ */
+function galleryMessagePage(
+  heading: string,
+  detail: string,
+  status: number,
+): Response {
+  const body = [
+    "<!doctype html>",
+    '<html lang="en"><head><meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    `<title>${escapeHtml(heading)}</title></head>`,
+    '<body style="font-family: system-ui, sans-serif; margin: 0; padding: 2rem; line-height: 1.5;">',
+    `<h1 style="font-size: 1.25rem;">${escapeHtml(heading)}</h1>`,
+    `<p>${escapeHtml(detail)}</p>`,
+    "</body></html>",
+  ].join("");
+
+  return new Response(body, {
+    status,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "private, no-store",
+    },
+  });
 }
 
 async function removeRawRequest(
@@ -4133,30 +5004,59 @@ async function getGalleryRawPhoto(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
+  url: URL,
   shareToken: string,
   photoId: string,
 ): Promise<Response> {
   const visitorToken = getVisitorToken(request);
 
-  if (!visitorToken) {
+  /*
+   * Either credential works (#224). The header is the gallery's own fetch, and
+   * ?t= is the link in the delivery email -- which is the whole point of that
+   * email, since the header lives in one browser's localStorage and the file is
+   * routinely collected on a different device.
+   *
+   * This concedes the objection recorded at GalleryPage.tsx's downloadRawPhoto:
+   * a token in a URL is a credential somewhere shareable and loggable. It is
+   * accepted here because this one is single-purpose, scoped to one photo,
+   * expires with the file, is retired and replaced on every re-delivery or
+   * address correction, and is only ever sent to a confirmed address.
+   */
+  const downloadToken = url.searchParams.get("t")?.trim() || null;
+
+  if (!visitorToken && !downloadToken) {
     return jsonResponse({ error: "A valid visitor token is required." }, 400);
   }
 
   const photo = await findPhotoInShare(env, shareToken, photoId);
 
   if (!photo) {
-    return jsonResponse({ error: "Photo not found." }, 404);
+    return downloadToken
+      ? galleryMessagePage(
+          "This gallery is no longer available",
+          "The photographer has closed it or removed the photo, so the original file cannot be downloaded.",
+          404,
+        )
+      : jsonResponse({ error: "Photo not found." }, 404);
   }
 
   /*
    * One message for "never delivered", "already reclaimed" and "not yours",
    * and one status code, so the route cannot be used to probe which photos
-   * other visitors have RAWs waiting for.
+   * other visitors have RAWs waiting for. A browser that followed a link from
+   * an email gets the same refusal as a page, because a JSON body in a window
+   * reads as a broken link rather than an expired one.
    */
-  const unavailable = jsonResponse(
-    { error: "This RAW file is not available to download." },
-    404,
-  );
+  const unavailable = downloadToken
+    ? galleryMessagePage(
+        "This download link has expired",
+        "The original file is no longer being held. Open the gallery and ask for it again if you still need it.",
+        404,
+      )
+    : jsonResponse(
+        { error: "This RAW file is not available to download." },
+        404,
+      );
 
   /*
    * Not gated on photo.rawRequestsEnabled. The event's current toggle only
@@ -4170,8 +5070,31 @@ async function getGalleryRawPhoto(
     return unavailable;
   }
 
-  const rawRequest = await env.DB.prepare(
-    `
+  /*
+   * Both lookups land on the same row shape and the same checks below. The
+   * token branch still narrows by photo and event rather than trusting the
+   * token alone, so a token minted for one photo cannot be pointed at another,
+   * and a share token from a different event cannot be paired with it.
+   */
+  const rawRequest = downloadToken
+    ? await env.DB.prepare(
+        `
+      SELECT
+        r.visitor_id AS visitorId,
+        r.fulfilled_at AS fulfilledAt
+      FROM raw_requests r
+      INNER JOIN gallery_visitors v
+        ON v.id = r.visitor_id
+      WHERE
+        r.photo_id = ?
+        AND v.event_id = ?
+        AND r.download_token_hash = ?
+    `,
+      )
+        .bind(photoId, photo.eventId, await hashAuthToken(downloadToken))
+        .first<RawRequestOwnerRow>()
+    : await env.DB.prepare(
+        `
       SELECT
         r.visitor_id AS visitorId,
         r.fulfilled_at AS fulfilledAt
@@ -4183,11 +5106,25 @@ async function getGalleryRawPhoto(
         AND v.event_id = ?
         AND v.visitor_token = ?
     `,
-  )
-    .bind(photoId, photo.eventId, visitorToken)
-    .first<RawRequestOwnerRow>();
+      )
+        .bind(photoId, photo.eventId, visitorToken)
+        .first<RawRequestOwnerRow>();
 
   if (!rawRequest || rawRequest.fulfilledAt === null) {
+    return unavailable;
+  }
+
+  /*
+   * An emailed link dies with the file it points at. The reclaim is what
+   * actually removes the bytes, and it runs on the iPad's poll rather than on a
+   * timer, so an object can outlive its window by a little -- honouring the
+   * stated expiry here rather than waiting for the sweep means the link stops
+   * working when the viewer was told it would.
+   */
+  if (
+    downloadToken &&
+    Date.now() - Date.parse(rawRequest.fulfilledAt) >= RAW_DELIVERY_TTL_MS
+  ) {
     return unavailable;
   }
 
@@ -4582,6 +5519,7 @@ async function uploadFinalPhoto(
 async function uploadRawPhoto(
   request: Request,
   env: TenantEnv,
+  ctx: ExecutionContext,
   scope: AccountScope,
   photoId: string,
 ): Promise<Response> {
@@ -4765,6 +5703,50 @@ async function uploadRawPhoto(
       { error: "The RAW file metadata could not be saved." },
       500,
     );
+  }
+
+  /*
+   * Tell everyone who was waiting that their file has landed (#224).
+   *
+   * Read after the batch rather than folded into it, so the blanket UPDATE
+   * above stays the single thing that decides what counts as fulfilled -- a
+   * request that arrived while this upload was in flight is picked up by that
+   * statement and then simply appears in this list. Each recipient's token is
+   * minted inside sendRawReadyEmail, one per request, because only the hash is
+   * ever stored and the plaintext has to exist where the mail is composed.
+   */
+  try {
+    const recipients = await scope.database
+      .prepare(
+        `
+        SELECT visitor_id AS visitorId
+        FROM raw_requests
+        WHERE
+          photo_id = ?
+          AND email IS NOT NULL
+          AND fulfilled_at = ?
+      `,
+      )
+      .bind(photoId, uploadedAt)
+      .all<{ visitorId: string }>();
+
+    for (const recipient of recipients.results) {
+      scheduleRawReadyEmail(
+        request,
+        env as Env,
+        ctx,
+        photoId,
+        recipient.visitorId,
+      );
+    }
+  } catch (error) {
+    /*
+     * Logged, never fatal, and emphatically not a reason to delete the object.
+     * The RAW is stored and the requests are stamped fulfilled by the point
+     * this runs -- every viewer can still collect it from the gallery. Failing
+     * the upload here would make the iPad re-send ~120 MB to fix a notification.
+     */
+    console.error("Unable to queue RAW delivery emails:", error);
   }
 
   await adjustAccountStorageBytes(scope, storedObject.size - replacedRawBytes);
@@ -5438,7 +6420,7 @@ async function handleAdminRequest(
       return jsonResponse({ error: "Not found." }, 404);
     }
 
-    return uploadRawPhoto(request, env, scope, photoId);
+    return uploadRawPhoto(request, env, ctx, scope, photoId);
   }
 
   const adminPhotoImageMatch = url.pathname.match(
@@ -5847,7 +6829,34 @@ async function routeRequest(
       return jsonResponse({ error: "Not found." }, 404);
     }
 
-    return getGalleryRawPhoto(request, env, ctx, shareToken, photoId);
+    return getGalleryRawPhoto(request, env, ctx, url, shareToken, photoId);
+  }
+
+  /*
+   * Redeems the confirmation link from a RAW request email (#224).
+   *
+   * A GET, and outside the requireOpenGallery guard for the same reason the
+   * download route is: the viewer asked while the gallery was open, and the
+   * photographer marking it `completed` in the meantime must not strand a
+   * request that is already half-made. findPhotoInShare inside the handler is
+   * what takes it away if the gallery is genuinely gone.
+   */
+  const galleryRawConfirmMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/raw-confirm$/,
+  );
+
+  if (galleryRawConfirmMatch) {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const shareToken = safeDecodePathSegment(galleryRawConfirmMatch[1]);
+
+    if (shareToken === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return confirmRawRequest(request, env, ctx, url, shareToken);
   }
 
   const galleryCommentMatch = url.pathname.match(

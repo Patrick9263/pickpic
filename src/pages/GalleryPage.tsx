@@ -52,6 +52,15 @@ interface RawRequestResponse {
   requested: boolean;
 
   /*
+   * True when the address has not been proved in this gallery yet, so nothing
+   * has been requested and a confirmation link is on its way instead. Distinct
+   * from `requested: false` on a withdrawal, which is why it is its own field
+   * rather than something inferred from the absence of a request.
+   */
+  confirmationPending?: boolean;
+  email?: string;
+
+  /*
    * Non-null when the RAW was already sitting in R2 at request time -- a
    * second visitor asking for a photo someone else already had delivered goes
    * straight to "ready to download" without another round trip.
@@ -71,6 +80,7 @@ interface GalleryPageProps {
 type GalleryFilter = "all" | "liked" | "finals";
 const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
+const RAW_REQUEST_EMAIL_KEY = "pickpic-raw-request-email";
 
 /*
  * Both download paths save via a Blob + synthetic anchor click, which some
@@ -370,6 +380,55 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     return resolvedName;
   }
 
+  /*
+   * The address a RAW request is delivered to. Kept per browser like the
+   * display name above, so a viewer collecting several photos from one shoot
+   * types it once.
+   *
+   * The shape check here is only to save a round trip on an obvious slip -- the
+   * worker's normalizeEmail is the authority, and its rejection surfaces as the
+   * action error like any other. forceReprompt is what the "Change" control
+   * uses, and the stored address is pre-filled so correcting a typo is an edit
+   * rather than a retype.
+   */
+  async function resolveEmail(
+    forceReprompt: boolean,
+    currentEmail: string | null,
+  ): Promise<string | null> {
+    const storedEmail =
+      currentEmail ??
+      readStorageItem(() => window.localStorage, RAW_REQUEST_EMAIL_KEY) ??
+      "";
+
+    if (!forceReprompt && storedEmail) {
+      return storedEmail;
+    }
+
+    const enteredEmail = window.prompt(
+      "Where should we email your download link?",
+      storedEmail,
+    );
+
+    if (enteredEmail === null) {
+      return null;
+    }
+
+    const resolvedEmail = enteredEmail.trim();
+
+    if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(resolvedEmail)) {
+      setActionError("Enter a valid email address.");
+      return null;
+    }
+
+    writeStorageItem(
+      () => window.localStorage,
+      RAW_REQUEST_EMAIL_KEY,
+      resolvedEmail,
+    );
+
+    return resolvedEmail;
+  }
+
   async function toggleHeart(photo: GalleryPhotoRecord): Promise<void> {
     if (!interactionsEnabled) {
       setActionError(
@@ -453,7 +512,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     }
   }
 
-  async function toggleRawRequest(photo: GalleryPhotoRecord): Promise<void> {
+  async function toggleRawRequest(
+    photo: GalleryPhotoRecord,
+    changeEmail = false,
+  ): Promise<void> {
     if (!interactionsEnabled) {
       setActionError(
         "This gallery is closed and no longer accepts RAW file requests.",
@@ -463,11 +525,16 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     /*
      * "collected" re-requests rather than cancels: the viewer already had this
      * RAW, it has since been reclaimed, and the only useful action left is
-     * asking for it again. Only "waiting" is a cancel.
+     * asking for it again. Only "waiting" is a cancel -- and changing the
+     * address is never one, whatever state the button is in, because it is a
+     * PUT that re-points the existing request.
      */
-    const isCancelling = getRawRequestState(photo) === "waiting";
+    const isCancelling =
+      !changeEmail && getRawRequestState(photo) === "waiting";
 
     let resolvedDisplayName = displayName.trim();
+    let resolvedEmail: string | null = null;
+
     if (!isCancelling) {
       const resolvedName = await resolveDisplayName();
 
@@ -476,10 +543,20 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       }
 
       resolvedDisplayName = resolvedName;
+
+      resolvedEmail = await resolveEmail(
+        changeEmail,
+        photo.viewerRawRequestEmail,
+      );
+
+      if (!resolvedEmail) {
+        return;
+      }
     }
 
     setTogglingRawRequestPhotoId(photo.id);
     setActionError(null);
+    setActionNotice(null);
 
     try {
       const method = isCancelling ? "DELETE" : "PUT";
@@ -501,10 +578,22 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             method === "PUT"
               ? JSON.stringify({
                   displayName: resolvedDisplayName,
+                  email: resolvedEmail,
                 })
               : undefined,
         },
       );
+
+      /*
+       * The confirmation step is invisible unless it is called out. Nothing
+       * else on screen changes -- no request exists yet -- so without this the
+       * button looks like it did nothing.
+       */
+      if (body.confirmationPending) {
+        setActionNotice(
+          `Check ${body.email ?? resolvedEmail} and open the link to finish requesting this file.`,
+        );
+      }
 
       setGallery((currentGallery) => {
         if (!currentGallery) {
@@ -519,6 +608,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   viewerRequestedRaw: body.requested,
                   viewerRawDownload: body.rawDownload ?? null,
                   viewerRawDownloadedAt: body.rawDownloadedAt ?? null,
+                  viewerRawConfirmationPending:
+                    body.confirmationPending ?? false,
+                  viewerRawRequestEmail: body.email ?? null,
                 }
               : currentPhoto,
           ),
@@ -542,6 +634,14 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
    * putting a signed token in the URL -- would stream straight to disk and
    * spend no memory, but it puts a credential somewhere it can be shared or
    * logged, and MAX_RAW_BYTES caps what lands here at 100 MB.
+   *
+   * #224 concedes that objection, but only for the emailed link, and only
+   * there: that URL carries a per-request token precisely because it has to
+   * work in a browser this page has never run in. In-page, the header is still
+   * available and still the better credential, so this path is unchanged. Do
+   * not "simplify" the two into one by moving the token into this fetch -- it
+   * would put a reusable download credential into the address bar and the
+   * browser history of every viewer who never needed one.
    */
   async function downloadRawPhoto(photo: GalleryPhotoRecord): Promise<void> {
     if (!photo.viewerRawDownload || downloadingRawPhotoId !== null) {

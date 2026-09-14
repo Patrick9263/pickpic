@@ -99,33 +99,52 @@ describe("getRawRequestState", () => {
     expiresAt: "2026-02-15T00:00:00.000Z",
   };
 
+  /*
+   * Defaults the confirmation flag so each case below states only the fields it
+   * is actually about.
+   */
+  function state(
+    fields: Partial<Parameters<typeof getRawRequestState>[0]>,
+  ): ReturnType<typeof getRawRequestState> {
+    return getRawRequestState({
+      viewerRequestedRaw: false,
+      viewerRawDownload: null,
+      viewerRawDownloadedAt: null,
+      viewerRawConfirmationPending: false,
+      ...fields,
+    });
+  }
+
   it("reports none before the viewer has asked", () => {
-    expect(
-      getRawRequestState({
-        viewerRequestedRaw: false,
-        viewerRawDownload: null,
-        viewerRawDownloadedAt: null,
-      }),
-    ).toBe("none");
+    expect(state({ viewerRequestedRaw: false })).toBe("none");
   });
 
-  it("reports waiting while the iPad has yet to deliver", () => {
+  it("reports confirming while the address is unproven", () => {
+    expect(state({ viewerRawConfirmationPending: true })).toBe("confirming");
+  });
+
+  /*
+   * A pending confirmation can outlive the request it was made for: asking
+   * again after a reclaim writes a real row while the earlier pending row may
+   * still be unexpired. Whatever exists on the server has to win, or the button
+   * would offer to confirm something already requested.
+   */
+  it("prefers a real request over a stale pending confirmation", () => {
     expect(
-      getRawRequestState({
+      state({
         viewerRequestedRaw: true,
-        viewerRawDownload: null,
-        viewerRawDownloadedAt: null,
+        viewerRawConfirmationPending: true,
       }),
     ).toBe("waiting");
   });
 
+  it("reports waiting while the iPad has yet to deliver", () => {
+    expect(state({ viewerRequestedRaw: true })).toBe("waiting");
+  });
+
   it("reports ready once the RAW is available to this viewer", () => {
     expect(
-      getRawRequestState({
-        viewerRequestedRaw: true,
-        viewerRawDownload: download,
-        viewerRawDownloadedAt: null,
-      }),
+      state({ viewerRequestedRaw: true, viewerRawDownload: download }),
     ).toBe("ready");
   });
 
@@ -136,7 +155,7 @@ describe("getRawRequestState", () => {
    */
   it("stays ready during the grace period after a download", () => {
     expect(
-      getRawRequestState({
+      state({
         viewerRequestedRaw: true,
         viewerRawDownload: download,
         viewerRawDownloadedAt: "2026-02-02T00:00:00.000Z",
@@ -152,9 +171,8 @@ describe("getRawRequestState", () => {
    */
   it("reports collected once the downloaded RAW has been reclaimed", () => {
     expect(
-      getRawRequestState({
+      state({
         viewerRequestedRaw: true,
-        viewerRawDownload: null,
         viewerRawDownloadedAt: "2026-02-02T00:00:00.000Z",
       }),
     ).toBe("collected");

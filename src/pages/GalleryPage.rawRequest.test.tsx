@@ -12,7 +12,7 @@ import GalleryPage from "./GalleryPage";
 import { fetchJson } from "../api";
 import { makeGalleryPhoto } from "../testing/factories";
 import { createFetchJsonRouter } from "../testing/fetchJsonRouter";
-import { userPrompts } from "../testing/browserStubs";
+import { userPromptsEach } from "../testing/browserStubs";
 
 /*
  * A RAW file request is a distinct kind of ask from a heart -- a heart is an
@@ -103,7 +103,10 @@ describe("GalleryPage RAW file requests", () => {
     }));
     fetchJsonMock.mockImplementation(router.fetchJson);
 
-    vi.spyOn(window, "prompt").mockReturnValue("Ada Lovelace");
+    userPromptsEach({
+      "call you": "Ada Lovelace",
+      "email your download link": "ada@example.com",
+    });
 
     render(<GalleryPage shareToken="share-token" />);
 
@@ -259,7 +262,10 @@ describe("GalleryPage RAW file requests", () => {
     }));
     fetchJsonMock.mockImplementation(router.fetchJson);
 
-    userPrompts("Ada Lovelace");
+    userPromptsEach({
+      "call you": "Ada Lovelace",
+      "email your download link": "ada@example.com",
+    });
 
     render(<GalleryPage shareToken="share-token" />);
 

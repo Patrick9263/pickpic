@@ -283,6 +283,81 @@ describe("PUT /api/admin/photos/:id/raw", () => {
     expect(pending?.count).toBe(0);
   });
 
+  /*
+   * Each waiting requester gets their own link (#224), so one recipient's
+   * forwarded email cannot collect on another's behalf and retiring one link
+   * cannot retire the rest. Only the hash is stored, which is why this asserts
+   * on distinctness rather than on a value.
+   */
+  it("mints a distinct download token per waiting request", async () => {
+    for (const visitorToken of [
+      "visitor-token-one____",
+      "visitor-token-two____",
+    ]) {
+      await insertRawRequest({
+        photoId: "photo-a",
+        eventId: EVENT_ID,
+        visitorToken,
+      });
+    }
+
+    await adminRequest("PUT", "/api/admin/photos/photo-a/raw", {
+      body: new Uint8Array(2048),
+      headers: RAW_HEADERS,
+    });
+
+    const hashes = await env.DB.prepare(
+      `
+        SELECT download_token_hash AS hash
+        FROM raw_requests
+        WHERE photo_id = ?
+      `,
+    )
+      .bind("photo-a")
+      .all<{ hash: string | null }>();
+
+    const minted = hashes.results.map((row) => row.hash);
+
+    expect(minted).toHaveLength(2);
+    expect(minted.every((hash) => hash !== null)).toBe(true);
+    expect(new Set(minted).size).toBe(2);
+  });
+
+  /*
+   * A row from before migration 0023 has no address to mail, and must still be
+   * fulfilled -- the viewer collects it in the gallery exactly as they did
+   * before, and skipping the stamp would leave the iPad's pending count stuck
+   * above zero forever.
+   */
+  it("fulfils an address-less legacy request without mailing anything", async () => {
+    await insertRawRequest({
+      photoId: "photo-a",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-legacy_",
+      email: null,
+    });
+
+    await adminRequest("PUT", "/api/admin/photos/photo-a/raw", {
+      body: new Uint8Array(2048),
+      headers: RAW_HEADERS,
+    });
+
+    const row = await env.DB.prepare(
+      `
+        SELECT
+          fulfilled_at AS fulfilledAt,
+          download_token_hash AS hash
+        FROM raw_requests
+        WHERE photo_id = ?
+      `,
+    )
+      .bind("photo-a")
+      .first<{ fulfilledAt: string | null; hash: string | null }>();
+
+    expect(row?.fulfilledAt).not.toBeNull();
+    expect(row?.hash).toBeNull();
+  });
+
   it("counts the delivered RAW against the account's storage", async () => {
     await adminRequest("PUT", "/api/admin/photos/photo-a/raw", {
       body: new Uint8Array(4096),

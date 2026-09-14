@@ -22,8 +22,10 @@ import { expectError, galleryRequest } from "./test-request.ts";
 
 const EVENT_ID = "event-guard";
 const PHOTO_ID = "photo-guard";
+const OTHER_PHOTO_ID = "photo-guard-other";
 const SHARE_TOKEN = "share-guard";
 const VISITOR_TOKEN = "visitor-token-for-guard-tests";
+const GUEST_EMAIL = "guest@example.com";
 
 const CLOSED_GALLERY_ERROR =
   "This gallery is closed and no longer accepts edit requests or comments.";
@@ -36,6 +38,7 @@ async function seedGallery(status: string): Promise<void> {
     rawRequestsEnabled: true,
   });
   await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
+  await insertPhoto({ id: OTHER_PHOTO_ID, eventId: EVENT_ID });
 }
 
 beforeEach(async () => {
@@ -54,7 +57,7 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
       label: "PUT .../raw-request",
       method: "PUT",
       path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
-      json: { displayName: "Guest" },
+      json: { displayName: "Guest", email: "guest@example.com" },
     },
     {
       label: "POST .../comments",
@@ -87,7 +90,7 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
       label: "PUT .../raw-request",
       method: "PUT",
       path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
-      json: { displayName: "Guest" },
+      json: { displayName: "Guest", email: "guest@example.com" },
     },
     {
       label: "POST .../comments",
@@ -153,7 +156,7 @@ describe("PUT/DELETE .../raw-request", () => {
     await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
 
     const result = await galleryRequest("PUT", RAW_REQUEST_PATH, {
-      json: { displayName: "Guest" },
+      json: { displayName: "Guest", email: GUEST_EMAIL },
       headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
     });
 
@@ -162,23 +165,38 @@ describe("PUT/DELETE .../raw-request", () => {
 
   it("is idempotent and can be undone once enabled", async () => {
     await seedGallery("ready");
+    /*
+     * Seeded rather than requested, so this test stays about idempotency. The
+     * row makes the address already-confirmed for the event, which is the state
+     * a viewer is in from their second request onwards.
+     */
+    await insertRawRequest({
+      photoId: OTHER_PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      email: GUEST_EMAIL,
+    });
 
     const first = await galleryRequest("PUT", RAW_REQUEST_PATH, {
-      json: { displayName: "Guest" },
+      json: { displayName: "Guest", email: GUEST_EMAIL },
       headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
     });
     expect(first.body).toEqual({
       requested: true,
+      confirmationPending: false,
+      email: GUEST_EMAIL,
       rawDownload: null,
       rawDownloadedAt: null,
     });
 
     const second = await galleryRequest("PUT", RAW_REQUEST_PATH, {
-      json: { displayName: "Guest" },
+      json: { displayName: "Guest", email: GUEST_EMAIL },
       headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
     });
     expect(second.body).toEqual({
       requested: true,
+      confirmationPending: false,
+      email: GUEST_EMAIL,
       rawDownload: null,
       rawDownloadedAt: null,
     });
@@ -203,12 +221,18 @@ describe("PUT/DELETE .../raw-request", () => {
       eventId: EVENT_ID,
       originalFilename: "DSC01015.ARW",
     });
+    await insertRawRequest({
+      photoId: OTHER_PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-for-second-guest",
+      email: "second@example.com",
+    });
 
     const result = await galleryRequest<{
       requested: boolean;
       rawDownload: { filename: string; byteSize: number } | null;
     }>("PUT", RAW_REQUEST_PATH, {
-      json: { displayName: "Second guest" },
+      json: { displayName: "Second guest", email: "second@example.com" },
       headers: { "X-PickPic-Visitor": "visitor-token-for-second-guest" },
     });
 
@@ -289,15 +313,19 @@ describe("PUT/DELETE .../raw-request", () => {
       visitorToken: VISITOR_TOKEN,
       fulfilledAt: "2026-01-01T00:00:00.000Z",
       downloadedAt: "2026-01-02T00:00:00.000Z",
+      email: GUEST_EMAIL,
+      downloadTokenHash: "hash-of-the-link-already-emailed",
     });
 
     const result = await galleryRequest("PUT", RAW_REQUEST_PATH, {
-      json: { displayName: "Guest" },
+      json: { displayName: "Guest", email: GUEST_EMAIL },
       headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
     });
 
     expect(result.body).toEqual({
       requested: true,
+      confirmationPending: false,
+      email: GUEST_EMAIL,
       rawDownload: null,
       rawDownloadedAt: null,
     });
@@ -307,6 +335,7 @@ describe("PUT/DELETE .../raw-request", () => {
         SELECT
           r.fulfilled_at AS fulfilledAt,
           r.downloaded_at AS downloadedAt,
+          r.download_token_hash AS downloadTokenHash,
           r.notification_status AS notificationStatus
         FROM raw_requests r
         WHERE r.photo_id = ?
@@ -316,12 +345,20 @@ describe("PUT/DELETE .../raw-request", () => {
       .first<{
         fulfilledAt: string | null;
         downloadedAt: string | null;
+        downloadTokenHash: string | null;
         notificationStatus: string;
       }>();
 
+    /*
+     * The token has to go with the rest of it. The link in the previous
+     * delivery email described a copy that has since been reclaimed, and
+     * leaving the hash standing would make that old mail a live credential
+     * again the moment the replacement RAW lands.
+     */
     expect(row).toMatchObject({
       fulfilledAt: null,
       downloadedAt: null,
+      downloadTokenHash: null,
       notificationStatus: "pending",
     });
   });

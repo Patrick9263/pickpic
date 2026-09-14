@@ -267,7 +267,9 @@ function GalleryGrid({
                           ? `Cancel RAW file request for ${photo.originalFilename}`
                           : rawRequestState === "collected"
                             ? `Already downloaded; request the RAW file for ${photo.originalFilename} again`
-                            : `Request the original RAW file for ${photo.originalFilename}`
+                            : rawRequestState === "confirming"
+                              ? `Check your email to finish requesting the RAW file for ${photo.originalFilename}`
+                              : `Request the original RAW file for ${photo.originalFilename}`
                   }
                   title={
                     rawRequestState === "ready" || interactionsEnabled
@@ -280,7 +282,9 @@ function GalleryGrid({
                       ? "↓ RAW"
                       : rawRequestState === "collected"
                         ? "RAW ✓"
-                        : "RAW"}
+                        : rawRequestState === "confirming"
+                          ? "RAW ✉"
+                          : "RAW"}
                   </span>
                 </button>
               )}

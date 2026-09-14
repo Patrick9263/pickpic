@@ -43,6 +43,7 @@ export async function clearTestData(): Promise<void> {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM hearts"),
     env.DB.prepare("DELETE FROM raw_requests"),
+    env.DB.prepare("DELETE FROM raw_request_confirmations"),
     env.DB.prepare("DELETE FROM comments"),
     env.DB.prepare("DELETE FROM photo_variants"),
     env.DB.prepare("DELETE FROM gallery_visitors"),
@@ -234,9 +235,25 @@ export async function insertRawRequest(seed: {
    * skip RAW_DOWNLOAD_GRACE_MS.
    */
   releasedAt?: string;
+
+  /*
+   * The address the request belongs to (#224). Defaults to one derived from the
+   * visitor token, which also makes the seeded row count as proof that the
+   * address is confirmed for this event -- a raw_requests row carrying an
+   * address is exactly what isAddressConfirmedInEvent looks for, so seeding one
+   * is how a test skips the confirmation round trip it is not testing.
+   *
+   * Pass null to seed a row from before migration 0023, which is the shape the
+   * legacy-row branch of addRawRequest's resolution has to cope with.
+   */
+  email?: string | null;
+
+  downloadTokenHash?: string;
 }): Promise<void> {
   const visitorId = `visitor-${seed.eventId}-${seed.visitorToken}`;
   const now = new Date().toISOString();
+  const email =
+    seed.email === undefined ? `${seed.visitorToken}@example.com` : seed.email;
 
   await env.DB.prepare(
     `
@@ -260,23 +277,103 @@ export async function insertRawRequest(seed: {
       INSERT INTO raw_requests (
         photo_id,
         visitor_id,
+        email,
+        download_token_hash,
         created_at,
         fulfilled_at,
         downloaded_at,
         released_at
       )
-      VALUES (?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
       seed.photoId,
       visitorId,
+      email,
+      seed.downloadTokenHash ?? null,
       now,
       seed.fulfilledAt ?? null,
       seed.downloadedAt ?? null,
       seed.releasedAt ?? null,
     )
     .run();
+}
+
+/*
+ * Captures the mail this worker tries to send, by giving it an API key and
+ * standing in for Resend.
+ *
+ * A test that wants the confirmation or download link has no other way to reach
+ * it: only the token's hash is ever stored, so the plaintext exists nowhere
+ * except inside the message. Reading it back out of the intercepted request
+ * body is the same thing a recipient does, and it means the link under test is
+ * the one that was actually sent rather than one the test rebuilt.
+ */
+export interface CapturedEmail {
+  /** Resend takes an array; every send here has exactly one recipient. */
+  to: string[];
+  from: string;
+  subject: string;
+  text: string;
+  html: string;
+}
+
+export function captureEmails(): {
+  sent: CapturedEmail[];
+  restore: () => void;
+} {
+  const sent: CapturedEmail[] = [];
+  const originalFetch = globalThis.fetch;
+  const environment = env as unknown as { RESEND_API_KEY?: string };
+  const originalKey = environment.RESEND_API_KEY;
+
+  environment.RESEND_API_KEY = "re_test_key";
+
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === "string" ? input : input.toString();
+
+    if (!url.startsWith("https://api.resend.com/")) {
+      return originalFetch(input as RequestInfo, init);
+    }
+
+    sent.push(JSON.parse(String(init?.body)) as CapturedEmail);
+
+    /*
+     * Resend answers with the created message's id; nothing here reads it, and
+     * only response.ok is load-bearing.
+     */
+    return new Response(JSON.stringify({ id: "test-message" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof globalThis.fetch;
+
+  return {
+    sent,
+    restore: () => {
+      globalThis.fetch = originalFetch;
+      environment.RESEND_API_KEY = originalKey;
+    },
+  };
+}
+
+/*
+ * The link out of a captured message. Fails loudly rather than returning null,
+ * because every caller is asserting on what it points at and a silent null
+ * would surface as a confusing failure three lines later.
+ */
+export function linkFromEmail(email: CapturedEmail): string {
+  const match = email.text.match(/https?:\/\/\S+/);
+
+  if (!match) {
+    throw new Error(`No link found in the ${email.subject} email.`);
+  }
+
+  return match[0];
 }
 
 /*
