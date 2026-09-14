@@ -3340,6 +3340,7 @@ async function writeRawRequest(
   }
 
   let notifyPhotographer = false;
+  let addressCorrected = false;
 
   if (!previous) {
     await env.DB.prepare(
@@ -3419,12 +3420,16 @@ async function writeRawRequest(
     )
       .bind(photoId, previous.visitorId, email)
       .run();
+
+    addressCorrected = true;
   }
 
   /*
    * A plain duplicate -- same address, row present, still waiting -- falls
    * through all three arms and changes nothing, exactly as the old upsert's
-   * no-op did.
+   * no-op did. That includes the mail below: re-sending it would retire the
+   * link already sitting in the viewer's inbox for no reason, which is worse
+   * than doing nothing.
    */
   if (notifyPhotographer) {
     scheduleRawRequestNotification(env.DB, env, ctx, photoId, targetVisitorId);
@@ -3434,8 +3439,14 @@ async function writeRawRequest(
    * fulfilledAt is non-null exactly when the RAW is already in R2, and
    * toViewerRawDownload returns null without one, so it is the whole answer
    * here -- there is no case where a row is collectable and this is null.
+   *
+   * Gated on !previous || addressCorrected so a plain duplicate never reaches
+   * here: sendRawReadyEmail mints a fresh token and overwrites
+   * download_token_hash unconditionally, so calling it for a row that was
+   * already fulfilled and unchanged would silently retire whatever link was
+   * mailed the first time.
    */
-  if (fulfilledAt !== null) {
+  if (fulfilledAt !== null && (!previous || addressCorrected)) {
     /*
      * Mail the link whenever there is something to collect: the instant-fulfil
      * case, and the corrected-address case where the previous link has just
