@@ -490,6 +490,13 @@ button:disabled {
   padding: 12px;
 }
 
+/* Always exactly 3 stats (Photos, Edit requests, Pending RAW requests) in a
+   2-column grid, so the last one is otherwise left alone on a half-width
+   row -- span it full width instead of leaving dead space beside it. */
+.event-stats div:last-child {
+  grid-column: 1 / -1;
+}
+
 .event-stats dt {
   color: #77736b;
   font-size: 0.75rem;
