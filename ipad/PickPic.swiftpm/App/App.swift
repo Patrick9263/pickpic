@@ -401,14 +401,39 @@ struct PickPicApp: App {
         }
     }
 
+    /*
+     * EventFolderStore never drops a reference except on explicit removal,
+     * so it accumulates one entry per event the photographer has ever
+     * pointed the app at. Sweeping all of them every 30 seconds -- for as
+     * long as the app is open, which in Split View beside Affinity is most
+     * of the day -- means a full photo-list fetch per stale event,
+     * indefinitely (#235).
+     *
+     * updatedAt only moves when there is a reason to believe the event is
+     * still live on this device: a new upload job, or the operator picking
+     * the To Edit / finals destination folder. Viewers keep hearting and
+     * requesting RAWs for a gallery for a while after the photographer's
+     * own activity stops, so the window here is generous rather than tight.
+     */
+    private static let requestedPhotoSyncWindow: TimeInterval =
+    14 * 24 * 60 * 60
+
     @MainActor
     private func syncRequestedPhotos() async {
         guard configuration.isConfigured else {
             return
         }
 
+        let cutoff =
+        Date().addingTimeInterval(
+            -Self.requestedPhotoSyncWindow
+        )
+
         let references =
         eventFolders.references.values
+            .filter { reference in
+                reference.updatedAt >= cutoff
+            }
             .sorted { first, second in
                 first.updatedAt > second.updatedAt
             }
