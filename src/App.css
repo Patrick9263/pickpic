@@ -1137,6 +1137,12 @@ input:focus {
   color: var(--color-text);
 }
 
+.event-raw-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .event-raw-requests-control {
   align-items: center;
   color: var(--color-text-muted);

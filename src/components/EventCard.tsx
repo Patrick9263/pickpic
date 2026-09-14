@@ -383,42 +383,50 @@ function EventCard(props: EventCardProps) {
           {getEventStatusDescription(eventRecord.status)}
         </p>
 
-        <label className="event-raw-requests-control">
-          <input
-            type="checkbox"
-            checked={eventRecord.rawRequestsEnabled}
-            disabled={isUpdatingEventRawRequests}
-            onChange={(changeEvent) =>
-              void handleSetEventRawRequestsEnabled(
-                eventRecord,
-                changeEvent.target.checked,
-              )
-            }
-          />
-          <span>Allow viewers to request original RAW files</span>
-        </label>
-
         {/*
-          Not gated on rawRequestsEnabled. Turning the toggle off does not
-          reclaim anything already delivered, so hiding this with it would
-          withdraw the control at exactly the moment storage is stuck.
+          One grid child so both RAW controls sit closer to each other than
+          to the unrelated sections above and below -- they're a matched
+          pair (enable requests, then release what's been collected), not
+          two independent settings that happen to be adjacent.
         */}
-        <div className="event-raw-release-control">
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={releasingEventRawsId === eventRecord.id}
-            onClick={() => void handleReleaseCollectedRaws(eventRecord)}
-          >
-            {releasingEventRawsId === eventRecord.id
-              ? "Releasing…"
-              : "Release collected RAW files"}
-          </button>
+        <div className="event-raw-controls">
+          <label className="event-raw-requests-control">
+            <input
+              type="checkbox"
+              checked={eventRecord.rawRequestsEnabled}
+              disabled={isUpdatingEventRawRequests}
+              onChange={(changeEvent) =>
+                void handleSetEventRawRequestsEnabled(
+                  eventRecord,
+                  changeEvent.target.checked,
+                )
+              }
+            />
+            <span>Allow viewers to request original RAW files</span>
+          </label>
 
-          <p className="event-raw-release-hint">
-            {rawReleaseSummary ??
-              "Frees the storage for every RAW in this event that all of its requesters have already downloaded, instead of waiting out the 24-hour grace period."}
-          </p>
+          {/*
+            Not gated on rawRequestsEnabled. Turning the toggle off does not
+            reclaim anything already delivered, so hiding this with it would
+            withdraw the control at exactly the moment storage is stuck.
+          */}
+          <div className="event-raw-release-control">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={releasingEventRawsId === eventRecord.id}
+              onClick={() => void handleReleaseCollectedRaws(eventRecord)}
+            >
+              {releasingEventRawsId === eventRecord.id
+                ? "Releasing…"
+                : "Release collected RAW files"}
+            </button>
+
+            <p className="event-raw-release-hint">
+              {rawReleaseSummary ??
+                "Frees the storage for every RAW in this event that all of its requesters have already downloaded, instead of waiting out the 24-hour grace period."}
+            </p>
+          </div>
         </div>
 
         <div className="event-title-row">
