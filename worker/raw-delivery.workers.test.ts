@@ -337,6 +337,37 @@ describe("the address is the identity, not the browser", () => {
   });
 });
 
+describe("a plain duplicate of an already-fulfilled request", () => {
+  /*
+   * writeRawRequest documents this as a no-op -- "falls through all three
+   * arms and changes nothing" -- but the delivery mail used to be sent
+   * unconditionally whenever fulfilledAt was non-null, regardless of which
+   * arm ran. sendRawReadyEmail mints a fresh token and overwrites
+   * download_token_hash every time it runs, so a viewer re-asking for a file
+   * they already have a working link for (a second tab, a reload, the same
+   * browser twice) silently broke that link with no warning.
+   */
+  it("does not re-mail the download link or retire the one already sent", async () => {
+    await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      originalFilename: "DSC01015.ARW",
+    });
+
+    await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
+    await galleryRequest("GET", pathOf(mail.sent[0]));
+
+    const path = pathOf(mail.sent[mail.sent.length - 1]);
+    const sentBefore = mail.sent.length;
+
+    const duplicate = await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
+
+    expect(duplicate.body.requested).toBe(true);
+    expect(mail.sent.length).toBe(sentBefore);
+    expect((await driveTokenDownload(path)).status).toBe(200);
+  });
+});
+
 describe("correcting a mistyped address", () => {
   /*
    * A corrected address is an unproven one, so it goes through confirmation
