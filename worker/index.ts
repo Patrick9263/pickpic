@@ -1734,21 +1734,20 @@ async function updateEvent(
 }
 
 /*
- * Every R2 object an event owns: originals, finals, and the thumbnail and
- * preview variants of both. Deleting an event and clearing its photos need
- * exactly the same set, so the query lives in one place.
+ * Only sums what accounts.storage_bytes already counted for this event, so
+ * the caller can decrement that running counter accurately. Deliberately
+ * does not enumerate storage keys -- actual R2 deletion is a prefix sweep
+ * (deleteStorageObjectsByPrefix below) precisely because the database's view
+ * of an event's objects can be incomplete.
  */
-async function collectEventStorageKeys(
+async function getEventStorageTotals(
   scope: AccountScope,
   eventId: string,
-): Promise<{ storageKeys: string[]; photoCount: number; totalBytes: number }> {
+): Promise<{ photoCount: number; totalBytes: number }> {
   const photoResult = await scope.database
     .prepare(
       `
       SELECT
-        storage_key AS storageKey,
-        final_storage_key AS finalStorageKey,
-        raw_storage_key AS rawStorageKey,
         byte_size AS byteSize,
         final_byte_size AS finalByteSize,
         raw_byte_size AS rawByteSize
@@ -1757,13 +1756,12 @@ async function collectEventStorageKeys(
     `,
     )
     .bind(eventId)
-    .all<StoredPhotoRow>();
+    .all<Pick<StoredPhotoRow, "byteSize" | "finalByteSize" | "rawByteSize">>();
 
   const variantResult = await scope.database
     .prepare(
       `
         SELECT
-          v.storage_key AS storageKey,
           v.byte_size AS byteSize
         FROM photo_variants v
         INNER JOIN photos p
@@ -1772,21 +1770,7 @@ async function collectEventStorageKeys(
       `,
     )
     .bind(eventId)
-    .all<StoredVariantRow>();
-
-  const storageKeys = Array.from(
-    new Set(
-      [
-        ...photoResult.results.flatMap((photo) => [
-          photo.storageKey,
-          photo.finalStorageKey,
-          photo.rawStorageKey,
-        ]),
-
-        ...variantResult.results.map((variant) => variant.storageKey),
-      ].filter((storageKey): storageKey is string => storageKey !== null),
-    ),
-  );
+    .all<Pick<StoredVariantRow, "byteSize">>();
 
   const totalBytes =
     photoResult.results.reduce(
@@ -1800,10 +1784,42 @@ async function collectEventStorageKeys(
     variantResult.results.reduce((sum, variant) => sum + variant.byteSize, 0);
 
   return {
-    storageKeys,
     photoCount: photoResult.results.length,
     totalBytes,
   };
+}
+
+/*
+ * Deletes every R2 object under a prefix rather than just the keys the
+ * database currently references. A keys-from-the-database delete can never
+ * reach an orphan -- an upload cancelled between the R2 put and the D1
+ * insert, or a superseded variant key from two in-flight uploads racing the
+ * same photo -- and those bytes become permanently invisible once nothing
+ * left in the database points back to them.
+ *
+ * Safe as a prefix sweep specifically because every object this bucket ever
+ * writes is placed under `events/<eventId>/...` and nothing else is ever
+ * stored there (see the storageKey construction throughout this file), and
+ * because both callers below build the prefix from an eventId they have
+ * already confirmed names a real event belonging to this account via their
+ * own SELECT before reaching this call.
+ */
+async function deleteStorageObjectsByPrefix(
+  env: TenantEnv,
+  prefix: string,
+): Promise<void> {
+  let cursor: string | undefined;
+
+  do {
+    const listing = await env.pickpic_photos.list({ prefix, cursor });
+    const keys = listing.objects.map((object) => object.key);
+
+    for (const keyChunk of chunkArray(keys, 1000)) {
+      await env.pickpic_photos.delete(keyChunk);
+    }
+
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
 }
 
 async function deleteEvent(
@@ -1828,15 +1844,10 @@ async function deleteEvent(
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const { storageKeys, totalBytes } = await collectEventStorageKeys(
-    scope,
-    eventId,
-  );
+  const { totalBytes } = await getEventStorageTotals(scope, eventId);
 
   try {
-    for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
-      await env.pickpic_photos.delete(storageKeyChunk);
-    }
+    await deleteStorageObjectsByPrefix(env, `events/${eventId}/`);
   } catch (error) {
     console.error("Unable to delete event images:", error);
 
@@ -1910,7 +1921,7 @@ async function clearEventPhotos(
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const { storageKeys, photoCount, totalBytes } = await collectEventStorageKeys(
+  const { photoCount, totalBytes } = await getEventStorageTotals(
     scope,
     eventId,
   );
@@ -1923,9 +1934,7 @@ async function clearEventPhotos(
   }
 
   try {
-    for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
-      await env.pickpic_photos.delete(storageKeyChunk);
-    }
+    await deleteStorageObjectsByPrefix(env, `events/${eventId}/photos/`);
   } catch (error) {
     console.error("Unable to delete event photo images:", error);
 
