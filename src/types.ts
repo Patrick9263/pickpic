@@ -157,6 +157,7 @@ export interface EventStorageRecord {
 export interface SessionAccount {
   id: string;
   name: string;
+  rawDeliveryTtlMs: number;
 }
 
 export interface SessionUser {

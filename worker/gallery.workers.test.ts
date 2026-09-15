@@ -677,6 +677,12 @@ describe("reclaiming a delivered RAW", () => {
    * Nobody has collected this and nobody ever will, so only the TTL frees it.
    */
   it("reclaims an uncollected RAW once its TTL has elapsed", async () => {
+    /*
+     * Past the account's default raw_delivery_ttl_ms (7 days, migration
+     * 0024) but comfortably inside the max an account could configure (90
+     * days) -- 15 days demonstrates the TTL fires without depending on the
+     * exact default value.
+     */
     const storageKey = await seedForSweep({
       fulfilledAt: agoIso(15 * ONE_DAY_MS),
     });
@@ -690,8 +696,9 @@ describe("reclaiming a delivered RAW", () => {
   });
 
   it("keeps an uncollected RAW while its TTL is still running", async () => {
+    /* Inside the account's default raw_delivery_ttl_ms (7 days, #225). */
     const storageKey = await seedForSweep({
-      fulfilledAt: agoIso(13 * ONE_DAY_MS),
+      fulfilledAt: agoIso(6 * ONE_DAY_MS),
     });
 
     await adminRequest("GET", PHOTOS_PATH);
