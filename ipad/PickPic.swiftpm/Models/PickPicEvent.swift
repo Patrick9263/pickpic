@@ -38,6 +38,20 @@ struct PickPicEvent: Identifiable, Hashable, Codable {
                 return "archivebox"
             }
         }
+
+        /*
+         * .ready still takes new hearts; .completed stops taking new ones
+         * (worker's requireOpenGallery returns 409) but existing hearts on
+         * it still need their RAWs synced and delivered. .draft never had a
+         * published gallery to heart from, and .archived is the
+         * photographer's own signal that delivery is done. Used by the
+         * requested-photo sweep to skip events with nothing left to do
+         * (#235) instead of re-fetching every event the device has ever
+         * pointed at.
+         */
+        var mayHavePendingGalleryWork: Bool {
+            self == .ready || self == .completed
+        }
     }
     
     let id: String

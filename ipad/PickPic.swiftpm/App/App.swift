@@ -505,12 +505,39 @@ struct PickPicApp: App {
             return
         }
 
+        /*
+         * See PickPicEvent.Status.mayHavePendingGalleryWork for which
+         * statuses are worth fetching. A failure here falls back to
+         * sweeping every reference, the same tradeoff preflight makes
+         * (CLAUDE.md trap 5): a status fetch failing must not silently stop
+         * delivering hearted photos.
+         */
+        let pendingWorkEventIDs: Set<String>?
+
+        do {
+            pendingWorkEventIDs = Set(
+                try await client.fetchEvents()
+                    .filter(\.status.mayHavePendingGalleryWork)
+                    .map(\.id)
+            )
+        } catch {
+            pendingWorkEventIDs = nil
+        }
+
+        let referencesToSync =
+        pendingWorkEventIDs.map { pendingWorkEventIDs in
+            references.filter { reference in
+                pendingWorkEventIDs.contains(reference.eventID)
+            }
+        }
+        ?? references
+
         var movedPhotoCount = 0
         var syncedEventCount = 0
         var uploadedRawCount = 0
         var uploadedRawBytes: Int64 = 0
 
-        for reference in references {
+        for reference in referencesToSync {
             guard !Task.isCancelled else {
                 return
             }
