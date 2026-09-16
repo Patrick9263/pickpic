@@ -3,16 +3,20 @@ import SwiftUI
 /*
  * Signing this iPad in to a PickPic account.
  *
- * The flow is deliberately two steps -- request a link, then paste it back --
- * because the worker only ever delivers a session as a Set-Cookie on
- * /api/auth/magic-link/consume, and there is no universal link or custom URL
- * scheme that would let Mail hand the token to this app directly. So the
- * operator copies the link out of the email and pastes it here, and the app
- * redeems it itself rather than letting Safari redeem it into a browser
- * session this app could never read.
+ * Tapping the link in the email now opens this app directly and signs it in
+ * -- see onOpenURL in App.swift, wired to applinks:app.pickpic.photos via the
+ * entitlement and the AASA route the worker serves at
+ * /.well-known/apple-app-site-association. The paste field below stays as a
+ * fallback: a universal link can fail open to Safari instead of this app
+ * (link previews, some third-party mail clients), and the worker only ever
+ * delivers a session as a Set-Cookie on /api/auth/magic-link/consume, so
+ * landing in Safari would otherwise leave the operator stuck with no way to
+ * hand the token to this app. The operator copies the link out of the email
+ * and pastes it here, and the app redeems it itself rather than letting
+ * Safari redeem it into a browser session this app could never read.
  *
  * Sign in with Apple, which the worker already implements for the web app,
- * would remove the paste step but needs a native endpoint that accepts an
+ * would remove the paste step too but needs a native endpoint that accepts an
  * identity token minted for the app's bundle id rather than the web Services
  * id, plus the capability enabled on the App ID. That is worth doing and is
  * not this change.
@@ -180,7 +184,7 @@ struct ConnectionSettingsView: View {
     }
 
     private var redeemLinkSection: some View {
-        Section("2. Paste the link from the email") {
+        Section("2. Tap the link in the email") {
             TextField(
                 "https://app.pickpic.photos/sign-in?token=…",
                 text: $pastedLink,
@@ -219,9 +223,10 @@ struct ConnectionSettingsView: View {
 
             Text(
                 """
-                In Mail, press and hold the button in the email and choose \
-                Copy Link. Links expire 15 minutes after they are sent and \
-                work only once.
+                Tapping the link in the email signs this iPad in directly. \
+                If it opens Safari instead of PickPic, press and hold the \
+                link, choose Copy Link, and paste it above. Links expire \
+                15 minutes after they are sent and work only once.
                 """
             )
             .font(.footnote)

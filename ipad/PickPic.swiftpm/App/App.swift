@@ -219,6 +219,20 @@ struct PickPicApp: App {
                 .environmentObject(feedback)
                 .environmentObject(finishedEdits)
                 .environmentObject(rawRequestStatus)
+                /*
+                 * Delivers the applinks:app.pickpic.photos universal link
+                 * (entitlement + the AASA route the worker serves at
+                 * /.well-known/apple-app-site-association) for both a cold
+                 * launch and a tap while the app is already running --
+                 * SwiftUI's onOpenURL covers both, so there is no separate
+                 * .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) path
+                 * to keep in sync with it.
+                 */
+                .onOpenURL { url in
+                    Task {
+                        await handleIncomingSignInLink(url)
+                    }
+                }
                 .task {
                     BackgroundUploadSession.shared
                         .setRestoredCompletionHandler { completion in
@@ -340,6 +354,42 @@ struct PickPicApp: App {
                             .isIdleTimerDisabled = false
                     }
                 }
+        }
+    }
+
+    /*
+     * The token extraction and redemption here is exactly
+     * AuthClient.signIn(withPastedLink:) -- a universal link and a pasted
+     * link both end up as the same "https://app.pickpic.photos/sign-in?
+     * token=..." string, so there is no separate parsing path to keep in
+     * sync with ConnectionSettingsView's paste flow. Errors (an already-used
+     * token, an expired one, connectivity) surface as a feedback toast
+     * rather than a sheet, because unlike the paste flow there is no
+     * ConnectionSettingsView on screen to show them in -- the tap can land
+     * from anywhere in the app, or before it has launched at all.
+     */
+    @MainActor
+    private func handleIncomingSignInLink(_ url: URL) async {
+        do {
+            let credential = try await configuration
+                .makeAuthClient()
+                .signIn(withPastedLink: url.absoluteString)
+
+            try configuration.save(credential)
+
+            feedback.show(
+                title: "Signed in",
+                detail:
+                    credential.accountName.map { "Signed in to \($0)." }
+                    ?? "This iPad is now signed in to PickPic.",
+                systemImage: "checkmark.circle.fill"
+            )
+        } catch {
+            feedback.show(
+                title: "Sign-in link didn't work",
+                detail: error.localizedDescription,
+                systemImage: "exclamationmark.triangle.fill"
+            )
         }
     }
 
