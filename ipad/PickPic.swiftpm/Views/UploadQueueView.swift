@@ -231,6 +231,13 @@ struct UploadQueueView: View {
                                 )
                         }
                     },
+                    onRetrySkippedPhotos: {
+                        uploadQueue
+                            .retrySkippedConversions(
+                                jobID: job.id,
+                                using: configuration
+                            )
+                    },
                     onIncludeDuplicatesChanged: {
                         includesDuplicates in
 
@@ -410,6 +417,10 @@ struct UploadQueueView: View {
 }
 
 private struct UploadJobRow: View {
+    // Enough to recognise a pattern -- one bad card slot, or a run of
+    // frames -- without the row turning into a scrolling error log.
+    private static let skippedPhotoDisplayLimit = 3
+
     let job: UploadJob
     
     let onContinue: () -> Void
@@ -418,6 +429,7 @@ private struct UploadJobRow: View {
     let onConvertAll: () -> Void
     let onPause: () -> Void
     let onRetryFailedPhoto: () -> Void
+    let onRetrySkippedPhotos: () -> Void
     let onIncludeDuplicatesChanged: (Bool) -> Void
     let isRelinkingFolder: Bool
     let canRelinkFolder: Bool
@@ -922,7 +934,9 @@ private struct UploadJobRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.red)
             }
-            
+
+            skippedPhotosSummary
+
         case .converting:
             VStack(
                 alignment: .leading,
@@ -962,6 +976,8 @@ private struct UploadJobRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
+
+                skippedPhotosSummary
                 
                 if let filename =
                     job.conversionCurrentFilename {
@@ -1144,7 +1160,9 @@ private struct UploadJobRow: View {
                     .font(.subheadline)
                     .foregroundStyle(.red)
             }
-            
+
+            skippedPhotosSummary
+
             if job.conversionPreview != nil {
                 NavigationLink {
                     ConversionPreviewView(
@@ -1234,6 +1252,8 @@ private struct UploadJobRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+
+                skippedPhotosSummary
 
                 if job.uploadProgress
                     .activeBackgroundTransfer != nil
@@ -1373,8 +1393,11 @@ private struct UploadJobRow: View {
 
             LabeledContent(
                 "Failed",
-                value: "0"
+                value:
+                    "\(job.unconvertiblePhotoCount)"
             )
+
+            skippedPhotosSummary
 
             if job.preflightSkippedPhotoCount > 0 {
                 Text(
@@ -1421,6 +1444,106 @@ private struct UploadJobRow: View {
         }
     }
     
+    /*
+     * The same two resting stages a reconversion runs from: a job that
+     * has something prepared, and is not mid-operation.
+     */
+    private var canRetrySkippedPhotos: Bool {
+        job.stage.isReconvertible
+        && !isContinuedProcessingScheduledOrActive
+    }
+
+    /*
+     * Names every skipped file, because the recovery is manual: the
+     * photographer has to go and find that frame on the card. Red rather
+     * than orange follows the convention used for the upload failure
+     * above -- orange is for work that resumes on its own, and a photo
+     * conversion gave up on never will.
+     */
+    @ViewBuilder
+    private var skippedPhotosSummary: some View {
+        if !job.conversionFailures.isEmpty {
+            VStack(
+                alignment: .leading,
+                spacing: 8
+            ) {
+                Label(
+                    job.unconvertiblePhotoCount == 1
+                    ? "1 photo could not be converted"
+                    : "\(job.unconvertiblePhotoCount) photos could not be converted",
+                    systemImage:
+                        "exclamationmark.triangle.fill"
+                )
+                .font(.headline)
+                .foregroundStyle(.red)
+
+                Text(
+                    "The rest of the batch carried on. These photos were skipped and not uploaded."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                ForEach(
+                    Array(
+                        job.conversionFailures.prefix(
+                            Self.skippedPhotoDisplayLimit
+                        )
+                    ),
+                    id: \.sourcePhotoID
+                ) { failure in
+                    VStack(
+                        alignment: .leading,
+                        spacing: 2
+                    ) {
+                        Text(failure.sourceFilename)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+
+                        Text(failure.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if
+                    job.unconvertiblePhotoCount
+                        > Self.skippedPhotoDisplayLimit
+                {
+                    Text(
+                        "and \(job.unconvertiblePhotoCount - Self.skippedPhotoDisplayLimit) more"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                if canRetrySkippedPhotos {
+                    Button {
+                        onRetrySkippedPhotos()
+                    } label: {
+                        Label(
+                            "Retry Skipped Photos",
+                            systemImage: "arrow.clockwise"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                } else if job.stage == .completed {
+                    /*
+                     * The prepared JPEGs are deleted once a job
+                     * completes, so there is nothing left here to retry
+                     * against. Re-importing is the real recovery, and
+                     * preflight makes it cheap.
+                     */
+                    Text(
+                        "Fix or re-copy these files, then add the folder again. PickPic skips everything the event already has."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
     @ViewBuilder
     private func conversionTiming(
         at date: Date

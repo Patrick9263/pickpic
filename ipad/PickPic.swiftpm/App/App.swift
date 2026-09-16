@@ -658,16 +658,33 @@ struct PickPicApp: App {
         let existing = job.alreadyExistedPhotoCount
         let uploaded = job.newlyUploadedPhotoCount
 
+        /*
+         * Photos conversion had to skip are named in the queue row, not
+         * here, but the count belongs in the toast: it is the one moment
+         * the photographer is told the batch finished, and a skipped
+         * frame is the one thing about it that still needs them.
+         */
+        let skipped = job.unconvertiblePhotoCount
+
+        let skippedDescription =
+        skipped == 0
+        ? ""
+        : (
+            skipped == 1
+            ? " 1 photo could not be converted."
+            : " \(skipped) photos could not be converted."
+        )
+
         if uploaded == 0, existing > 0 {
             let photoDescription =
             existing == 1
             ? "photo was"
             : "photos were"
 
-            return "\(job.eventTitle): all \(existing) \(photoDescription) already uploaded, so nothing was converted."
+            return "\(job.eventTitle): all \(existing) \(photoDescription) already uploaded, so nothing was converted.\(skippedDescription)"
         }
 
-        return "\(job.eventTitle): \(uploaded) uploaded, \(existing) already existed, and \(job.optimizedPhotoCount) optimized."
+        return "\(job.eventTitle): \(uploaded) uploaded, \(existing) already existed, and \(job.optimizedPhotoCount) optimized.\(skippedDescription)"
     }
 
     private func updateIdleTimer(

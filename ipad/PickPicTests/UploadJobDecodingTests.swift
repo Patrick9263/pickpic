@@ -33,6 +33,7 @@ struct UploadJobDecodingTests {
         #expect(job.id.uuidString == "11111111-1111-1111-1111-111111111111")
         #expect(job.stage == .queued)
         #expect(job.preparedPhotos == [])
+        #expect(job.conversionFailures == [])
         #expect(job.preflight == nil)
         #expect(job.storageHeadroomWarningMessage == nil)
         #expect(job.storageHeadroomWarningAcknowledged == false)
@@ -75,6 +76,14 @@ struct UploadJobDecodingTests {
             createdAt: Date(timeIntervalSinceReferenceDate: 1_000),
             updatedAt: Date(timeIntervalSinceReferenceDate: 2_000),
             preparedAt: Date(timeIntervalSinceReferenceDate: 1_500),
+            conversionFailures: [
+                ConversionFailure(
+                    sourcePhotoID: "source-v1|raw|12345|dsc01016.arw",
+                    sourceFilename: "DSC01016.ARW",
+                    message: "PickPic could not decode DSC01016.ARW.",
+                    occurredAt: Date(timeIntervalSinceReferenceDate: 1_200)
+                )
+            ],
             storageHeadroomWarningMessage: "Watch storage",
             storageHeadroomWarningAcknowledged: true,
             conversionProcessedCount: 3,

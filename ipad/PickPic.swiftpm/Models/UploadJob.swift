@@ -1,5 +1,24 @@
 import Foundation
 
+/*
+ * One source photo that conversion could not turn into a proof JPEG --
+ * a truncated RAW off a flaky card, a file moved out from under the job,
+ * a frame this iPad cannot decode. Recorded per photo so the batch can
+ * skip it and carry on: a single bad frame used to abort every remaining
+ * photo, and the only way out was deleting the job and re-importing the
+ * folder without that file.
+ */
+struct ConversionFailure:
+    Codable,
+    Hashable,
+    Sendable
+{
+    let sourcePhotoID: String
+    let sourceFilename: String
+    let message: String
+    let occurredAt: Date
+}
+
 struct UploadJob:
     Identifiable,
     Codable,
@@ -28,6 +47,13 @@ struct UploadJob:
     var conversionErrorMessage: String?
 
     var preparedPhotos: [PreparedPhoto]
+
+    /*
+     * Photos this job gave up on, kept so a resumed conversion does not
+     * pay to decode a file that already failed. A reconversion is an
+     * explicit instruction to redo the work, so it clears them.
+     */
+    var conversionFailures: [ConversionFailure]
 
     var preflight: PreflightState?
 
@@ -90,10 +116,30 @@ struct UploadJob:
         preflight?.skippedCount ?? 0
     }
 
+    /*
+     * Photos conversion tried and could not produce a proof JPEG for.
+     * Distinct from preflightSkippedPhotoCount, which counts photos that
+     * were deliberately never converted because the event already has
+     * them.
+     */
+    var unconvertiblePhotoCount: Int {
+        conversionFailures.count
+    }
+
+    /*
+     * The size of a complete prepared batch, which several gates compare
+     * preparedPhotos.count against -- the upload guard, the launch
+     * recovery pass, and the conversion progress denominators. Photos
+     * that failed conversion are subtracted for the same reason
+     * preflight skips are: they will never appear in preparedPhotos, so
+     * leaving them in would hold the batch permanently short of
+     * complete.
+     */
     var photosToConvertCount: Int {
         max(
             photoCount
-                - preflightSkippedPhotoCount,
+                - preflightSkippedPhotoCount
+                - unconvertiblePhotoCount,
             0
         )
     }
@@ -234,6 +280,8 @@ struct UploadJob:
         String? = nil,
         preparedPhotos:
         [PreparedPhoto] = [],
+        conversionFailures:
+        [ConversionFailure] = [],
         preflight:
         PreflightState? = nil,
         storageHeadroomWarningMessage:
@@ -270,6 +318,8 @@ struct UploadJob:
         self.conversionErrorMessage =
         conversionErrorMessage
         self.preparedPhotos = preparedPhotos
+        self.conversionFailures =
+        conversionFailures
         self.preflight = preflight
         self.storageHeadroomWarningMessage =
         storageHeadroomWarningMessage
@@ -306,6 +356,7 @@ struct UploadJob:
         case conversionPreview
         case conversionErrorMessage
         case preparedPhotos
+        case conversionFailures
         case preflight
         case storageHeadroomWarningMessage
         case storageHeadroomWarningAcknowledged
@@ -400,6 +451,13 @@ struct UploadJob:
         try container.decodeIfPresent(
             [PreparedPhoto].self,
             forKey: .preparedPhotos
+        )
+        ?? []
+
+        conversionFailures =
+        try container.decodeIfPresent(
+            [ConversionFailure].self,
+            forKey: .conversionFailures
         )
         ?? []
 

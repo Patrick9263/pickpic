@@ -66,6 +66,28 @@ enum ImageConversionError: LocalizedError {
             """
         }
     }
+
+    /*
+     * Whether this failure is confined to the one photo being converted.
+     * A batch skips those and carries on; anything else -- no source
+     * folder, no color space -- would fail every remaining photo just as
+     * surely, so it still stops the batch.
+     */
+    var isSinglePhotoFailure: Bool {
+        switch self {
+        case .sourcePhotoMissing,
+                .unsupportedRAW,
+                .unableToDecode,
+                .outputFileMissing,
+                .outputTooLarge:
+            return true
+
+        case .noSourcePhotos,
+                .sourceFolderUnavailable,
+                .unableToCreateColorSpace:
+            return false
+        }
+    }
 }
 
 enum ImageConversionService {
@@ -213,6 +235,92 @@ enum ImageConversionService {
         }
     }
     
+    /*
+     * Decides whether a conversion failure should skip one photo or stop
+     * the batch. Most of what can go wrong here belongs to the file
+     * being decoded -- CoreImage and ImageIO report a truncated or
+     * unreadable RAW as an arbitrary error rather than one of ours -- so
+     * an unrecognised error skips the photo, which is the behaviour that
+     * keeps the other 1,199 frames moving.
+     *
+     * The two exceptions both fail every remaining photo as well, and
+     * skipping through a whole shoot to discover that would waste far
+     * more of a photographer's evening than stopping does: cancellation,
+     * and a volume that cannot be written to.
+     */
+    static func isSinglePhotoFailure(
+        _ error: Error
+    ) -> Bool {
+        if error is CancellationError {
+            return false
+        }
+
+        if
+            let conversionError =
+                error as? ImageConversionError
+        {
+            return conversionError
+                .isSinglePhotoFailure
+        }
+
+        return !isStorageExhaustionFailure(
+            error
+        )
+    }
+
+    /*
+     * CoreImage wraps the underlying write failure, so the out-of-space
+     * code can sit several NSUnderlyingErrorKey levels down rather than
+     * on the error that was thrown.
+     */
+    private static func isStorageExhaustionFailure(
+        _ error: Error,
+        depth: Int = 0
+    ) -> Bool {
+        guard depth < 4 else {
+            return false
+        }
+
+        let nsError = error as NSError
+
+        switch nsError.domain {
+        case NSCocoaErrorDomain:
+            if
+                nsError.code
+                    == NSFileWriteOutOfSpaceError
+                || nsError.code
+                    == NSFileWriteVolumeReadOnlyError
+            {
+                return true
+            }
+
+        case NSPOSIXErrorDomain:
+            if
+                nsError.code == Int(ENOSPC)
+                || nsError.code == Int(EROFS)
+                || nsError.code == Int(EDQUOT)
+            {
+                return true
+            }
+
+        default:
+            break
+        }
+
+        guard
+            let underlying = nsError.userInfo[
+                NSUnderlyingErrorKey
+            ] as? Error
+        else {
+            return false
+        }
+
+        return isStorageExhaustionFailure(
+            underlying,
+            depth: depth + 1
+        )
+    }
+
     static func previewURL(
         jobID: UUID,
         outputFilename: String
