@@ -380,11 +380,13 @@ button:disabled {
   padding: 0;
 }
 
+/*
+ * .created-date is positioned absolutely (see below) and out of flow, so
+ * .event-status-control would otherwise stretch under it -- this reserves
+ * the corner it sits in.
+ */
 .event-card-header {
-  align-items: start;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+  padding-right: 124px;
 }
 
 .event-card-summary {
@@ -470,9 +472,11 @@ button:disabled {
 .created-date {
   color: #8a867e;
   font-size: 0.75rem;
-  margin-left: auto;
+  max-width: 110px;
+  position: absolute;
+  right: 22px;
   text-align: right;
-  white-space: nowrap;
+  top: 22px;
 }
 
 .event-card h3 {
