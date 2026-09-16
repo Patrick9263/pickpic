@@ -7,6 +7,7 @@ import {
   insertPhoto,
   insertRawRequest,
   readRawPhotoState,
+  setRawDeliveryTtlMs,
 } from "./test-fixtures.ts";
 import { expectError, galleryRequest } from "./test-request.ts";
 
@@ -297,6 +298,48 @@ describe("PUT/DELETE .../raw-request", () => {
     const state = await readRawPhotoState(PHOTO_ID, storageKey);
     expect(state.rawStorageKey).toBe(storageKey);
     expect(state.objectExists).toBe(true);
+  });
+
+  /*
+   * #225: the TTL half of isRawReclaimable now reads the account's own
+   * raw_delivery_ttl_ms rather than a fixed constant, and it is checked
+   * unconditionally ahead of the awaiting-requester veto -- so an account that
+   * has lowered its retention reclaims a RAW even with a second live,
+   * uncollected requester still attached, which the default-TTL sibling test
+   * above ("keeps the RAW when one of two requesters withdraws") shows does
+   * *not* happen at the 14-day default.
+   */
+  it("reclaims despite a second live requester once the account's shorter TTL has passed", async () => {
+    await seedGallery("ready");
+    const storageKey = await deliverRawPhoto({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+    });
+
+    const dayMs = 24 * 60 * 60 * 1000;
+    const previousTtlMs = await setRawDeliveryTtlMs(3 * dayMs);
+    const oldFulfilledAt = new Date(Date.now() - 4 * dayMs).toISOString();
+
+    for (const visitorToken of [VISITOR_TOKEN, "visitor-token-for-the-other"]) {
+      await insertRawRequest({
+        photoId: PHOTO_ID,
+        eventId: EVENT_ID,
+        visitorToken,
+        fulfilledAt: oldFulfilledAt,
+      });
+    }
+
+    try {
+      await galleryRequest("DELETE", RAW_REQUEST_PATH, {
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      });
+
+      const state = await readRawPhotoState(PHOTO_ID, storageKey);
+      expect(state.rawStorageKey).toBeNull();
+      expect(state.objectExists).toBe(false);
+    } finally {
+      await setRawDeliveryTtlMs(previousTtlMs);
+    }
   });
 
   /*

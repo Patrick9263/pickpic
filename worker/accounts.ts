@@ -35,6 +35,13 @@ export interface AccountRecord {
   storageBytes: number;
 
   /*
+   * How long an uncollected, delivered RAW is kept before it becomes eligible
+   * for reclaim (#225, migration 0024). Bounds live in worker/index.ts as
+   * RAW_DELIVERY_TTL_MIN_MS/MAX_MS.
+   */
+  rawDeliveryTtlMs: number;
+
+  /*
    * NULL means this account's rows live in the primary D1 database. See
    * resolveAccountDatabase.
    */
@@ -104,6 +111,7 @@ export async function resolveAccountForPrincipal(
           plan,
           storage_cap_bytes AS storageCapBytes,
           storage_bytes AS storageBytes,
+          raw_delivery_ttl_ms AS rawDeliveryTtlMs,
           database_id AS databaseId
         FROM accounts
         WHERE id = ?

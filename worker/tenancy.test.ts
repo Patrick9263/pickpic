@@ -9,6 +9,7 @@ const ACCOUNT: AccountRecord = {
   plan: "solo",
   storageCapBytes: 1024,
   storageBytes: 0,
+  rawDeliveryTtlMs: 7 * 24 * 60 * 60 * 1000,
   databaseId: null,
 };
 

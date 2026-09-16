@@ -366,20 +366,25 @@ button:disabled {
   border-radius: 16px;
   display: grid;
   gap: 0;
-  grid-template-rows:
-    auto
-    minmax(0, 1fr)
-    auto;
-  max-height: min(760px, calc(100dvh - 48px));
+  /*
+   * No max-height/overflow:hidden on the card itself -- that repeatedly
+   * squeezed or clipped the header/footer, because .event-card-summary's
+   * content (RAW toggle, release button, stat boxes) varies enough in
+   * height that no fixed budget shared across all three sections reliably
+   * fits. The header and footer are left to their natural content height
+   * instead, and only the photo list below gets its own independent cap
+   * (see .event-card-scroll-region) -- the same approach the <=720px
+   * layout already used.
+   */
   overflow: hidden;
   padding: 0;
 }
 
 .event-card-header {
   align-items: start;
-  display: grid;
-  gap: 12px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .event-card-summary {
@@ -393,7 +398,7 @@ button:disabled {
 }
 
 .event-card-scroll-region {
-  min-height: 0;
+  max-height: min(50svh, 460px);
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 18px 17px 22px 22px;
@@ -465,7 +470,7 @@ button:disabled {
 .created-date {
   color: #8a867e;
   font-size: 0.75rem;
-  justify-self: end;
+  margin-left: auto;
   text-align: right;
   white-space: nowrap;
 }
@@ -488,6 +493,13 @@ button:disabled {
   background: #f7f5f0;
   border-radius: 10px;
   padding: 12px;
+}
+
+/* Always exactly 3 stats (Photos, Edit requests, Pending RAW requests) in a
+   2-column grid, so the last one is otherwise left alone on a half-width
+   row -- span it full width instead of leaving dead space beside it. */
+.event-stats div:last-child {
+  grid-column: 1 / -1;
 }
 
 .event-stats dt {
@@ -1342,12 +1354,6 @@ input:focus {
 }
 
 @media (max-width: 720px) {
-  .event-card {
-    grid-template-rows: auto;
-    max-height: none;
-    overflow: hidden;
-  }
-
   .event-photo-toggle {
     align-items: center;
     background: var(--color-surface);
@@ -1377,7 +1383,7 @@ input:focus {
   }
 
   .event-card-scroll-region {
-    max-height: min(62dvh, 560px);
+    max-height: min(62svh, 560px);
     overflow-y: auto;
     padding-right: 17px;
   }

@@ -173,20 +173,20 @@ function GalleryGrid({
                   />
                 )}
               </div>
+              {isSelecting && (
+                <span
+                  className={[
+                    "gallery-selection-indicator",
+                    isSelected ? "gallery-selection-indicator-selected" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  aria-hidden="true"
+                >
+                  {isSelected ? "✓" : ""}
+                </span>
+              )}
             </button>
-            {isSelecting && (
-              <span
-                className={[
-                  "gallery-selection-indicator",
-                  isSelected ? "gallery-selection-indicator-selected" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                aria-hidden="true"
-              >
-                {isSelected ? "✓" : ""}
-              </span>
-            )}
             {photo.finalPhoto && (
               <span className="gallery-final-badge">Final</span>
             )}
