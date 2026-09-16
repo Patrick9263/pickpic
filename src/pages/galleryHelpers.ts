@@ -304,6 +304,25 @@ export function selectPhotosById(
   return photos.filter((photo) => selectedIds.has(photo.id));
 }
 
+/*
+ * A single dropped fetch used to discard the whole archive rather than
+ * zipping what succeeded (#288) -- on a large selection over cellular, the
+ * odds of every fetch succeeding aren't good, and a name here is more useful
+ * than making the viewer guess which photo was skipped.
+ */
+export function formatZipDownloadNotice(
+  baseNotice: string,
+  failedFilenames: string[],
+): string {
+  if (failedFilenames.length === 0) {
+    return baseNotice;
+  }
+
+  const noun = failedFilenames.length === 1 ? "photo" : "photos";
+
+  return `${baseNotice} ${failedFilenames.length} ${noun} could not be included: ${failedFilenames.join(", ")}.`;
+}
+
 export function getDefaultPreviewUrl(photo: GalleryPhotoRecord): string {
   if (photo.finalPhoto) {
     return (

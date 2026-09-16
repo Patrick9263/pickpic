@@ -23,6 +23,7 @@ import {
   createArchiveFilename,
   createUniqueDownloadNames,
   formatApproximateByteSize,
+  formatZipDownloadNotice,
   getDefaultPreviewUrl,
   getOrCreateVisitorToken,
   getRawRequestState,
@@ -1056,6 +1057,8 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setActionNotice(null);
     setDownloadProgress({ completed: 0, total: selectedPhotos.length });
     try {
+      const failedFilenames: string[] = [];
+
       async function* createZipInputs() {
         for (const [index, photo] of selectedPhotos.entries()) {
           const downloadUrl = photo.finalPhoto?.imageUrl ?? photo.imageUrl;
@@ -1063,18 +1066,29 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             photo.finalPhoto?.originalFilename ?? photo.originalFilename;
           const downloadDate = photo.finalPhoto?.uploadedAt ?? photo.createdAt;
 
-          const response = await fetch(downloadUrl, {
-            cache: "no-store",
-          });
-
-          if (!response.ok || !response.body) {
-            throw new Error(`Unable to download ${downloadFilename}.`);
+          /*
+           * A single dropped fetch used to reject the whole archive here,
+           * discarding everything that had already downloaded (#288). On a
+           * large selection over cellular the odds of every fetch succeeding
+           * aren't good, so a failure is recorded and skipped instead --
+           * the viewer still gets a real archive of what did arrive.
+           */
+          let response: Response | null = null;
+          try {
+            response = await fetch(downloadUrl, { cache: "no-store" });
+          } catch {
+            response = null;
           }
-          yield {
-            name: entryNames[index],
-            lastModified: new Date(downloadDate),
-            input: response.body,
-          };
+
+          if (!response || !response.ok || !response.body) {
+            failedFilenames.push(downloadFilename);
+          } else {
+            yield {
+              name: entryNames[index],
+              lastModified: new Date(downloadDate),
+              input: response.body,
+            };
+          }
 
           setDownloadProgress({
             completed: index + 1,
@@ -1089,6 +1103,15 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
        * which can terminate a streamed response and leave an invalid ZIP.
        */
       const zipBlob = await downloadZip(createZipInputs()).blob();
+
+      if (failedFilenames.length === selectedPhotos.length) {
+        throw new Error(
+          selectedPhotos.length === 1
+            ? `Unable to download ${failedFilenames[0]}.`
+            : "Unable to download any of the selected photos.",
+        );
+      }
+
       const objectUrl = URL.createObjectURL(zipBlob);
       const link = document.createElement("a");
       link.href = objectUrl;
@@ -1099,7 +1122,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       link.remove();
 
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
-      setActionNotice(DOWNLOAD_STARTED_NOTICE);
+      setActionNotice(
+        formatZipDownloadNotice(DOWNLOAD_STARTED_NOTICE, failedFilenames),
+      );
     } catch (caughtError) {
       setActionError(
         caughtError instanceof Error
