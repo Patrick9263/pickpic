@@ -548,6 +548,28 @@ describe("DELETE /api/admin/events/:id/photos", () => {
     expectError(result, 404, "Event not found.");
   });
 
+  /*
+   * Same bug as #230's deleteEvent case: a keys-from-the-database delete
+   * never reaches an object with no row. Coverage lives here too because
+   * clearEventPhotos sweeps its own events/<id>/photos/ prefix independently
+   * of deleteEvent's events/<id>/ sweep.
+   */
+  it("deletes R2 objects under the event's photos prefix that have no database row", async () => {
+    await insertPhoto({ id: "photo-tracked", eventId: EVENT_ID });
+
+    const orphanKey = `events/${EVENT_ID}/photos/photo-tracked/orphan.jpg`;
+
+    await env.pickpic_photos.put(orphanKey, new Uint8Array([1, 2, 3]));
+
+    const result = await adminRequest(
+      "DELETE",
+      `/api/admin/events/${EVENT_ID}/photos`,
+    );
+
+    expect(result.status).toBe(200);
+    expect(await env.pickpic_photos.head(orphanKey)).toBeNull();
+  });
+
   it("405s on a non-GET/POST/DELETE method", async () => {
     const result = await adminRequest(
       "PATCH",

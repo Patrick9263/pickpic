@@ -51,6 +51,7 @@ interface UpdateEventBody {
 
 interface UpdateAccountBody {
   name?: unknown;
+  rawDeliveryTtlMs?: unknown;
 }
 
 type GalleryStatus = "draft" | "ready" | "completed" | "archived";
@@ -257,6 +258,7 @@ interface PublicGalleryEventRow extends Omit<
   "rawRequestsEnabled"
 > {
   id: string;
+  rawDeliveryTtlMs: number;
   rawRequestsEnabled: number;
 }
 
@@ -328,6 +330,7 @@ interface GalleryPhotoRow {
   rawOriginalFilename: string | null;
   rawContentType: string | null;
   rawByteSize: number | null;
+  rawDeliveryTtlMs: number;
 }
 
 interface VisitorRow {
@@ -421,6 +424,7 @@ interface RawRequestOwnerRow {
 interface RawReclaimRow {
   photoId: string;
   accountId: string;
+  rawDeliveryTtlMs: number;
   rawStorageKey: string;
   rawByteSize: number | null;
   liveRequestCount: number;
@@ -624,7 +628,16 @@ const RAW_TOO_LARGE_MESSAGE = `The RAW file must be ${MAX_RAW_BYTES / (1024 * 10
  * tail of someone else's.
  */
 const RAW_DOWNLOAD_GRACE_MS = 24 * 60 * 60 * 1000;
-const RAW_DELIVERY_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/*
+ * Bounds for the per-account raw_delivery_ttl_ms column (#225, migration
+ * 0024). The minimum must stay strictly above RAW_DOWNLOAD_GRACE_MS, or a TTL
+ * shorter than the grace period would always win and the grace period would
+ * stop existing. Keep in sync with the CHECK constraint in that migration and
+ * the mirrored bounds in AccountSettingsPage.tsx.
+ */
+const RAW_DELIVERY_TTL_MIN_MS = 2 * 24 * 60 * 60 * 1000;
+const RAW_DELIVERY_TTL_MAX_MS = 90 * 24 * 60 * 60 * 1000;
 
 /*
  * How long a viewer has to click the confirmation link (#224). Far longer than
@@ -1594,29 +1607,70 @@ async function updateAccount(
     );
   }
 
-  if (typeof body.name !== "string") {
+  const hasName = body.name !== undefined;
+  const hasTtl = body.rawDeliveryTtlMs !== undefined;
+
+  if (!hasName && !hasTtl) {
     return jsonResponse(
       {
-        error: "An account name is required.",
+        error: "Nothing to update.",
       },
       400,
     );
   }
 
-  const name = body.name.trim();
+  let name = scope.account.name;
 
-  if (name.length === 0 || name.length > 120) {
-    return jsonResponse(
-      {
-        error: "The account name must be between 1 and 120 characters.",
-      },
-      400,
-    );
+  if (hasName) {
+    if (typeof body.name !== "string") {
+      return jsonResponse(
+        {
+          error: "An account name is required.",
+        },
+        400,
+      );
+    }
+
+    name = body.name.trim();
+
+    if (name.length === 0 || name.length > 120) {
+      return jsonResponse(
+        {
+          error: "The account name must be between 1 and 120 characters.",
+        },
+        400,
+      );
+    }
   }
 
-  if (name === scope.account.name) {
+  let rawDeliveryTtlMs = scope.account.rawDeliveryTtlMs;
+
+  if (hasTtl) {
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    if (
+      typeof body.rawDeliveryTtlMs !== "number" ||
+      !Number.isInteger(body.rawDeliveryTtlMs) ||
+      body.rawDeliveryTtlMs < RAW_DELIVERY_TTL_MIN_MS ||
+      body.rawDeliveryTtlMs > RAW_DELIVERY_TTL_MAX_MS
+    ) {
+      return jsonResponse(
+        {
+          error: `The RAW retention period must be between ${RAW_DELIVERY_TTL_MIN_MS / dayMs} and ${RAW_DELIVERY_TTL_MAX_MS / dayMs} days.`,
+        },
+        400,
+      );
+    }
+
+    rawDeliveryTtlMs = body.rawDeliveryTtlMs;
+  }
+
+  if (
+    name === scope.account.name &&
+    rawDeliveryTtlMs === scope.account.rawDeliveryTtlMs
+  ) {
     return jsonResponse({
-      account: { id: scope.account.id, name },
+      account: { id: scope.account.id, name, rawDeliveryTtlMs },
     });
   }
 
@@ -1628,16 +1682,18 @@ async function updateAccount(
       UPDATE accounts
       SET
         name = ?,
+        raw_delivery_ttl_ms = ?,
         updated_at = ?
       WHERE id = :accountId
     `,
       name,
+      rawDeliveryTtlMs,
       updatedAt,
     )
     .run();
 
   return jsonResponse({
-    account: { id: scope.account.id, name },
+    account: { id: scope.account.id, name, rawDeliveryTtlMs },
   });
 }
 
@@ -1734,21 +1790,20 @@ async function updateEvent(
 }
 
 /*
- * Every R2 object an event owns: originals, finals, and the thumbnail and
- * preview variants of both. Deleting an event and clearing its photos need
- * exactly the same set, so the query lives in one place.
+ * Only sums what accounts.storage_bytes already counted for this event, so
+ * the caller can decrement that running counter accurately. Deliberately
+ * does not enumerate storage keys -- actual R2 deletion is a prefix sweep
+ * (deleteStorageObjectsByPrefix below) precisely because the database's view
+ * of an event's objects can be incomplete.
  */
-async function collectEventStorageKeys(
+async function getEventStorageTotals(
   scope: AccountScope,
   eventId: string,
-): Promise<{ storageKeys: string[]; photoCount: number; totalBytes: number }> {
+): Promise<{ photoCount: number; totalBytes: number }> {
   const photoResult = await scope.database
     .prepare(
       `
       SELECT
-        storage_key AS storageKey,
-        final_storage_key AS finalStorageKey,
-        raw_storage_key AS rawStorageKey,
         byte_size AS byteSize,
         final_byte_size AS finalByteSize,
         raw_byte_size AS rawByteSize
@@ -1757,13 +1812,12 @@ async function collectEventStorageKeys(
     `,
     )
     .bind(eventId)
-    .all<StoredPhotoRow>();
+    .all<Pick<StoredPhotoRow, "byteSize" | "finalByteSize" | "rawByteSize">>();
 
   const variantResult = await scope.database
     .prepare(
       `
         SELECT
-          v.storage_key AS storageKey,
           v.byte_size AS byteSize
         FROM photo_variants v
         INNER JOIN photos p
@@ -1772,21 +1826,7 @@ async function collectEventStorageKeys(
       `,
     )
     .bind(eventId)
-    .all<StoredVariantRow>();
-
-  const storageKeys = Array.from(
-    new Set(
-      [
-        ...photoResult.results.flatMap((photo) => [
-          photo.storageKey,
-          photo.finalStorageKey,
-          photo.rawStorageKey,
-        ]),
-
-        ...variantResult.results.map((variant) => variant.storageKey),
-      ].filter((storageKey): storageKey is string => storageKey !== null),
-    ),
-  );
+    .all<Pick<StoredVariantRow, "byteSize">>();
 
   const totalBytes =
     photoResult.results.reduce(
@@ -1800,10 +1840,42 @@ async function collectEventStorageKeys(
     variantResult.results.reduce((sum, variant) => sum + variant.byteSize, 0);
 
   return {
-    storageKeys,
     photoCount: photoResult.results.length,
     totalBytes,
   };
+}
+
+/*
+ * Deletes every R2 object under a prefix rather than just the keys the
+ * database currently references. A keys-from-the-database delete can never
+ * reach an orphan -- an upload cancelled between the R2 put and the D1
+ * insert, or a superseded variant key from two in-flight uploads racing the
+ * same photo -- and those bytes become permanently invisible once nothing
+ * left in the database points back to them.
+ *
+ * Safe as a prefix sweep specifically because every object this bucket ever
+ * writes is placed under `events/<eventId>/...` and nothing else is ever
+ * stored there (see the storageKey construction throughout this file), and
+ * because both callers below build the prefix from an eventId they have
+ * already confirmed names a real event belonging to this account via their
+ * own SELECT before reaching this call.
+ */
+async function deleteStorageObjectsByPrefix(
+  env: TenantEnv,
+  prefix: string,
+): Promise<void> {
+  let cursor: string | undefined;
+
+  do {
+    const listing = await env.pickpic_photos.list({ prefix, cursor });
+    const keys = listing.objects.map((object) => object.key);
+
+    for (const keyChunk of chunkArray(keys, 1000)) {
+      await env.pickpic_photos.delete(keyChunk);
+    }
+
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
 }
 
 async function deleteEvent(
@@ -1828,15 +1900,10 @@ async function deleteEvent(
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const { storageKeys, totalBytes } = await collectEventStorageKeys(
-    scope,
-    eventId,
-  );
+  const { totalBytes } = await getEventStorageTotals(scope, eventId);
 
   try {
-    for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
-      await env.pickpic_photos.delete(storageKeyChunk);
-    }
+    await deleteStorageObjectsByPrefix(env, `events/${eventId}/`);
   } catch (error) {
     console.error("Unable to delete event images:", error);
 
@@ -1910,7 +1977,7 @@ async function clearEventPhotos(
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
-  const { storageKeys, photoCount, totalBytes } = await collectEventStorageKeys(
+  const { photoCount, totalBytes } = await getEventStorageTotals(
     scope,
     eventId,
   );
@@ -1923,9 +1990,7 @@ async function clearEventPhotos(
   }
 
   try {
-    for (const storageKeyChunk of chunkArray(storageKeys, 1000)) {
-      await env.pickpic_photos.delete(storageKeyChunk);
-    }
+    await deleteStorageObjectsByPrefix(env, `events/${eventId}/photos/`);
   } catch (error) {
     console.error("Unable to delete event photo images:", error);
 
@@ -2713,13 +2778,16 @@ async function getPublicGallery(
   const event = await env.DB.prepare(
     `
       SELECT
-        id,
-        title,
-        status,
-        created_at AS createdAt,
-        raw_requests_enabled AS rawRequestsEnabled
-      FROM events
-      WHERE share_token = ?
+        e.id,
+        e.title,
+        e.status,
+        e.created_at AS createdAt,
+        e.raw_requests_enabled AS rawRequestsEnabled,
+        a.raw_delivery_ttl_ms AS rawDeliveryTtlMs
+      FROM events e
+      INNER JOIN accounts a
+        ON a.id = e.account_id
+      WHERE e.share_token = ?
     `,
   )
     .bind(shareToken)
@@ -2928,6 +2996,7 @@ async function getPublicGallery(
             rawByteSize: rawRequest?.rawByteSize ?? null,
           },
           rawRequest?.fulfilledAt ?? null,
+          event.rawDeliveryTtlMs,
         ),
         viewerRawDownloadedAt: rawRequest?.downloadedAt ?? null,
 
@@ -2987,10 +3056,13 @@ async function findPhotoInShare(
         p.raw_byte_size AS rawByteSize,
         e.title AS eventTitle,
         e.share_token AS shareToken,
-        e.raw_requests_enabled AS rawRequestsEnabled
+        e.raw_requests_enabled AS rawRequestsEnabled,
+        a.raw_delivery_ttl_ms AS rawDeliveryTtlMs
       FROM photos p
       INNER JOIN events e
         ON e.id = p.event_id
+      INNER JOIN accounts a
+        ON a.id = p.account_id
       WHERE
         p.id = ?
         AND e.share_token = ?
@@ -3503,7 +3575,11 @@ async function writeRawRequest(
     confirmationPending: false,
     email,
     rawDownload: requestingVisitorOwnsRow
-      ? toViewerRawDownload(galleryPhoto, fulfilledAt)
+      ? toViewerRawDownload(
+          galleryPhoto,
+          fulfilledAt,
+          galleryPhoto.rawDeliveryTtlMs,
+        )
       : null,
     rawDownloadedAt: downloadedAt,
   });
@@ -3519,6 +3595,7 @@ async function writeRawRequest(
 function toViewerRawDownload(
   source: RawDownloadSource,
   fulfilledAt: string | null,
+  rawDeliveryTtlMs: number,
 ): ViewerRawDownloadRecord | null {
   if (source.rawStorageKey === null || fulfilledAt === null) {
     return null;
@@ -3528,7 +3605,7 @@ function toViewerRawDownload(
     filename: source.rawOriginalFilename ?? source.originalFilename,
     byteSize: source.rawByteSize ?? 0,
     expiresAt: new Date(
-      Date.parse(fulfilledAt) + RAW_DELIVERY_TTL_MS,
+      Date.parse(fulfilledAt) + rawDeliveryTtlMs,
     ).toISOString(),
   };
 }
@@ -3572,8 +3649,8 @@ async function isAddressConfirmedInEvent(
  * token and display name until the address is proved, the same rule
  * auth_signup_tokens follows and for a sharper reason: a request nobody can
  * collect keeps isRawReclaimable's awaitingCount veto true and pins ~120 MB for
- * the full RAW_DELIVERY_TTL_MS. A typo must therefore cost one undeliverable
- * email and nothing else.
+ * the account's full raw_delivery_ttl_ms (#225). A typo must therefore cost
+ * one undeliverable email and nothing else.
  */
 async function startRawRequestConfirmation(
   request: Request,
@@ -4128,7 +4205,7 @@ async function removeRawRequest(
 function isRawReclaimable(row: RawReclaimRow, now: number): boolean {
   if (
     row.lastFulfilledAt !== null &&
-    now - Date.parse(row.lastFulfilledAt) >= RAW_DELIVERY_TTL_MS
+    now - Date.parse(row.lastFulfilledAt) >= row.rawDeliveryTtlMs
   ) {
     return true;
   }
@@ -4216,6 +4293,7 @@ async function reclaimRawPhotos(
         SELECT
           p.id AS photoId,
           p.account_id AS accountId,
+          a.raw_delivery_ttl_ms AS rawDeliveryTtlMs,
           p.raw_storage_key AS rawStorageKey,
           p.raw_byte_size AS rawByteSize,
           COUNT(r.photo_id) AS liveRequestCount,
@@ -4253,6 +4331,8 @@ async function reclaimRawPhotos(
           MAX(r.fulfilled_at) AS lastFulfilledAt,
           MAX(r.downloaded_at) AS lastDownloadedAt
         FROM photos p
+        INNER JOIN accounts a
+          ON a.id = p.account_id
         LEFT JOIN raw_requests r
           ON r.photo_id = p.id
         WHERE
@@ -5172,7 +5252,7 @@ async function getGalleryRawPhoto(
    */
   if (
     downloadToken &&
-    Date.now() - Date.parse(rawRequest.fulfilledAt) >= RAW_DELIVERY_TTL_MS
+    Date.now() - Date.parse(rawRequest.fulfilledAt) >= photo.rawDeliveryTtlMs
   ) {
     return unavailable;
   }
@@ -5267,7 +5347,8 @@ async function getGalleryRawPhoto(
  * Runs from a waitUntil after the response has already gone, which is what
  * makes swallowing the error the right call here: there is no request left to
  * fail, the visitor has their file either way, and losing the stamp only costs
- * storage-days because RAW_DELIVERY_TTL_MS still collects the object.
+ * storage-days because the account's raw_delivery_ttl_ms (#225) still collects
+ * the object.
  */
 async function recordRawDownload(
   env: Env,

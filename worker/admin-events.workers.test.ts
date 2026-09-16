@@ -495,3 +495,73 @@ describe("POST /api/admin/events/:id/raw-releases", () => {
     expectMethodNotAllowed(await adminRequest("GET", RELEASES_PATH));
   });
 });
+
+describe("DELETE /api/admin/events/:id", () => {
+  it("deletes the event row", async () => {
+    await insertEvent({ id: "event-delete", shareToken: "share-delete" });
+
+    const result = await adminRequest<{ deleted: boolean }>(
+      "DELETE",
+      "/api/admin/events/event-delete",
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.deleted).toBe(true);
+
+    const row = await env.DB.prepare(`SELECT id FROM events WHERE id = ?`)
+      .bind("event-delete")
+      .first();
+
+    expect(row).toBeNull();
+  });
+
+  /*
+   * The bug this guards against (#230): a keys-from-the-database delete only
+   * ever reaches objects a photo or variant row still points at. An object
+   * put in R2 with no row -- an upload cancelled between the R2 write and the
+   * D1 insert, or a superseded variant key -- used to survive event deletion
+   * forever, since the event row that would have traced it back to an
+   * account was gone the moment this returned. The fix sweeps by R2 prefix
+   * instead of by known key, so this orphan has to be gone too.
+   */
+  it("deletes R2 objects under the event's prefix that have no database row", async () => {
+    await insertEvent({ id: "event-orphan", shareToken: "share-orphan" });
+    await insertPhoto({ id: "photo-tracked", eventId: "event-orphan" });
+
+    const orphanKey = "events/event-orphan/photos/photo-tracked/orphan.jpg";
+
+    await env.pickpic_photos.put(orphanKey, new Uint8Array([1, 2, 3]));
+
+    expect(await env.pickpic_photos.head(orphanKey)).not.toBeNull();
+
+    const result = await adminRequest(
+      "DELETE",
+      "/api/admin/events/event-orphan",
+    );
+
+    expect(result.status).toBe(200);
+    expect(await env.pickpic_photos.head(orphanKey)).toBeNull();
+  });
+
+  it("leaves other events' R2 objects alone", async () => {
+    await insertEvent({ id: "event-victim", shareToken: "share-victim" });
+    await insertEvent({ id: "event-bystander", shareToken: "share-bystander" });
+
+    const bystanderKey = "events/event-bystander/photos/photo-a/orphan.jpg";
+
+    await env.pickpic_photos.put(bystanderKey, new Uint8Array([1, 2, 3]));
+
+    await adminRequest("DELETE", "/api/admin/events/event-victim");
+
+    expect(await env.pickpic_photos.head(bystanderKey)).not.toBeNull();
+  });
+
+  it("404s for an event that doesn't exist", async () => {
+    const result = await adminRequest(
+      "DELETE",
+      "/api/admin/events/no-such-event",
+    );
+
+    expectError(result, 404, "Event not found.");
+  });
+});

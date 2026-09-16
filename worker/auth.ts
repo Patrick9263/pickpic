@@ -1748,20 +1748,29 @@ async function getSession(
   const account = await database
     .prepare(
       `
-        SELECT id, name, status
+        SELECT id, name, status, raw_delivery_ttl_ms AS rawDeliveryTtlMs
         FROM accounts
         WHERE id = ?
       `,
     )
     .bind(session.principal.accountId)
-    .first<{ id: string; name: string; status: string }>();
+    .first<{
+      id: string;
+      name: string;
+      status: string;
+      rawDeliveryTtlMs: number;
+    }>();
 
   if (!account || account.status !== "active") {
     return jsonResponse({ error: "This account is not available." }, 403);
   }
 
   return jsonResponse({
-    account: { id: account.id, name: account.name },
+    account: {
+      id: account.id,
+      name: account.name,
+      rawDeliveryTtlMs: account.rawDeliveryTtlMs,
+    },
     user: {
       id: session.principal.accountUserId,
       email: session.principal.email,

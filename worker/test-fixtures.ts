@@ -75,6 +75,7 @@ export async function bootstrapScope(): Promise<AccountScope> {
         plan,
         storage_cap_bytes AS storageCapBytes,
         storage_bytes AS storageBytes,
+        raw_delivery_ttl_ms AS rawDeliveryTtlMs,
         database_id AS databaseId
       FROM accounts
       WHERE id = ?
@@ -224,8 +225,8 @@ export async function insertRawRequest(seed: {
   /*
    * Seeds a request whose RAW has already been collected. Both this and
    * fulfilledAt are passed as literal timestamps rather than offsets so a
-   * reclaim test can backdate them past RAW_DOWNLOAD_GRACE_MS or
-   * RAW_DELIVERY_TTL_MS without waiting or faking a clock.
+   * reclaim test can backdate them past RAW_DOWNLOAD_GRACE_MS or an
+   * account's raw_delivery_ttl_ms (#225) without waiting or faking a clock.
    */
   downloadedAt?: string;
 
@@ -522,6 +523,37 @@ export async function setAccountStorageCap(capBytes: number): Promise<number> {
     .run();
 
   return previous?.storageCapBytes ?? 0;
+}
+
+/*
+ * Points the bootstrap account's RAW retention (#225) at a chosen value, for
+ * tests exercising reclaim eligibility against something other than the
+ * migration's default. Same previous-value-return shape as
+ * setAccountStorageCap, for the same reason: clearTestData does not reset
+ * this column either.
+ */
+export async function setRawDeliveryTtlMs(ttlMs: number): Promise<number> {
+  const previous = await env.DB.prepare(
+    `
+      SELECT raw_delivery_ttl_ms AS rawDeliveryTtlMs
+      FROM accounts
+      WHERE id = ?
+    `,
+  )
+    .bind(BOOTSTRAP_ACCOUNT_ID)
+    .first<{ rawDeliveryTtlMs: number }>();
+
+  await env.DB.prepare(
+    `
+      UPDATE accounts
+      SET raw_delivery_ttl_ms = ?
+      WHERE id = ?
+    `,
+  )
+    .bind(ttlMs, BOOTSTRAP_ACCOUNT_ID)
+    .run();
+
+  return previous?.rawDeliveryTtlMs ?? 0;
 }
 
 /*
