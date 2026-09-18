@@ -1169,6 +1169,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               <span className="gallery-toolbar-label">Show</span>
               <div
                 className="gallery-filter-controls"
+                role="group"
                 aria-label="Filter gallery photos"
               >
                 {(
@@ -1196,6 +1197,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
               <span className="gallery-toolbar-label">Group</span>
               <div
                 className="gallery-grouping-controls"
+                role="group"
                 aria-label="Group gallery photos"
               >
                 {(
