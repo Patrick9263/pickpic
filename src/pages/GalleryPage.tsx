@@ -953,7 +953,6 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     setRetainedLikedPhotoId(null);
     setSelectedPhotoId(null);
     setCommentText("");
-    setActionError(null);
     setSelectedVersion("original");
 
     if (photoIdToRestore) {
@@ -1369,6 +1368,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         <GalleryLightbox
           selectedPhoto={selectedPhoto}
           closeLightbox={closeLightbox}
+          actionError={actionError}
+          setActionError={setActionError}
+          actionNotice={actionNotice}
+          setActionNotice={setActionNotice}
           selectedImageUrl={selectedImageUrl}
           selectedVersion={selectedVersion}
           setSelectedVersion={setSelectedVersion}
