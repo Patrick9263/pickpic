@@ -23,7 +23,7 @@ function SignOutControl({
 }
 
 function AppPage() {
-  const { status, user, signOut } = useSession();
+  const { status, user, signOut, signOutError } = useSession();
 
   if (status === "loading") {
     return (
@@ -43,6 +43,7 @@ function AppPage() {
       headerExtra={
         <SignOutControl email={user.email} onSignOut={() => void signOut()} />
       }
+      signOutError={signOutError}
     />
   );
 }

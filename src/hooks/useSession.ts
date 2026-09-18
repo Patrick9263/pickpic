@@ -8,6 +8,7 @@ interface UseSessionResult {
   status: SessionStatus;
   account: SessionAccount | null;
   user: SessionUser | null;
+  signOutError: string | null;
   refresh: () => void;
   signOut: () => Promise<void>;
 }
@@ -16,6 +17,7 @@ export function useSession(): UseSessionResult {
   const [status, setStatus] = useState<SessionStatus>("loading");
   const [account, setAccount] = useState<SessionAccount | null>(null);
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -52,11 +54,26 @@ export function useSession(): UseSessionResult {
   }, []);
 
   const signOut = useCallback(async () => {
-    await fetchJson("/api/auth/session", { method: "DELETE" });
-    setAccount(null);
-    setUser(null);
-    setStatus("signedOut");
+    try {
+      await fetchJson("/api/auth/session", { method: "DELETE" });
+    } catch (caughtError) {
+      // Clear local state even on failure, since the cookie is __Host- scoped
+      // and a reload will re-check it. Surface the error so the user knows
+      // something went wrong.
+      setSignOutError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to sign out.",
+      );
+    } finally {
+      // Always clear local state on sign-out attempt. The __Host- cookie
+      // cannot be cleared client-side, so a reload will re-validate the
+      // session state with the server.
+      setAccount(null);
+      setUser(null);
+      setStatus("signedOut");
+    }
   }, []);
 
-  return { status, account, user, refresh, signOut };
+  return { status, account, user, signOutError, refresh, signOut };
 }

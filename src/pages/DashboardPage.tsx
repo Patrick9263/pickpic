@@ -182,9 +182,10 @@ async function uploadImageVariants(
 
 interface DashboardPageProps {
   headerExtra?: ReactNode;
+  signOutError?: string | null;
 }
 
-function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
+function DashboardPage({ headerExtra, signOutError }: DashboardPageProps = {}) {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [photosByEvent, setPhotosByEvent] = useState<
     Record<string, PhotoRecord[]>
@@ -1424,6 +1425,15 @@ function DashboardPage({ headerExtra }: DashboardPageProps = {}) {
             <span>{error}</span>
             <button type="button" onClick={() => setError(null)}>
               Dismiss
+            </button>
+          </div>
+        )}
+
+        {signOutError && (
+          <div className="error-message" role="alert">
+            <span>{signOutError}</span>
+            <button type="button" onClick={() => window.location.reload()}>
+              Reload to try again
             </button>
           </div>
         )}
