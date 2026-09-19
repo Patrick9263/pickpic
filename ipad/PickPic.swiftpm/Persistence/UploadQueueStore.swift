@@ -137,8 +137,8 @@ final class UploadQueueStore: ObservableObject {
     var preflightProgressByJobID:
         [UUID: (processed: Int, total: Int)] = [:]
 
-    init() {
-        storageURL = Self.makeStorageURL()
+    init(storageURL: URL = UploadQueueStore.makeStorageURL()) {
+        self.storageURL = storageURL
         load()
     }
 
@@ -4384,7 +4384,7 @@ final class UploadQueueStore: ObservableObject {
         )
     }
 
-    private static func makeStorageURL()
+    nonisolated private static func makeStorageURL()
     -> URL
     {
         AppStorageService.rootURL
