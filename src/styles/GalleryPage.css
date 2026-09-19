@@ -745,7 +745,13 @@
   min-height: 260px;
   overflow: hidden;
   position: relative;
-  touch-action: pan-y;
+  /*
+   * pan-y alone reserves horizontal touch for swipe navigation but also
+   * blocks pinch-zoom, and the photo being judged is the one thing on the
+   * page a viewer most needs to zoom into. pinch-zoom restores it without
+   * giving back horizontal panning.
+   */
+  touch-action: pan-y pinch-zoom;
   user-select: none;
 }
 
@@ -1459,7 +1465,7 @@
     margin: 0;
     min-height: 0;
     overflow: hidden;
-    touch-action: pan-y;
+    touch-action: pan-y pinch-zoom;
   }
 
   .lightbox-content img,

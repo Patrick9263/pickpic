@@ -224,13 +224,26 @@ function GalleryLightbox({
     };
   }, [canGoNext, canGoPrevious, closeLightbox, navigateNext, navigatePrevious]);
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    const previousPointerId = pointerStartRef.current?.pointerId;
     pointerStartRef.current = null;
 
-    if (
-      !event.isPrimary ||
-      event.pointerType === "mouse" ||
-      isInteractiveTarget(event.target)
-    ) {
+    if (!event.isPrimary) {
+      /*
+       * A second finger landing mid-gesture means the browser is about to
+       * take over for pinch-zoom (touch-action allows it on this element).
+       * Release capture on the first finger so it stops feeding swipe/tap
+       * tracking and the pinch isn't fought over.
+       */
+      if (
+        previousPointerId !== undefined &&
+        event.currentTarget.hasPointerCapture(previousPointerId)
+      ) {
+        event.currentTarget.releasePointerCapture(previousPointerId);
+      }
+      return;
+    }
+
+    if (event.pointerType === "mouse" || isInteractiveTarget(event.target)) {
       return;
     }
 
