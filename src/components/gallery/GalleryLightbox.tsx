@@ -146,6 +146,40 @@ function GalleryLightbox({
     dialogRef.current?.focus({ preventScroll: true });
   }, []);
 
+  /*
+   * `aria-modal="true"` tells assistive tech the rest of the page is hidden,
+   * but without this nothing enforces that: Tab can walk focus past the last
+   * lightbox control into the scroll-locked, backdrop-covered gallery behind
+   * it, and the next Enter acts on a photo the viewer can't see. Marking the
+   * lightbox's siblings `inert` removes them from both the tab order and the
+   * accessibility tree, which is less code than a hand-rolled focus trap and
+   * keeps the two in agreement. Siblings rather than a fixed selector so this
+   * doesn't silently stop working if GalleryPage's markup around it changes.
+   */
+  useEffect(() => {
+    const dialogElement = dialogRef.current;
+    const parent = dialogElement?.parentElement;
+
+    if (!parent) {
+      return;
+    }
+
+    const siblings = Array.from(parent.children).filter(
+      (child): child is HTMLElement =>
+        child !== dialogElement && child instanceof HTMLElement,
+    );
+
+    for (const sibling of siblings) {
+      sibling.inert = true;
+    }
+
+    return () => {
+      for (const sibling of siblings) {
+        sibling.inert = false;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     setIsImageLoaded(false);
     setHasImageFailed(false);
