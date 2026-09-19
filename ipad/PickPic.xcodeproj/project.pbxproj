@@ -71,6 +71,7 @@
 		CDFF00210000000000000000 /* EventFolderStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00200000000000000000 /* EventFolderStoreTests.swift */; };
 		CDFF00230000000000000000 /* EditedFolderServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00220000000000000000 /* EditedFolderServiceTests.swift */; };
 		CDEE00020000000000000000 /* PickPicEventStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDEE00010000000000000000 /* PickPicEventStatusTests.swift */; };
+		CDFF00250000000000000000 /* ConversionFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00240000000000000000 /* ConversionFailureTests.swift */; };
 		CDBB00010000000000000000 /* ToEditSyncServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDBB00020000000000000000 /* ToEditSyncServiceTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -141,6 +142,7 @@
 		CDFF00200000000000000000 /* EventFolderStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventFolderStoreTests.swift; sourceTree = "<group>"; };
 		CDFF00220000000000000000 /* EditedFolderServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedFolderServiceTests.swift; sourceTree = "<group>"; };
 		CDEE00010000000000000000 /* PickPicEventStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickPicEventStatusTests.swift; sourceTree = "<group>"; };
+		CDFF00240000000000000000 /* ConversionFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversionFailureTests.swift; sourceTree = "<group>"; };
 		CDBB00020000000000000000 /* ToEditSyncServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToEditSyncServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -226,6 +228,7 @@
 				CDFF00220000000000000000 /* EditedFolderServiceTests.swift */,
 				CDBB00020000000000000000 /* ToEditSyncServiceTests.swift */,
 				CDEE00010000000000000000 /* PickPicEventStatusTests.swift */,
+				CDFF00240000000000000000 /* ConversionFailureTests.swift */,
 			);
 			path = PickPicTests;
 			sourceTree = "<group>";
@@ -546,6 +549,7 @@
 				CDFF00230000000000000000 /* EditedFolderServiceTests.swift in Sources */,
 				CDBB00010000000000000000 /* ToEditSyncServiceTests.swift in Sources */,
 				CDEE00020000000000000000 /* PickPicEventStatusTests.swift in Sources */,
+				CDFF00250000000000000000 /* ConversionFailureTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
