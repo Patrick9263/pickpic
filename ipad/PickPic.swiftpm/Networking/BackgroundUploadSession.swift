@@ -45,6 +45,23 @@ struct BackgroundUploadCompletion:
         } == true
     }
 
+    /*
+     * A background task that ended because it was cancelled, not because
+     * anything went wrong with it. The usual way this happens is a
+     * relaunch: nsurlsessiond hands the still-running task's cancellation
+     * to the newly-created session sharing its identifier, and reports it
+     * as NSURLErrorCancelled.
+     *
+     * It carries no verdict. The bytes may have reached the server or may
+     * not have, so this is neither a success nor a failure -- it is the
+     * "verify and continue" case, which is why it must not be allowed to
+     * fall through to a hard UploadFailure.
+     */
+    var wasCancelled: Bool {
+        errorDomain == NSURLErrorDomain
+        && errorCode == URLError.Code.cancelled.rawValue
+    }
+
     var shouldRetryWhenConnectivityReturns: Bool {
         guard
             errorDomain == NSURLErrorDomain,

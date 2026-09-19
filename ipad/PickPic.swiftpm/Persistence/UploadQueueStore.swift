@@ -1211,9 +1211,25 @@ final class UploadQueueStore: ObservableObject {
                 job.id == context.jobID
             })?.uploadProgress.isPauseRequested == true
 
+        /*
+         * A cancelled transfer takes the same verify-and-continue path a
+         * finished one does, rather than the failure path. Cancellation
+         * carries no verdict -- the bytes may or may not have reached the
+         * server -- and re-uploading is the safe answer either way, since
+         * the server answers a repeat as a duplicate and
+         * reconciliationPendingSourceFilenames keeps that out of the
+         * "already existed" count the photographer sees. Letting it fall
+         * through to a hard UploadFailure instead strands the job behind a
+         * red "Upload stopped" showing a raw NSURLErrorDomain -999, which
+         * only a manual Resume clears.
+         */
+        let needsServerVerification =
+            completion.succeeded
+            || completion.wasCancelled
+
         let failureMessage: String?
 
-        if completion.succeeded {
+        if needsServerVerification {
             failureMessage = nil
         } else if completion
             .shouldRetryWhenConnectivityReturns
@@ -1268,7 +1284,7 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress.currentStep = nil
                 job.uploadProgress.pauseRequested = false
                 job.uploadProgress.pausedAt =
-                    completion.succeeded
+                    needsServerVerification
                     && shouldRemainPaused
                     ? completion.completedAt
                     : nil
@@ -1276,12 +1292,17 @@ final class UploadQueueStore: ObservableObject {
                 job.uploadProgress
                     .waitingForConnectivitySince = nil
 
-                if completion.succeeded {
+                if needsServerVerification {
+                    let outcomeSentence =
+                        completion.succeeded
+                        ? "A background transfer finished while PickPic was not running."
+                        : "A background transfer was interrupted when PickPic reopened."
+
                     job.uploadProgress.lastFailure = nil
                     job.uploadProgress.errorMessage =
                         shouldRemainPaused
-                        ? "A background transfer finished while PickPic was not running. Uploading is paused and will be safely verified when you resume."
-                        : "A background transfer finished while PickPic was not running. PickPic will verify it and continue without creating a duplicate."
+                        ? "\(outcomeSentence) Uploading is paused and will be safely verified when you resume."
+                        : "\(outcomeSentence) PickPic will verify it and continue without creating a duplicate."
                     job.uploadProgress
                         .backgroundTransferNeedsReconciliation =
                             true
@@ -1326,7 +1347,7 @@ final class UploadQueueStore: ObservableObject {
         }
 
         guard
-            completion.succeeded,
+            needsServerVerification,
             !shouldRemainPaused,
             resumeIfActive,
             configuration.isConfigured
