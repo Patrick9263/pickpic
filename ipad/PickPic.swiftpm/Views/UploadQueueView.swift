@@ -1536,6 +1536,7 @@ private struct UploadJobRow: View {
                     "Try Upload Again",
                     systemImage: "arrow.clockwise"
                 )
+                .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
         }
