@@ -101,5 +101,9 @@ struct UploadQueueStoreStorageTests {
 
         #expect(store.jobs.isEmpty)
         #expect(store.loadErrorMessage != nil)
+        // The recovery walk never ran, so there is nothing to announce --
+        // a launch that could not read the queue must not also claim it
+        // restored something.
+        #expect(store.recoveryMessage == nil)
     }
 }
