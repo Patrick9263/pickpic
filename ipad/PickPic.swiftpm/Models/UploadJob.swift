@@ -1,5 +1,29 @@
 import Foundation
 
+/*
+ * One photo the batch could not convert. A truncated RAW off a flaky
+ * card, a file moved out from under the job, or a proof JPEG that came
+ * out over the size limit is a problem with that frame alone, so
+ * conversion records it here and carries on with the rest of the shoot
+ * rather than aborting the batch. The filename is what the photographer
+ * actually needs: it names the frame to re-copy, re-shoot, or ignore.
+ */
+struct ConversionFailure:
+    Identifiable,
+    Codable,
+    Hashable,
+    Sendable
+{
+    let sourcePhotoID: String
+    let sourceFilename: String
+    let message: String
+    let occurredAt: Date
+
+    var id: String {
+        sourcePhotoID
+    }
+}
+
 struct UploadJob:
     Identifiable,
     Codable,
@@ -28,6 +52,15 @@ struct UploadJob:
     var conversionErrorMessage: String?
 
     var preparedPhotos: [PreparedPhoto]
+
+    /*
+     * Frames this job attempted and could not convert. A resumed pass
+     * leaves them alone and skips them -- re-decoding a RAW that has
+     * already failed costs the same minutes and ends the same way -- so
+     * they are cleared only by a fresh preparation or an explicit
+     * reconversion, both of which are deliberate retries.
+     */
+    var conversionFailures: [ConversionFailure]
 
     var preflight: PreflightState?
 
@@ -96,6 +129,39 @@ struct UploadJob:
                 - preflightSkippedPhotoCount,
             0
         )
+    }
+
+    /*
+     * Photos conversion has given up on. They are deliberately excluded
+     * from the batch the upload path expects, so one bad frame cannot
+     * hold the other 1,199 back.
+     */
+    var unconvertiblePhotoCount: Int {
+        conversionFailures.count
+    }
+
+    /*
+     * How many prepared JPEGs a finished conversion should have produced:
+     * every photo it meant to convert, minus the ones it skipped. This is
+     * the completeness test for the batch, in place of a bare comparison
+     * against photosToConvertCount.
+     */
+    var expectedPreparedPhotoCount: Int {
+        max(
+            photosToConvertCount
+                - unconvertiblePhotoCount,
+            0
+        )
+    }
+
+    /*
+     * Progress against the batch counts skipped frames as attempted --
+     * otherwise a batch with one unconvertible RAW could never fill its
+     * progress bar or its iPadOS activity indicator.
+     */
+    var conversionAttemptedCount: Int {
+        conversionProcessedCount
+            + unconvertiblePhotoCount
     }
 
     var duplicatePhotoCount: Int {
@@ -234,6 +300,8 @@ struct UploadJob:
         String? = nil,
         preparedPhotos:
         [PreparedPhoto] = [],
+        conversionFailures:
+        [ConversionFailure] = [],
         preflight:
         PreflightState? = nil,
         storageHeadroomWarningMessage:
@@ -270,6 +338,8 @@ struct UploadJob:
         self.conversionErrorMessage =
         conversionErrorMessage
         self.preparedPhotos = preparedPhotos
+        self.conversionFailures =
+        conversionFailures
         self.preflight = preflight
         self.storageHeadroomWarningMessage =
         storageHeadroomWarningMessage
@@ -306,6 +376,7 @@ struct UploadJob:
         case conversionPreview
         case conversionErrorMessage
         case preparedPhotos
+        case conversionFailures
         case preflight
         case storageHeadroomWarningMessage
         case storageHeadroomWarningAcknowledged
@@ -400,6 +471,13 @@ struct UploadJob:
         try container.decodeIfPresent(
             [PreparedPhoto].self,
             forKey: .preparedPhotos
+        )
+        ?? []
+
+        conversionFailures =
+        try container.decodeIfPresent(
+            [ConversionFailure].self,
+            forKey: .conversionFailures
         )
         ?? []
 

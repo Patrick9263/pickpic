@@ -231,6 +231,13 @@ struct UploadQueueView: View {
                                 )
                         }
                     },
+                    onRetrySkippedPhotos: {
+                        uploadQueue
+                            .retrySkippedConversions(
+                                jobID: job.id,
+                                using: configuration
+                            )
+                    },
                     onIncludeDuplicatesChanged: {
                         includesDuplicates in
 
@@ -418,6 +425,7 @@ private struct UploadJobRow: View {
     let onConvertAll: () -> Void
     let onPause: () -> Void
     let onRetryFailedPhoto: () -> Void
+    let onRetrySkippedPhotos: () -> Void
     let onIncludeDuplicatesChanged: (Bool) -> Void
     let isRelinkingFolder: Bool
     let canRelinkFolder: Bool
@@ -578,6 +586,107 @@ private struct UploadJobRow: View {
         }
     }
 
+    private static let namedSkippedFrameLimit = 5
+
+    /*
+     * Frames conversion gave up on. Rendered outside the stage switch
+     * because the batch carries on past them: the same list has to stay
+     * visible while the rest converts, while it uploads, and after the
+     * job completes, or the photographer only ever sees it in passing.
+     *
+     * Orange rather than red, matching the convention used for the
+     * upload failure above -- the job itself is still moving. What has
+     * stopped is these files, and naming them is the whole point: the
+     * photographer needs to know which frames to re-copy off the card.
+     */
+    @ViewBuilder
+    private var skippedFramesSummary: some View {
+        if !job.conversionFailures.isEmpty {
+            VStack(
+                alignment: .leading,
+                spacing: 6
+            ) {
+                Label(
+                    job.conversionFailures.count == 1
+                    ? "1 photo skipped"
+                    : "\(job.conversionFailures.count) photos skipped",
+                    systemImage:
+                        "exclamationmark.triangle.fill"
+                )
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.orange)
+
+                Text(
+                    "PickPic could not convert these files and continued with the rest of the batch."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                ForEach(
+                    job.conversionFailures.prefix(
+                        Self.namedSkippedFrameLimit
+                    )
+                ) { failure in
+                    VStack(
+                        alignment: .leading,
+                        spacing: 2
+                    ) {
+                        Text(failure.sourceFilename)
+                            .font(
+                                .caption
+                                    .weight(.semibold)
+                            )
+                            .lineLimit(1)
+
+                        Text(failure.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if
+                    job.conversionFailures.count
+                        > Self.namedSkippedFrameLimit
+                {
+                    Text(
+                        """
+                        and \(job.conversionFailures.count - Self.namedSkippedFrameLimit) \
+                        more
+                        """
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                if
+                    job.stage == .readyToUpload
+                        || job.stage == .prepared
+                {
+                    Button {
+                        onRetrySkippedPhotos()
+                    } label: {
+                        Label(
+                            "Retry Skipped Photos",
+                            systemImage:
+                                "arrow.clockwise"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(
+                        isContinuedProcessingScheduledOrActive
+                    )
+
+                    Text(
+                        "Converts only these files, reusing the JPEGs already prepared."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
     @ViewBuilder
     private var storageHeadroomWarning: some View {
         if let message =
@@ -644,6 +753,7 @@ private struct UploadJobRow: View {
             folderAccessLabel
             continuedProcessingNotice
             preparationStatus
+            skippedFramesSummary
         }
         .padding(.vertical, 5)
         .task(id: job.updatedAt) {
@@ -930,10 +1040,14 @@ private struct UploadJobRow: View {
             ) {
                 storageHeadroomWarning
 
+                /*
+                 * Skipped frames count as attempted, otherwise a batch
+                 * with one unconvertible RAW could never fill its bar.
+                 */
                 ProgressView(
                     value:
                         Double(
-                            job.conversionProcessedCount
+                            job.conversionAttemptedCount
                         ),
                     total:
                         Double(
@@ -1371,9 +1485,15 @@ private struct UploadJobRow: View {
                 showsEstimate: false
             )
 
+            /*
+             * Uploading cannot leave a photo behind -- the job only
+             * reaches .completed once every prepared JPEG landed -- so
+             * the only photos this batch failed to deliver are the ones
+             * conversion skipped.
+             */
             LabeledContent(
                 "Failed",
-                value: "0"
+                value: "\(job.unconvertiblePhotoCount)"
             )
 
             if job.preflightSkippedPhotoCount > 0 {
@@ -1416,6 +1536,7 @@ private struct UploadJobRow: View {
                     "Try Upload Again",
                     systemImage: "arrow.clockwise"
                 )
+                .labelStyle(.titleAndIcon)
             }
             .buttonStyle(.borderedProminent)
         }
@@ -1445,20 +1566,20 @@ private struct UploadJobRow: View {
                 )
 
                 if
-                    job.conversionProcessedCount > 0,
-                    job.conversionProcessedCount
+                    job.conversionAttemptedCount > 0,
+                    job.conversionAttemptedCount
                         < job.photosToConvertCount
                 {
                     let averageSecondsPerPhoto =
                     elapsed / Double(
-                        job.conversionProcessedCount
+                        job.conversionAttemptedCount
                     )
 
                     let remaining =
                     averageSecondsPerPhoto
                     * Double(
                         job.photosToConvertCount
-                        - job.conversionProcessedCount
+                        - job.conversionAttemptedCount
                     )
 
                     LabeledContent(
@@ -1495,14 +1616,15 @@ private struct UploadJobRow: View {
         )
 
         /*
-         * Counts down the photos this job will actually convert, so a job
-         * whose duplicates were all skipped by preflight reaches zero
-         * instead of stalling at the full selection count.
+         * Counts down the photos this job will actually upload, so a job
+         * whose duplicates were all skipped by preflight -- or that had to
+         * skip an unconvertible frame -- reaches zero instead of stalling
+         * short of the full selection count.
          */
         LabeledContent(
             "Remaining",
             value:
-                "\(max(job.photosToConvertCount - job.uploadedPhotoCount, 0))"
+                "\(max(job.expectedPreparedPhotoCount - job.uploadedPhotoCount, 0))"
         )
 
         let elapsed = job.uploadElapsedDuration(
