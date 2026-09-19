@@ -1,5 +1,59 @@
 import SwiftUI
 
+/*
+ * Pulled out of the ForEach below so the counting logic is testable
+ * without SwiftUI, and so its Equatable value can be folded into each
+ * row's `.id()`. `List`'s diffable snapshot decides whether a row needs
+ * to reload by hashing the PickPicEvent it was built from, and a job
+ * finishing or reconnecting doesn't change that event -- so without an
+ * `.id()` that also depends on these counts, a badge could go stale on
+ * screen until something else (like pull-to-refresh replacing the whole
+ * events array) forced every row to reload. See #315.
+ */
+struct EventJobCounts: Equatable {
+    let unfinishedJobCount: Int
+    let stalledJobCount: Int
+    let activeJobCount: Int
+
+    init(jobs: [UploadJob]) {
+        unfinishedJobCount = jobs.filter { job in
+            job.stage != .completed
+        }
+        .count
+
+        /*
+         * A job waiting on connectivity also carries a lastFailure, but
+         * it resumes on its own and is not something to walk back to the
+         * iPad for. Only a job that has stopped for good counts as
+         * needing attention.
+         */
+        stalledJobCount = jobs.filter { job in
+            job.stage == .failed
+            || (
+                job.stage == .readyToUpload
+                && job.uploadProgress.lastFailure != nil
+                && !job.uploadProgress.isWaitingForConnectivity
+            )
+        }
+        .count
+
+        activeJobCount = jobs.filter { job in
+            switch job.stage {
+            case .preparing, .preflighting, .converting, .uploading:
+                return true
+
+            case .queued, .prepared, .readyToUpload, .completed, .failed:
+                return false
+            }
+        }
+        .count
+    }
+
+    var rowIdentitySuffix: String {
+        "\(unfinishedJobCount)-\(stalledJobCount)-\(activeJobCount)"
+    }
+}
+
 struct EventListView: View {
     let events: [PickPicEvent]
 
@@ -158,71 +212,37 @@ struct EventListView: View {
                      * pushing over itself. In compact width the split
                      * view collapses and this still reads as a push.
                      */
-                    Group {
-                        let jobs = uploadQueue.jobs(
+                    let counts = EventJobCounts(
+                        jobs: uploadQueue.jobs(
                             for: event.id
                         )
+                    )
 
-                        EventRow(
-                            event: event,
-                            statistics:
-                                statisticsByEventID[
-                                    event.id
-                                ],
-                            statisticsAreLoading:
-                                isLoadingStatistics
-                                && statisticsByEventID[
-                                    event.id
-                                ] == nil,
-                            statisticsUnavailable:
-                                statisticsFailedEventIDs
-                                .contains(event.id),
-                            unfinishedJobCount:
-                                jobs.filter { job in
-                                    job.stage != .completed
-                                }
-                                .count,
-                            /*
-                             * A job waiting on connectivity also carries
-                             * a lastFailure, but it resumes on its own
-                             * and is not something to walk back to the
-                             * iPad for. Only a job that has stopped for
-                             * good counts as needing attention.
-                             */
-                            stalledJobCount:
-                                jobs.filter { job in
-                                    job.stage == .failed
-                                    || (
-                                        job.stage
-                                            == .readyToUpload
-                                        && job.uploadProgress
-                                            .lastFailure != nil
-                                        && !job.uploadProgress
-                                            .isWaitingForConnectivity
-                                    )
-                                }
-                                .count,
-                            activeJobCount:
-                                jobs.filter { job in
-                                    switch job.stage {
-                                    case .preparing,
-                                            .preflighting,
-                                            .converting,
-                                            .uploading:
-                                        return true
-
-                                    case .queued,
-                                            .prepared,
-                                            .readyToUpload,
-                                            .completed,
-                                            .failed:
-                                        return false
-                                    }
-                                }
-                                .count
-                        )
-                    }
+                    EventRow(
+                        event: event,
+                        statistics:
+                            statisticsByEventID[
+                                event.id
+                            ],
+                        statisticsAreLoading:
+                            isLoadingStatistics
+                            && statisticsByEventID[
+                                event.id
+                            ] == nil,
+                        statisticsUnavailable:
+                            statisticsFailedEventIDs
+                            .contains(event.id),
+                        unfinishedJobCount:
+                            counts.unfinishedJobCount,
+                        stalledJobCount:
+                            counts.stalledJobCount,
+                        activeJobCount:
+                            counts.activeJobCount
+                    )
                     .tag(event.id)
+                    .id(
+                        "\(event.id)#\(counts.rowIdentitySuffix)"
+                    )
                 }
             }
         }
