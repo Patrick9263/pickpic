@@ -6,6 +6,7 @@ import {
   createUniqueDownloadNames,
   formatApproximateByteSize,
   formatDayGroupLabel,
+  formatZipDownloadNotice,
   getDefaultPreviewUrl,
   getOrCreateVisitorToken,
   getRawRequestState,
@@ -271,6 +272,31 @@ describe("selectPhotosById", () => {
     expect(
       selectPhotosById(photos, selectedIds).map((photo) => photo.id),
     ).toEqual(["photo-1"]);
+  });
+});
+
+describe("formatZipDownloadNotice", () => {
+  it("returns the base notice unchanged when nothing failed", () => {
+    expect(formatZipDownloadNotice("Download started.", [])).toBe(
+      "Download started.",
+    );
+  });
+
+  it("appends a singular note naming the one failed file", () => {
+    expect(formatZipDownloadNotice("Download started.", ["DSC01015.jpg"])).toBe(
+      "Download started. 1 photo could not be included: DSC01015.jpg.",
+    );
+  });
+
+  it("appends a plural note listing every failed file", () => {
+    expect(
+      formatZipDownloadNotice("Download started.", [
+        "DSC01015.jpg",
+        "DSC01016.jpg",
+      ]),
+    ).toBe(
+      "Download started. 2 photos could not be included: DSC01015.jpg, DSC01016.jpg.",
+    );
   });
 });
 
