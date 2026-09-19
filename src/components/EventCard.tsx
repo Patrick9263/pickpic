@@ -7,6 +7,7 @@ import type {
   UploadBatchProgress,
 } from "../types";
 import { isVariantSetComplete, isVariantSetMissing } from "../imageVariants";
+import { formatApproximateByteSize } from "../pages/galleryHelpers";
 
 function getWorkflowLabel(photo: PhotoRecord): string {
   if (photo.workflowStatus === "editing") {
@@ -266,13 +267,6 @@ function EventCard(props: EventCardProps) {
       dateStyle: "medium",
       timeStyle: "short",
     }).format(date);
-  }
-
-  function formatFileSize(byteSize: number): string {
-    if (byteSize < 1024 * 1024) {
-      return `${Math.max(1, Math.round(byteSize / 1024))} KB`;
-    }
-    return `${(byteSize / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   async function submitEventRename(
@@ -774,7 +768,7 @@ function EventCard(props: EventCardProps) {
                     </span>
 
                     <small>
-                      {formatFileSize(photo.byteSize)}
+                      {formatApproximateByteSize(photo.byteSize)}
                       {" · "}
                       {photo.heartCount}{" "}
                       {photo.heartCount === 1 ? "heart" : "hearts"}
