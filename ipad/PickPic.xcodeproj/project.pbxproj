@@ -13,6 +13,7 @@
 		CD5F4D19301C80320048327C /* FinalUploadFileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CFB301C80320048327C /* FinalUploadFileService.swift */; };
 		CDAA00030000000000000000 /* RawUploadFileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAA00040000000000000000 /* RawUploadFileService.swift */; };
 		CD5F4D1A301C80320048327C /* UploadQueueStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF7301C80320048327C /* UploadQueueStore.swift */; };
+		CDFF00280000000000000000 /* UploadQueueRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00290000000000000000 /* UploadQueueRecovery.swift */; };
 		CD5F4D1B301C80320048327C /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF0301C80320048327C /* APIClient.swift */; };
 		CDFF001C0000000000000000 /* AuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF001B0000000000000000 /* AuthClient.swift */; };
 		CD5F4D1C301C80320048327C /* PublishGalleryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D09301C80320048327C /* PublishGalleryViewModel.swift */; };
@@ -74,6 +75,7 @@
 		CDFF00250000000000000000 /* ConversionFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00240000000000000000 /* ConversionFailureTests.swift */; };
 		CDBB00010000000000000000 /* ToEditSyncServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDBB00020000000000000000 /* ToEditSyncServiceTests.swift */; };
 		CDFF00270000000000000000 /* UploadQueueStoreStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00260000000000000000 /* UploadQueueStoreStorageTests.swift */; };
+		CDFF002A0000000000000000 /* UploadQueueRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF002B0000000000000000 /* UploadQueueRecoveryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -97,6 +99,7 @@
 		CD5F4CF5301C80320048327C /* EventFolderStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventFolderStore.swift; sourceTree = "<group>"; };
 		CD5F4CF6301C80320048327C /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		CD5F4CF7301C80320048327C /* UploadQueueStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueStore.swift; sourceTree = "<group>"; };
+		CDFF00290000000000000000 /* UploadQueueRecovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueRecovery.swift; sourceTree = "<group>"; };
 		CD5F4CF9301C80320048327C /* AppStorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStorageService.swift; sourceTree = "<group>"; };
 		CD5F4CFA301C80320048327C /* EditedFolderService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedFolderService.swift; sourceTree = "<group>"; };
 		CD5F4CFB301C80320048327C /* FinalUploadFileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinalUploadFileService.swift; sourceTree = "<group>"; };
@@ -142,6 +145,7 @@
 		CDFF00190000000000000000 /* PhotoMetadataServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoMetadataServiceTests.swift; sourceTree = "<group>"; };
 		CDFF00200000000000000000 /* EventFolderStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventFolderStoreTests.swift; sourceTree = "<group>"; };
 		CDFF00260000000000000000 /* UploadQueueStoreStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueStoreStorageTests.swift; sourceTree = "<group>"; };
+		CDFF002B0000000000000000 /* UploadQueueRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueRecoveryTests.swift; sourceTree = "<group>"; };
 		CDFF00220000000000000000 /* EditedFolderServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedFolderServiceTests.swift; sourceTree = "<group>"; };
 		CDEE00010000000000000000 /* PickPicEventStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickPicEventStatusTests.swift; sourceTree = "<group>"; };
 		CDFF00240000000000000000 /* ConversionFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversionFailureTests.swift; sourceTree = "<group>"; };
@@ -232,6 +236,7 @@
 				CDEE00010000000000000000 /* PickPicEventStatusTests.swift */,
 				CDFF00240000000000000000 /* ConversionFailureTests.swift */,
 				CDFF00260000000000000000 /* UploadQueueStoreStorageTests.swift */,
+				CDFF002B0000000000000000 /* UploadQueueRecoveryTests.swift */,
 			);
 			path = PickPicTests;
 			sourceTree = "<group>";
@@ -300,6 +305,7 @@
 				CD5F4CF5301C80320048327C /* EventFolderStore.swift */,
 				CD5F4CF6301C80320048327C /* KeychainStore.swift */,
 				CD5F4CF7301C80320048327C /* UploadQueueStore.swift */,
+				CDFF00290000000000000000 /* UploadQueueRecovery.swift */,
 			);
 			name = Persistence;
 			path = PickPic.swiftpm/Persistence;
@@ -489,6 +495,7 @@
 				CD5F4D19301C80320048327C /* FinalUploadFileService.swift in Sources */,
 				CDAA00030000000000000000 /* RawUploadFileService.swift in Sources */,
 				CD5F4D1A301C80320048327C /* UploadQueueStore.swift in Sources */,
+				CDFF00280000000000000000 /* UploadQueueRecovery.swift in Sources */,
 				CD5F4D1B301C80320048327C /* APIClient.swift in Sources */,
 				CDFF001C0000000000000000 /* AuthClient.swift in Sources */,
 				CD5F4D1C301C80320048327C /* PublishGalleryViewModel.swift in Sources */,
@@ -554,6 +561,7 @@
 				CDEE00020000000000000000 /* PickPicEventStatusTests.swift in Sources */,
 				CDFF00250000000000000000 /* ConversionFailureTests.swift in Sources */,
 				CDFF00270000000000000000 /* UploadQueueStoreStorageTests.swift in Sources */,
+				CDFF002A0000000000000000 /* UploadQueueRecoveryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
