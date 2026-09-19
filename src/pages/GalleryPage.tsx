@@ -1021,14 +1021,32 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       return nextIds;
     });
   }
+  // Selection is global across filters (selectPhotosById reads from the full
+  // gallery), so these must union/subtract the visible set rather than
+  // replace the whole selection — otherwise switching filters mid-selection
+  // silently discards photos picked under a different filter (#290).
   function selectAllVisiblePhotos(): void {
-    setSelectedPhotoIds(
-      new Set(downloadableVisiblePhotos.map((photo) => photo.id)),
-    );
+    setSelectedPhotoIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      for (const photo of downloadableVisiblePhotos) {
+        nextIds.add(photo.id);
+      }
+
+      return nextIds;
+    });
   }
 
-  function clearSelectedPhotos(): void {
-    setSelectedPhotoIds(new Set());
+  function clearVisibleSelectedPhotos(): void {
+    setSelectedPhotoIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+
+      for (const photo of downloadableVisiblePhotos) {
+        nextIds.delete(photo.id);
+      }
+
+      return nextIds;
+    });
   }
 
   async function downloadSelectedPhotos(): Promise<void> {
@@ -1283,7 +1301,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 disabled={downloadableVisiblePhotos.length === 0}
                 onClick={
                   allVisibleSelected
-                    ? clearSelectedPhotos
+                    ? clearVisibleSelectedPhotos
                     : selectAllVisiblePhotos
                 }
               >
