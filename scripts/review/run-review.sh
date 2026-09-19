@@ -127,10 +127,26 @@ ISSUE_REF_PRIVATE=""
 IMPLEMENTED_REF=""
 DID_IMPLEMENT="no"
 
+# The header a fresh file gets, and what an existing one is checked against below. A column has
+# been appended to the data row three times since this file was first created (issue_private,
+# implemented, source), and each time this constant was updated in the same commit -- but the
+# on-disk file's first line was never rewritten to match, since the check used to be "does the file
+# exist at all", not "does its header match". The header only ever drifted further behind: a live
+# metrics.csv on Patrick's machine sat at 16 column names against 19 actual data columns before this
+# was noticed.
+METRICS_HEADER='timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private,implemented,source'
+
 record_metrics() {
   [[ "$DRY_RUN" == "yes" ]] && return 0
   if [[ ! -f "$METRICS_FILE" ]]; then
-    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue,issue_private,implemented,source\n' >"$METRICS_FILE"
+    printf '%s\n' "$METRICS_HEADER" >"$METRICS_FILE"
+  elif [[ "$(head -n 1 "$METRICS_FILE")" != "$METRICS_HEADER" ]]; then
+    # Self-heal rather than drift again next time a column is appended: rewrite just the header line
+    # in place, leaving every already-recorded data row untouched. Positional, not name-based, so
+    # existing short rows (written before a later column existed) still read correctly -- see
+    # render_bar_chart's own note on reading columns by fixed position from the front.
+    { printf '%s\n' "$METRICS_HEADER"; tail -n +2 "$METRICS_FILE"; } >"$METRICS_FILE.tmp" \
+      && mv "$METRICS_FILE.tmp" "$METRICS_FILE"
   fi
   local wb="${BUDGET_BEFORE_WEEK:-}" wa="${BUDGET_AFTER_WEEK:-}" wd=""
   [[ -n "$wb" && -n "$wa" && "$wa" != "?" ]] && wd=$(( wa - wb ))
@@ -866,7 +882,15 @@ $XCODE_NOTE"
   fi
 
   log "follow-on analysis: yes -- session ${SESSION_PCT}%, weekly ${WEEK_PCT}%, $OPEN_PRS open PR(s)"
-  RUN_OUTCOME="ok-implement+analyse"
+  # Deliberately NOT setting RUN_OUTCOME here. The Publish section below sets it to "ok"
+  # unconditionally once the follow-on analysis genuinely finishes -- setting an optimistic
+  # "ok-implement+analyse" this early was dead weight in the success case and actively misleading in
+  # the failure one: if `claude -p` for the follow-on scan dies or is interrupted before Publish is
+  # reached, this line was the last thing to touch RUN_OUTCOME, so the metrics row read as a finished,
+  # successful combined run with a blank `findings` column instead of showing the implement-only
+  # outcome it actually achieved. RUN_KIND (already "implement+analyse" by this point, see below)
+  # still records that a follow-on was attempted; RUN_OUTCOME now only claims success once earned.
+  #
   # BUDGET_BEFORE_* is deliberately NOT reset here: the metrics row should account for the whole
   # run, implementation included, or the week_delta column would under-report what this job costs on
   # exactly the mornings it does the most.
