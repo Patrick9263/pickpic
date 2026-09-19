@@ -452,14 +452,12 @@ struct UploadQueueRecoveryTests {
         )
     }
 
-    // Locks in the exact deferred-task sentence, embedded newlines and
-    // all. The literal that builds it is the one detail string in the
-    // walk written without line continuations, so it renders across
-    // three lines where its siblings render as one. That is a real
-    // cosmetic defect, reported rather than fixed here because #169
-    // requires this extraction to be behaviour-identical.
+    // Locks in the deferred-task sentence rendering as a single line, since
+    // its literal previously lacked the trailing-\ line continuations its
+    // sibling detail strings use, which made it break across three lines
+    // wherever the recovery message is shown (#314).
     @Test
-    func deferredContinuedProcessingDetailKeepsItsEmbeddedNewlines() {
+    func deferredContinuedProcessingDetailRendersOnOneLine() {
         let job = Self.makeJob(
             stage: .queued,
             continuedProcessing:
@@ -479,7 +477,7 @@ struct UploadQueueRecoveryTests {
             result.recoveryMessage
                 == "PickPic restored 1 unfinished upload. "
                 + "Interrupted work was restored. "
-                + "1 continued-processing\ntask\ncan resume from saved progress."
+                + "1 continued-processing task can resume from saved progress."
         )
     }
 

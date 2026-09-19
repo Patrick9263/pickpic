@@ -419,8 +419,8 @@ enum UploadQueueRecovery {
         if deferredContinuedProcessingCount > 0 {
             recoveryDetails.append(
                 """
-                \(deferredContinuedProcessingCount) continued-processing
-                task\(deferredContinuedProcessingCount == 1 ? "" : "s")
+                \(deferredContinuedProcessingCount) continued-processing \
+                task\(deferredContinuedProcessingCount == 1 ? "" : "s") \
                 can resume from saved progress.
                 """
             )
