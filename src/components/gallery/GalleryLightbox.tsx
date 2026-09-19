@@ -46,6 +46,10 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 type GalleryLightboxProps = {
   selectedPhoto: GalleryPhotoRecord;
   closeLightbox: () => void;
+  actionError: string | null;
+  setActionError: Dispatch<SetStateAction<string | null>>;
+  actionNotice: string | null;
+  setActionNotice: Dispatch<SetStateAction<string | null>>;
   selectedImageUrl: string | null;
   selectedVersion: PhotoVersion;
   setSelectedVersion: Dispatch<SetStateAction<PhotoVersion>>;
@@ -77,6 +81,10 @@ type GalleryLightboxProps = {
 function GalleryLightbox({
   selectedPhoto,
   closeLightbox,
+  actionError,
+  setActionError,
+  actionNotice,
+  setActionNotice,
   selectedImageUrl,
   selectedVersion,
   setSelectedVersion,
@@ -507,6 +515,24 @@ function GalleryLightbox({
           </button>
         </div>
         <div className="lightbox-details">
+          {actionError && (
+            <div className="gallery-action-error" role="alert">
+              <span>{actionError}</span>
+              <button type="button" onClick={() => setActionError(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {actionNotice && (
+            <div className="gallery-action-notice" role="status">
+              <span>{actionNotice}</span>
+              <button type="button" onClick={() => setActionNotice(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
+
           <p className="lightbox-position" aria-live="polite">
             {photoIndex + 1} of {photoCount}
           </p>
