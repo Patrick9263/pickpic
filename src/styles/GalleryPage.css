@@ -129,7 +129,12 @@
   font-size: 0.8rem;
   font-weight: 700;
   justify-content: center;
-  min-height: 38px;
+  /*
+   * Match the 44px tap-target minimum of the filter/grouping pills it sits beside.
+   * align-items/justify-content centre the label, so min-height brings the target up
+   * to 44px without shifting the text baseline.
+   */
+  min-height: 44px;
   padding: 9px 16px;
   transition:
     background-color 140ms ease,
@@ -282,7 +287,12 @@
   font-size: 0.78rem;
   font-weight: 750;
   justify-content: center;
-  min-height: 38px;
+  /*
+   * 44px tap-target minimum for mobile accessibility.
+   * align-items/justify-content centre the label, so min-height brings the target up
+   * without shifting the text baseline within the selection bar.
+   */
+  min-height: 44px;
   padding: 9px 15px;
   transition:
     background-color 140ms ease,
@@ -735,7 +745,13 @@
   min-height: 260px;
   overflow: hidden;
   position: relative;
-  touch-action: pan-y;
+  /*
+   * pan-y alone reserves horizontal touch for swipe navigation but also
+   * blocks pinch-zoom, and the photo being judged is the one thing on the
+   * page a viewer most needs to zoom into. pinch-zoom restores it without
+   * giving back horizontal panning.
+   */
+  touch-action: pan-y pinch-zoom;
   user-select: none;
 }
 
@@ -1086,21 +1102,21 @@
 }
 
 /*
- * Edit and Delete sit side by side inside a phone-sized lightbox, and at 2px of
- * padding each was roughly an 18px-tall target 10px from its neighbour -- small
+ * Edit and Delete sit side by side inside a phone-sized lightbox. Previous design
+ * had ~18px-tall targets at 2px of padding, just 10px from each other -- small
  * enough that a thumb aiming at Edit could land on the destructive one.
- * min-width rather than horizontal padding so the wider Delete label is
- * untouched and stays flush with the card edge, while the narrow Edit label
- * grows a hit area around itself; the row is centre-aligned, so the extra
- * height only makes the comment heading slightly taller.
+ * min-width and min-height now enforce 44px tap-target minimum. min-width rather
+ * than horizontal padding so the wider Delete label stays flush with the card edge,
+ * while the narrow Edit label grows a hit area around itself. Row is centre-aligned,
+ * so the extra height only makes the comment heading slightly taller.
  */
 .comment-actions button {
   background: transparent;
   border: 0;
   color: var(--color-accent);
   font-size: 0.72rem;
-  min-height: 32px;
-  min-width: 32px;
+  min-height: 44px;
+  min-width: 44px;
   padding: 2px;
 }
 
@@ -1449,7 +1465,7 @@
     margin: 0;
     min-height: 0;
     overflow: hidden;
-    touch-action: pan-y;
+    touch-action: pan-y pinch-zoom;
   }
 
   .lightbox-content img,

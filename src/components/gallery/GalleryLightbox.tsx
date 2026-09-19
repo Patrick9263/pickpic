@@ -46,6 +46,10 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 type GalleryLightboxProps = {
   selectedPhoto: GalleryPhotoRecord;
   closeLightbox: () => void;
+  actionError: string | null;
+  setActionError: Dispatch<SetStateAction<string | null>>;
+  actionNotice: string | null;
+  setActionNotice: Dispatch<SetStateAction<string | null>>;
   selectedImageUrl: string | null;
   selectedVersion: PhotoVersion;
   setSelectedVersion: Dispatch<SetStateAction<PhotoVersion>>;
@@ -77,6 +81,10 @@ type GalleryLightboxProps = {
 function GalleryLightbox({
   selectedPhoto,
   closeLightbox,
+  actionError,
+  setActionError,
+  actionNotice,
+  setActionNotice,
   selectedImageUrl,
   selectedVersion,
   setSelectedVersion,
@@ -144,6 +152,40 @@ function GalleryLightbox({
   }, [canGoNext, onNext, runNavigation]);
   useEffect(() => {
     dialogRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  /*
+   * `aria-modal="true"` tells assistive tech the rest of the page is hidden,
+   * but without this nothing enforces that: Tab can walk focus past the last
+   * lightbox control into the scroll-locked, backdrop-covered gallery behind
+   * it, and the next Enter acts on a photo the viewer can't see. Marking the
+   * lightbox's siblings `inert` removes them from both the tab order and the
+   * accessibility tree, which is less code than a hand-rolled focus trap and
+   * keeps the two in agreement. Siblings rather than a fixed selector so this
+   * doesn't silently stop working if GalleryPage's markup around it changes.
+   */
+  useEffect(() => {
+    const dialogElement = dialogRef.current;
+    const parent = dialogElement?.parentElement;
+
+    if (!parent) {
+      return;
+    }
+
+    const siblings = Array.from(parent.children).filter(
+      (child): child is HTMLElement =>
+        child !== dialogElement && child instanceof HTMLElement,
+    );
+
+    for (const sibling of siblings) {
+      sibling.inert = true;
+    }
+
+    return () => {
+      for (const sibling of siblings) {
+        sibling.inert = false;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -224,13 +266,26 @@ function GalleryLightbox({
     };
   }, [canGoNext, canGoPrevious, closeLightbox, navigateNext, navigatePrevious]);
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    const previousPointerId = pointerStartRef.current?.pointerId;
     pointerStartRef.current = null;
 
-    if (
-      !event.isPrimary ||
-      event.pointerType === "mouse" ||
-      isInteractiveTarget(event.target)
-    ) {
+    if (!event.isPrimary) {
+      /*
+       * A second finger landing mid-gesture means the browser is about to
+       * take over for pinch-zoom (touch-action allows it on this element).
+       * Release capture on the first finger so it stops feeding swipe/tap
+       * tracking and the pinch isn't fought over.
+       */
+      if (
+        previousPointerId !== undefined &&
+        event.currentTarget.hasPointerCapture(previousPointerId)
+      ) {
+        event.currentTarget.releasePointerCapture(previousPointerId);
+      }
+      return;
+    }
+
+    if (event.pointerType === "mouse" || isInteractiveTarget(event.target)) {
       return;
     }
 
@@ -460,6 +515,24 @@ function GalleryLightbox({
           </button>
         </div>
         <div className="lightbox-details">
+          {actionError && (
+            <div className="gallery-action-error" role="alert">
+              <span>{actionError}</span>
+              <button type="button" onClick={() => setActionError(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {actionNotice && (
+            <div className="gallery-action-notice" role="status">
+              <span>{actionNotice}</span>
+              <button type="button" onClick={() => setActionNotice(null)}>
+                Dismiss
+              </button>
+            </div>
+          )}
+
           <p className="lightbox-position" aria-live="polite">
             {photoIndex + 1} of {photoCount}
           </p>

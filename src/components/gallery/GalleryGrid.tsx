@@ -284,7 +284,9 @@ function GalleryGrid({
                         ? "RAW ✓"
                         : rawRequestState === "confirming"
                           ? "RAW ✉"
-                          : "RAW"}
+                          : rawRequestState === "waiting"
+                            ? "RAW ⏳"
+                            : "RAW"}
                   </span>
                 </button>
               )}

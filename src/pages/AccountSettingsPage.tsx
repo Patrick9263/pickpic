@@ -14,7 +14,8 @@ const RAW_DELIVERY_TTL_MIN_DAYS = 2;
 const RAW_DELIVERY_TTL_MAX_DAYS = 90;
 
 function AccountSettingsPage() {
-  const { status, account, user, refresh, signOut } = useSession();
+  const { status, account, user, refresh, signOut, signOutError } =
+    useSession();
   const [name, setName] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +137,11 @@ function AccountSettingsPage() {
 
         <div className="header-account">
           <span>{user.email}</span>
-          <button type="button" onClick={() => void signOut()}>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            disabled={signOutError !== null}
+          >
             Sign out
           </button>
         </div>
@@ -271,6 +276,15 @@ function AccountSettingsPage() {
             <span>{error}</span>
             <button type="button" onClick={() => setError(null)}>
               Dismiss
+            </button>
+          </div>
+        )}
+
+        {signOutError && (
+          <div className="error-message" role="alert">
+            <span>{signOutError}</span>
+            <button type="button" onClick={() => window.location.reload()}>
+              Reload to try again
             </button>
           </div>
         )}

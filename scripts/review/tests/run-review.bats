@@ -537,3 +537,49 @@ setup() {
   result="$(count_findings "$report")"
   [ "$result" = "2" ]
 }
+
+# ---------------------------------------------------------------------------
+# record_metrics(): a header written before a later column existed must not stay stale forever
+# ---------------------------------------------------------------------------
+# The header was only ever written `if [[ ! -f "$METRICS_FILE" ]]` -- so a file created back when
+# the row had 16 columns kept that 16-name header even after three later commits each appended a
+# new trailing column (issue_private, implemented, source) to the constant AND the data row, but
+# never to a file that already existed. A live metrics.csv drifted to a 16-column header against
+# 19-column data rows before this was noticed (issue #298).
+@test "record_metrics rewrites a stale header in place without touching existing rows" {
+  eval "$(sed -n '/^METRICS_HEADER=/p' "$REVIEW_SCRIPT")"
+  eval "$(sed -n '/^record_metrics() {/,/^}/p' "$REVIEW_SCRIPT")"
+
+  local metrics_file="$BATS_TEST_TMPDIR/metrics.csv"
+  local old_row='2026-09-04T06:13:19-0400,surplus,implement,"issue #120",ok-implement,opus,high,1,,47,48,1,19,43,194,'
+  {
+    printf 'timestamp,mode,kind,target,outcome,model,effort,scans,findings,week_before,week_after,week_delta,session_before,session_after,duration_s,issue\n'
+    printf '%s\n' "$old_row"
+  } >"$metrics_file"
+
+  METRICS_FILE="$metrics_file" DRY_RUN="no" MODE="daily" RUN_KIND="analyse" TARGET="worker" \
+    RUN_OUTCOME="ok" MODEL="opus" EFFORT="high" SCANS_DONE=1 FINDINGS_COUNT=2 \
+    START_EPOCH="$(date +%s)" ISSUE_REF="99" ISSUE_REF_PRIVATE="" IMPLEMENTED_REF="" \
+    RUN_SOURCE="manual" record_metrics
+
+  [ "$(sed -n '1p' "$metrics_file")" = "$METRICS_HEADER" ]
+  [ "$(sed -n '2p' "$metrics_file")" = "$old_row" ]
+  [ "$(wc -l <"$metrics_file")" -eq 3 ]
+  [[ "$(sed -n '3p' "$metrics_file")" == *',daily,analyse,"worker",ok,opus,high,1,2,'* ]]
+}
+
+@test "record_metrics leaves an already-current header alone" {
+  eval "$(sed -n '/^METRICS_HEADER=/p' "$REVIEW_SCRIPT")"
+  eval "$(sed -n '/^record_metrics() {/,/^}/p' "$REVIEW_SCRIPT")"
+
+  local metrics_file="$BATS_TEST_TMPDIR/metrics.csv"
+  printf '%s\n' "$METRICS_HEADER" >"$metrics_file"
+
+  METRICS_FILE="$metrics_file" DRY_RUN="no" MODE="daily" RUN_KIND="analyse" TARGET="worker" \
+    RUN_OUTCOME="ok" MODEL="opus" EFFORT="high" SCANS_DONE=1 FINDINGS_COUNT=0 \
+    START_EPOCH="$(date +%s)" ISSUE_REF="" ISSUE_REF_PRIVATE="" IMPLEMENTED_REF="" \
+    RUN_SOURCE="scheduled" record_metrics
+
+  [ "$(wc -l <"$metrics_file")" -eq 2 ]
+  [ "$(sed -n '1p' "$metrics_file")" = "$METRICS_HEADER" ]
+}
