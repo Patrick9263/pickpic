@@ -455,6 +455,63 @@ final class UploadQueueStore: ObservableObject {
         )
     }
 
+    /*
+     * The cheap way back from a skipped frame. Reconverting the whole
+     * batch would redo a thousand photos to retry one, so this clears the
+     * failure list and resumes instead: a resumed pass reuses the JPEGs
+     * already on disk and converts only what is missing, which -- with
+     * the failures cleared -- is exactly the frames that were skipped.
+     *
+     * Returning a readyToUpload job to .prepared is what makes it a
+     * resume rather than a restart, and it costs nothing: conversion
+     * preserves the upload progress of photos that already landed.
+     */
+    func retrySkippedConversions(
+        jobID: UUID,
+        using configuration: APIConfigurationStore
+    ) {
+        guard
+            let job = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            ),
+            !job.conversionFailures.isEmpty,
+            job.stage == .readyToUpload
+                || job.stage == .prepared,
+            job.continuedProcessing?
+                .isScheduledOrActive != true
+        else {
+            return
+        }
+
+        do {
+            try updateJob(jobID) { job in
+                job.conversionFailures = []
+
+                if
+                    job.stage == .readyToUpload,
+                    !job.preparedPhotos.isEmpty
+                {
+                    job.stage = .prepared
+                }
+
+                job.conversionErrorMessage = nil
+                job.updatedAt = Date()
+            }
+        } catch {
+            loadErrorMessage =
+                "PickPic could not queue the skipped photos for another attempt: \(error.localizedDescription)"
+
+            return
+        }
+
+        startUserInitiatedUploadPipeline(
+            jobID: jobID,
+            using: configuration
+        )
+    }
+
     private func submitContinuedProcessing(
         job: UploadJob,
         operation: ContinuedProcessingOperation,
@@ -1528,6 +1585,15 @@ final class UploadQueueStore: ObservableObject {
                 job.stage = .prepared
                 job.preparedAt = result.preparedAt
                 job.errorMessage = nil
+
+                /*
+                 * Preparation re-reads the folder, so frames a previous
+                 * attempt skipped are worth trying again -- the file may
+                 * have been re-copied off the card since. This is the
+                 * retry path out of a batch where every frame failed.
+                 */
+                job.conversionFailures = []
+
                 job.updatedAt = result.preparedAt
             }
         } catch {
@@ -1856,6 +1922,55 @@ final class UploadQueueStore: ObservableObject {
     }
 
     /*
+     * Named frames, not a bare count: the photographer's next move is to
+     * look at those files on the card, and a batch that converted nothing
+     * is usually one unreadable folder rather than a thousand bad frames,
+     * so the first few names carry the diagnosis.
+     */
+    private static func allFramesFailedMessage(
+        _ failures: [ConversionFailure]
+    ) -> String {
+        guard let firstFailure = failures.first else {
+            return """
+            PickPic could not convert this batch. \
+            Start the conversion again.
+            """
+        }
+
+        guard failures.count > 1 else {
+            return """
+            PickPic could not convert \
+            \(firstFailure.sourceFilename). \
+            \(firstFailure.message) Fix or remove that file, \
+            then try again.
+            """
+        }
+
+        let namedLimit = 3
+
+        let namedFilenames = failures
+            .prefix(namedLimit)
+            .map(\.sourceFilename)
+            .joined(separator: ", ")
+
+        let unnamedCount = max(
+            failures.count - namedLimit,
+            0
+        )
+
+        let filenameList =
+        unnamedCount > 0
+        ? "\(namedFilenames), and \(unnamedCount) more"
+        : namedFilenames
+
+        return """
+        PickPic could not convert any of the \(failures.count) \
+        photos in this batch (\(filenameList)). Check the files on \
+        the card, then try again.
+        """
+    }
+
+    /*
      * honoringPreflight is false when the photographer explicitly asked
      * for a reconversion, which is an instruction to redo the work rather
      * than to skip photos the event already has.
@@ -1932,13 +2047,33 @@ final class UploadQueueStore: ObservableObject {
             )
 
         /*
-         * Preflight-skipped duplicates are never converted, and photos
-         * recovered from a prior run are already on disk, so only the
-         * photos this pass will actually decode need capacity checked.
+         * A pass that starts from the beginning -- an explicit
+         * reconversion, or a resume with nothing left on disk to reuse --
+         * is a deliberate retry, so frames skipped by an earlier pass get
+         * another attempt. A resumed pass keeps them skipped instead: the
+         * file has not changed since it failed, and re-decoding it costs
+         * the same minutes and ends the same way.
+         */
+        let retriesPreviousFailures =
+        shouldRestartFromBeginning
+        || recoveredPreparedPhotos.isEmpty
+        || !honoringPreflight
+
+        let retainedConversionFailures =
+        retriesPreviousFailures
+        ? []
+        : currentJob.conversionFailures
+
+        /*
+         * Preflight-skipped duplicates are never converted, photos
+         * recovered from a prior run are already on disk, and retained
+         * failures are never decoded again, so only the photos this pass
+         * will actually decode need capacity checked.
          */
         let remainingPhotosToConvert = max(
             currentJob.photosToConvertCount
-                - recoveredPreparedPhotos.count,
+                - recoveredPreparedPhotos.count
+                - retainedConversionFailures.count,
             0
         )
 
@@ -2008,6 +2143,8 @@ final class UploadQueueStore: ObservableObject {
                 job.stage = .converting
                 job.preparedPhotos =
                     recoveredPreparedPhotos
+                job.conversionFailures =
+                    retainedConversionFailures
                 job.conversionProcessedCount =
                     recoveredPreparedPhotos.count
                 job.conversionCurrentFilename = nil
@@ -2074,6 +2211,14 @@ final class UploadQueueStore: ObservableObject {
                     .compactMap(\.sourcePhotoID)
             )
 
+            let skippedSourcePhotoIDs = Set(
+                retainedConversionFailures
+                    .map(\.sourcePhotoID)
+            )
+
+            var recordedFailures =
+            retainedConversionFailures
+
             for (
                 index,
                 sourcePhoto
@@ -2082,6 +2227,19 @@ final class UploadQueueStore: ObservableObject {
 
                 guard
                     !completedSourcePhotoIDs
+                        .contains(sourcePhoto.id)
+                else {
+                    continue
+                }
+
+                /*
+                 * A frame an earlier pass could not convert. Resuming is
+                 * meant to finish the batch, not to spend minutes
+                 * reproducing a failure the photographer has already been
+                 * told about.
+                 */
+                guard
+                    !skippedSourcePhotoIDs
                         .contains(sourcePhoto.id)
                 else {
                     continue
@@ -2121,21 +2279,67 @@ final class UploadQueueStore: ObservableObject {
                             sourcePhoto.id
                     )
 
-                let preparedPhoto =
-                try await Task.detached(
-                    priority: .userInitiated
-                ) {
-                    try autoreleasepool {
-                        try ImageConversionService
-                            .createPreparedPhoto(
-                                sourcePhoto: sourcePhoto,
-                                index: index,
-                                job: convertingJob,
-                                precomputedSourceSha256:
-                                    precomputedSha256
-                            )
+                let preparedPhoto: PreparedPhoto
+
+                do {
+                    preparedPhoto =
+                    try await Task.detached(
+                        priority: .userInitiated
+                    ) {
+                        try autoreleasepool {
+                            try ImageConversionService
+                                .createPreparedPhoto(
+                                    sourcePhoto: sourcePhoto,
+                                    index: index,
+                                    job: convertingJob,
+                                    precomputedSourceSha256:
+                                        precomputedSha256
+                                )
+                        }
+                    }.value
+                } catch {
+                    /*
+                     * One frame failing used to abort every photo behind
+                     * it, and both offered recoveries re-ran conversion
+                     * into the same file -- so a single truncated RAW
+                     * blocked proofs for the whole event with no escape
+                     * but deleting the job and re-importing the folder
+                     * without that frame. The batch now records the
+                     * frame, names it for the photographer, and carries
+                     * on. Failures that would repeat for every remaining
+                     * photo still stop the run.
+                     */
+                    guard
+                        !ImageConversionService
+                            .failureStopsBatch(error)
+                    else {
+                        throw error
                     }
-                }.value
+
+                    let failure = ConversionFailure(
+                        sourcePhotoID: sourcePhoto.id,
+                        sourceFilename:
+                            sourcePhoto.filename,
+                        message:
+                            error.localizedDescription,
+                        occurredAt: Date()
+                    )
+
+                    recordedFailures.append(failure)
+
+                    try updateJob(jobID) { job in
+                        job.conversionFailures
+                            .append(failure)
+
+                        job.conversionCurrentFilename =
+                            nil
+
+                        job.updatedAt =
+                            failure.occurredAt
+                    }
+
+                    continue
+                }
 
                 try updateJob(jobID) { job in
                     job.preparedPhotos.append(
@@ -2155,6 +2359,41 @@ final class UploadQueueStore: ObservableObject {
             }
 
             let completedAt = Date()
+
+            let preparedPhotoCount = jobs.first(
+                where: { job in
+                    job.id == jobID
+                }
+            )?.preparedPhotos.count ?? 0
+
+            /*
+             * Nothing converted at all, so there is no partial batch to
+             * upload and resuming could only reproduce the same failures.
+             * The job fails outright rather than resting at readyToUpload
+             * with an empty batch -- .failed is also the one state whose
+             * button re-prepares from the folder, which is what clears
+             * the skipped frames and gives a genuine retry.
+             */
+            if
+                preparedPhotoCount == 0,
+                !recordedFailures.isEmpty
+            {
+                let failureMessage =
+                Self.allFramesFailedMessage(
+                    recordedFailures
+                )
+
+                try updateJob(jobID) { job in
+                    job.stage = .failed
+                    job.errorMessage = failureMessage
+                    job.conversionCurrentFilename = nil
+                    job.conversionCompletedAt = nil
+                    job.conversionErrorMessage = nil
+                    job.updatedAt = completedAt
+                }
+
+                return
+            }
 
             try updateJob(jobID) { job in
                 job.stage = .readyToUpload
@@ -2262,13 +2501,14 @@ final class UploadQueueStore: ObservableObject {
 
         /*
          * Photos preflight confirmed the event already has are never
-         * converted, so a complete batch matches photosToConvertCount
-         * rather than the full photo count.
+         * converted, and frames conversion gave up on never will be, so a
+         * complete batch matches expectedPreparedPhotoCount rather than
+         * the full photo count.
          */
         guard
             !currentJob.preparedPhotos.isEmpty,
             currentJob.preparedPhotos.count
-                == currentJob.photosToConvertCount
+                == currentJob.expectedPreparedPhotoCount
         else {
             do {
                 try updateJob(jobID) { job in
@@ -3741,7 +3981,7 @@ final class UploadQueueStore: ObservableObject {
             min(
                 max(
                     completedUnitOverride
-                    ?? job.conversionProcessedCount,
+                    ?? job.conversionAttemptedCount,
                     0
                 ),
                 photosInScope
@@ -4059,7 +4299,7 @@ final class UploadQueueStore: ObservableObject {
                     decodedJobs[index].preparedPhotos
                         .count
                         != decodedJobs[index]
-                            .photosToConvertCount
+                            .expectedPreparedPhotoCount
                 {
                     let recoveredCount =
                         decodedJobs[index]
@@ -4104,10 +4344,17 @@ final class UploadQueueStore: ObservableObject {
                 } else if
                     decodedJobs[index].stage == .prepared,
                     decodedJobs[index].photoCount > 0,
+                    /*
+                     * A batch whose every frame was skipped has nothing
+                     * to upload, and promoting it would offer an Upload
+                     * button that can only report an incomplete batch.
+                     */
+                    decodedJobs[index]
+                        .expectedPreparedPhotoCount > 0,
                     decodedJobs[index].preparedPhotos
                         .count
                         == decodedJobs[index]
-                            .photosToConvertCount
+                            .expectedPreparedPhotoCount
                 {
                     decodedJobs[index].stage =
                         .readyToUpload

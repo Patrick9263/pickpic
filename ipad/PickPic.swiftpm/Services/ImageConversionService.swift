@@ -299,12 +299,84 @@ enum ImageConversionService {
         }
 
         /*
-         * Photos skipped by duplicate preflight are never converted, so a
-         * complete batch matches photosToConvertCount.
+         * Photos skipped by duplicate preflight are never converted, and
+         * frames conversion gave up on never will be, so a complete batch
+         * matches expectedPreparedPhotoCount rather than the raw count of
+         * photos in the folder.
          */
         return availablePreparedPhotos(
             for: job
-        ).count == job.photosToConvertCount
+        ).count == job.expectedPreparedPhotoCount
+    }
+
+    /*
+     * Whether a conversion failure belongs to the batch or to one frame.
+     * An unsupported or truncated RAW, a file moved out from under the
+     * job, or an oversized proof JPEG is that photo's problem: the batch
+     * records it, skips it, and keeps going. A folder that can no longer
+     * be reached, a volume with no room left, and cancellation would all
+     * fail every remaining photo in turn, so those stop the run instead
+     * of writing a thousand identical failures and burning the minutes to
+     * produce them.
+     */
+    static func failureStopsBatch(
+        _ error: Error
+    ) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        if
+            let conversionError =
+                error as? ImageConversionError
+        {
+            switch conversionError {
+            case .noSourcePhotos,
+                    .sourceFolderUnavailable,
+                    .unableToCreateColorSpace:
+                return true
+
+            case .sourcePhotoMissing,
+                    .unsupportedRAW,
+                    .unableToDecode,
+                    .outputFileMissing,
+                    .outputTooLarge:
+                return false
+            }
+        }
+
+        let nsError = error as NSError
+
+        if nsError.domain == NSCocoaErrorDomain {
+            let batchStoppingCodes: Set<Int> = [
+                CocoaError.fileWriteOutOfSpace
+                    .rawValue,
+                CocoaError.fileWriteVolumeReadOnly
+                    .rawValue
+            ]
+
+            if batchStoppingCodes.contains(
+                nsError.code
+            ) {
+                return true
+            }
+        }
+
+        if nsError.domain == NSPOSIXErrorDomain {
+            let batchStoppingCodes: Set<Int> = [
+                Int(ENOSPC),
+                Int(EDQUOT),
+                Int(EROFS)
+            ]
+
+            if batchStoppingCodes.contains(
+                nsError.code
+            ) {
+                return true
+            }
+        }
+
+        return false
     }
 
     private static func preparedPhotoIsAvailable(
