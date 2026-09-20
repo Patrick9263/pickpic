@@ -372,6 +372,93 @@ describe("GET /api/galleries/:shareToken", () => {
   });
 });
 
+describe("GET /api/galleries/:shareToken/photos/:photoId/image", () => {
+  /*
+   * Distinct per test, because the colo cache is not part of what clearTestData
+   * resets and the cache key is derived from the storage key -- which
+   * insertPhoto builds from the event and photo ids.
+   */
+  function imagePath(photoId: string): string {
+    return `/api/galleries/${SHARE_TOKEN}/photos/${photoId}/image`;
+  }
+
+  /*
+   * cache.put runs under waitUntil against a clone of the streamed body, so
+   * the original has to be drained before waitOnExecutionContext -- the same
+   * ordering the RAW download below needs, and the same one a real client
+   * produces.
+   */
+  async function fetchImage(photoId: string): Promise<{
+    status: number;
+    bytes: Uint8Array;
+  }> {
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      new IncomingRequest(`${ORIGIN}${imagePath(photoId)}`),
+      env,
+      ctx,
+    );
+
+    const bytes = new Uint8Array(await response.arrayBuffer());
+
+    await waitOnExecutionContext(ctx);
+
+    return { status: response.status, bytes };
+  }
+
+  async function seedImage(photoId: string, status = "ready"): Promise<string> {
+    await insertEvent({ id: EVENT_ID, shareToken: SHARE_TOKEN, status });
+    await insertPhoto({ id: photoId, eventId: EVENT_ID });
+
+    const storageKey = `events/${EVENT_ID}/photos/${photoId}.jpg`;
+
+    await env.pickpic_photos.put(storageKey, new Uint8Array([7, 8, 9]), {
+      httpMetadata: { contentType: "image/jpeg" },
+    });
+
+    return storageKey;
+  }
+
+  /*
+   * run_worker_first routes every image URL through the worker, so nothing is
+   * cached at the edge unless this route puts it there itself. Deleting the R2
+   * object between the two reads is the only way to prove the second one never
+   * touched R2.
+   */
+  it("serves a second read from the edge cache instead of R2", async () => {
+    const storageKey = await seedImage("photo-cache-hit");
+
+    const first = await fetchImage("photo-cache-hit");
+
+    expect(first.status).toBe(200);
+    expect([...first.bytes]).toEqual([7, 8, 9]);
+
+    await env.pickpic_photos.delete(storageKey);
+
+    const second = await fetchImage("photo-cache-hit");
+
+    expect(second.status).toBe(200);
+    expect([...second.bytes]).toEqual([7, 8, 9]);
+  });
+
+  /*
+   * The whole of #124: a cached image must not outlive the gallery it belongs
+   * to. The cache lookup sits below findPhotoInShare, so archiving takes the
+   * image away on the next request even though the bytes are still cached.
+   */
+  it("404s once the gallery is archived, even after the image was cached", async () => {
+    await seedImage("photo-cache-gate");
+
+    expect((await fetchImage("photo-cache-gate")).status).toBe(200);
+
+    await env.DB.prepare("UPDATE events SET status = 'archived' WHERE id = ?")
+      .bind(EVENT_ID)
+      .run();
+
+    expect((await fetchImage("photo-cache-gate")).status).toBe(404);
+  });
+});
+
 describe("GET /api/galleries/:shareToken/photos/:photoId/raw", () => {
   const RAW_PATH = `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw`;
 
