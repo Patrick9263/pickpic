@@ -3732,11 +3732,15 @@ async function startRawRequestConfirmation(
       )
       .run();
 
+    /*
+     * Points at the SPA page, not the API route -- see confirmRawRequest for
+     * why (#323).
+     */
     ctx.waitUntil(
       sendGalleryEmailSafely(request, env, {
         kind: "raw-confirm",
         to: email,
-        url: `${PUBLIC_GALLERY_ORIGIN}/api/galleries/${encodeURIComponent(
+        url: `${PUBLIC_GALLERY_ORIGIN}/g/${encodeURIComponent(
           galleryPhoto.shareToken,
         )}/raw-confirm?t=${encodeURIComponent(token)}`,
         eventTitle: galleryPhoto.eventTitle,
@@ -3766,9 +3770,17 @@ async function startRawRequestConfirmation(
 /*
  * Redeems a confirmation link and completes the request behind it.
  *
- * A browser lands here from a mail client, so every outcome renders HTML rather
- * than JSON, and the success case redirects into the gallery instead of leaving
- * the viewer looking at an API response.
+ * A POST from the SPA page at /g/:shareToken/raw-confirm, not a GET on the
+ * mailed link itself (#323). The mailed link used to point straight at this
+ * route as a GET, and mail scanners -- Outlook Safe Links, Gmail's fetcher --
+ * follow every URL in a message with a GET, so the scanner's automatic fetch
+ * burned the single-use token before the recipient ever clicked, while
+ * silently completing the request behind their back. #193 hit the identical
+ * bug for sign-in links and fixed it the same way: the mailed link lands on a
+ * page that redeems the token with a deliberate press, which a scanner never
+ * makes. The token now travels in a JSON body rather than the query string,
+ * and every outcome is JSON rather than a rendered page -- there is no longer
+ * a bare browser navigation to answer, since the SPA page owns rendering.
  *
  * Note what this deliberately does *not* do: adopt the clicking browser as the
  * requester. The pending row names the browser that made the request, and
@@ -3782,16 +3794,25 @@ async function confirmRawRequest(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
-  url: URL,
   shareToken: string,
 ): Promise<Response> {
-  const token = url.searchParams.get("t")?.trim();
-
-  const expired = galleryMessagePage(
-    "This confirmation link has expired",
-    "Open the gallery again and ask for the file — it only takes a moment, and a fresh link will be on its way.",
+  const expired = jsonResponse(
+    {
+      error:
+        "This confirmation link has expired. Open the gallery again and ask for the file — a fresh link will be on its way.",
+    },
     400,
   );
+
+  let body: { token?: string } | null;
+
+  try {
+    body = (await request.json()) as { token?: string } | null;
+  } catch {
+    return expired;
+  }
+
+  const token = body?.token?.trim();
 
   if (!token) {
     return expired;
@@ -3852,9 +3873,11 @@ async function confirmRawRequest(
   );
 
   if (!galleryPhoto) {
-    return galleryMessagePage(
-      "This gallery is no longer available",
-      "The photographer has closed it or removed the photo, so the original file cannot be sent.",
+    return jsonResponse(
+      {
+        error:
+          "This gallery is no longer available. The photographer has closed it or removed the photo, so the original file cannot be sent.",
+      },
       404,
     );
   }
@@ -3867,9 +3890,11 @@ async function confirmRawRequest(
   );
 
   if (!visitor) {
-    return galleryMessagePage(
-      "Something went wrong",
-      "The request could not be saved. Open the gallery and try again.",
+    return jsonResponse(
+      {
+        error:
+          "The request could not be saved. Open the gallery and try again.",
+      },
       500,
     );
   }
@@ -3900,15 +3925,7 @@ async function confirmRawRequest(
     confirmation.email,
   );
 
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: `/g/${encodeURIComponent(shareToken)}?photo=${encodeURIComponent(
-        confirmation.photoId,
-      )}`,
-      "Cache-Control": "private, no-store",
-    },
-  });
+  return jsonResponse({ photoId: confirmation.photoId });
 }
 
 /*
@@ -7087,10 +7104,12 @@ async function routeRequest(
   }
 
   /*
-   * Redeems the confirmation link from a RAW request email (#224).
+   * Redeems the confirmation link from a RAW request email (#224). A POST from
+   * the SPA page at /g/:shareToken/raw-confirm, not a GET on the mailed link
+   * itself -- see confirmRawRequest for why (#323).
    *
-   * A GET, and outside the requireOpenGallery guard for the same reason the
-   * download route is: the viewer asked while the gallery was open, and the
+   * Outside the requireOpenGallery guard for the same reason the download
+   * route is: the viewer asked while the gallery was open, and the
    * photographer marking it `completed` in the meantime must not strand a
    * request that is already half-made. findPhotoInShare inside the handler is
    * what takes it away if the gallery is genuinely gone.
@@ -7100,7 +7119,7 @@ async function routeRequest(
   );
 
   if (galleryRawConfirmMatch) {
-    if (request.method !== "GET") {
+    if (request.method !== "POST") {
       return jsonResponse({ error: "Method not allowed." }, 405);
     }
 
@@ -7110,7 +7129,7 @@ async function routeRequest(
       return jsonResponse({ error: "Not found." }, 404);
     }
 
-    return confirmRawRequest(request, env, ctx, url, shareToken);
+    return confirmRawRequest(request, env, ctx, shareToken);
   }
 
   const galleryCommentMatch = url.pathname.match(
