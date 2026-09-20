@@ -2665,7 +2665,9 @@ async function getAdminPhotoImage(
 }
 
 async function getGalleryPhotoImage(
+  request: Request,
   env: Env,
+  ctx: ExecutionContext,
   shareToken: string,
   photoId: string,
 ): Promise<Response> {
@@ -2675,7 +2677,8 @@ async function getGalleryPhotoImage(
     return jsonResponse({ error: "Photo not found." }, 404);
   }
 
-  return getStoredJpeg(env, photo.storageKey);
+  /* Cached only below the status gate above -- see getCachedStoredJpeg. */
+  return getCachedStoredJpeg(request, env, ctx, photo.storageKey);
 }
 
 async function deletePhoto(
@@ -3033,9 +3036,11 @@ async function getPublicGallery(
  * to a shoot the photographer considers withdrawn -- and getStoredJpeg sends a
  * one-year immutable Cache-Control, so those responses persist downstream too.
  * Filtering here covers the hearts, comments and all three image routes at
- * once. It is safe during upload: the event is still `draft` then, and only
- * the `/api/admin/*` image routes -- which do not come through here -- are used
- * by the dashboard and the iPad app.
+ * once, and every one of those image routes consults the colo cache strictly
+ * after this has returned a row (getCachedStoredJpeg), so a cached image can
+ * never outlive the gate that admitted it. It is safe during upload: the event
+ * is still `draft` then, and only the `/api/admin/*` image routes -- which do
+ * not come through here -- are used by the dashboard and the iPad app.
  */
 async function findPhotoInShare(
   env: Env,
@@ -4991,6 +4996,106 @@ async function getStoredJpeg(
   });
 }
 
+/*
+ * The cache key for one stored image, derived from its R2 key rather than from
+ * the request URL.
+ *
+ * R2 keys here are write-once. A proof carries a freshly minted photo UUID
+ * (`events/<event>/photos/<photo>/preview.jpg`), and finals, RAWs and variants
+ * each carry a fresh upload UUID, so re-uploading any of them writes a *new*
+ * key instead of new bytes under the old one. The bytes at a given key
+ * therefore never change, which is what makes a cached entry impossible to go
+ * stale and justifies the one-year immutable Cache-Control getStoredJpeg
+ * already sends.
+ *
+ * Keying on the object rather than the URL also means rotating an event's share
+ * token keeps hitting cache -- same bytes, same object -- without that being a
+ * leak: the new token still had to pass findPhotoInShare's status gate before
+ * anything looked in the cache at all.
+ *
+ * The synthetic path has to sit on the request's own origin, because
+ * caches.default only accepts keys within the zone serving the request. It is
+ * never routed; a cache key is a lookup identity, not a reachable URL.
+ */
+export function buildStoredImageCacheKey(
+  requestUrl: string,
+  storageKey: string,
+): string {
+  const cacheUrl = new URL(requestUrl);
+
+  cacheUrl.pathname = `/__image-object/${encodeURIComponent(storageKey)}`;
+  cacheUrl.search = "";
+  cacheUrl.hash = "";
+
+  return cacheUrl.toString();
+}
+
+/*
+ * getStoredJpeg, with the colo cache in front of the R2 read.
+ *
+ * Cloudflare only fills its edge cache from fetch() subrequests or from
+ * requests that miss the Worker entirely, and `run_worker_first: ["/api/*"]`
+ * (wrangler.jsonc) routes every image URL through this Worker -- so the
+ * immutable Cache-Control getStoredJpeg sets has only ever reached browsers.
+ * A gallery handed to a wedding party is the normal case: 40 guests x 300
+ * thumbnails is 12,000 R2 reads of about 300 distinct objects, and the browser
+ * cache does nothing to share them between viewers.
+ *
+ * **Only ever call this once the caller's access check has already passed for
+ * this request.** The cache is an R2 read optimization and never an
+ * authorization decision -- it cannot tell who is asking. Hoisting the lookup
+ * above findPhotoInShare, or folding it into getStoredJpeg where a caller could
+ * reach it without a gate, would resurrect #124: archiving an event would take
+ * the gallery page away while leaving every image URL serving from cache to
+ * anyone who kept a link.
+ *
+ * Neither half may break image serving. A cache miss is the status quo, and a
+ * failed read or write is logged and ignored rather than surfaced -- local
+ * `wrangler dev` treats caches.default as a no-op, and an image that uploaded
+ * fine must not 500 because the cache declined it.
+ */
+async function getCachedStoredJpeg(
+  request: Request,
+  env: TenantEnv,
+  ctx: ExecutionContext,
+  storageKey: string,
+): Promise<Response> {
+  const cache = caches.default;
+  const cacheKey = buildStoredImageCacheKey(request.url, storageKey);
+
+  try {
+    const cached = await cache.match(cacheKey);
+
+    if (cached) {
+      return cached;
+    }
+  } catch (error) {
+    console.error("Failed to read the image cache:", error);
+  }
+
+  const response = await getStoredJpeg(env, storageKey);
+
+  /*
+   * Only a served image is worth storing. A 404 here means the D1 row and R2
+   * disagree, which is a transient repair case, not something to pin for a
+   * year.
+   */
+  if (response.status === 200) {
+    /*
+     * The body streams and can only be consumed once, so the cache takes the
+     * clone and the caller takes the original. waitUntil keeps the write alive
+     * past the response.
+     */
+    ctx.waitUntil(
+      cache.put(cacheKey, response.clone()).catch((error: unknown) => {
+        console.error("Failed to write the image cache:", error);
+      }),
+    );
+  }
+
+  return response;
+}
+
 function toImageVariantRecord(
   row: PhotoVariantRow,
   imageBasePath: string,
@@ -5091,7 +5196,9 @@ async function getAdminFinalPhotoImage(
 }
 
 async function getGalleryFinalPhotoImage(
+  request: Request,
   env: Env,
+  ctx: ExecutionContext,
   shareToken: string,
   photoId: string,
 ): Promise<Response> {
@@ -5108,7 +5215,8 @@ async function getGalleryFinalPhotoImage(
     );
   }
 
-  return getStoredJpeg(env, photo.finalStorageKey);
+  /* Cached only below the status gate above -- see getCachedStoredJpeg. */
+  return getCachedStoredJpeg(request, env, ctx, photo.finalStorageKey);
 }
 
 /*
@@ -6322,7 +6430,9 @@ async function getAdminPhotoVariantImage(
 }
 
 async function getGalleryPhotoVariantImage(
+  request: Request,
   env: Env,
+  ctx: ExecutionContext,
   shareToken: string,
   photoId: string,
   sourceKind: PhotoVariantSource,
@@ -6348,7 +6458,13 @@ async function getGalleryPhotoVariantImage(
     );
   }
 
-  return getStoredJpeg(env, storageKey);
+  /*
+   * Cached only below the status gate above -- see getCachedStoredJpeg. The
+   * variant's own storage key already distinguishes original from final and
+   * thumbnail from preview, so no part of the key has to be spelled out again
+   * here.
+   */
+  return getCachedStoredJpeg(request, env, ctx, storageKey);
 }
 
 /*
@@ -6815,7 +6931,7 @@ async function routeRequest(
       return jsonResponse({ error: "Not found." }, 404);
     }
 
-    return getGalleryPhotoImage(env, shareToken, photoId);
+    return getGalleryPhotoImage(request, env, ctx, shareToken, photoId);
   }
 
   const galleryPhotoFinalImageMatch = url.pathname.match(
@@ -6834,7 +6950,7 @@ async function routeRequest(
       return jsonResponse({ error: "Not found." }, 404);
     }
 
-    return getGalleryFinalPhotoImage(env, shareToken, photoId);
+    return getGalleryFinalPhotoImage(request, env, ctx, shareToken, photoId);
   }
 
   const galleryPhotoVariantImageMatch = url.pathname.match(
@@ -6854,7 +6970,9 @@ async function routeRequest(
     }
 
     return getGalleryPhotoVariantImage(
+      request,
       env,
+      ctx,
       shareToken,
       photoId,
       galleryPhotoVariantImageMatch[3] as PhotoVariantSource,
