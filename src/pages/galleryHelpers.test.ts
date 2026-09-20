@@ -3,6 +3,7 @@ import {
   buildGalleryGroups,
   comparePhotos,
   createArchiveFilename,
+  createIndividualSaveEntries,
   createUniqueDownloadNames,
   formatApproximateByteSize,
   formatDayGroupLabel,
@@ -10,6 +11,7 @@ import {
   getDefaultPreviewUrl,
   getOrCreateVisitorToken,
   getRawRequestState,
+  isLikelyInAppBrowser,
   readStorageItem,
   sanitizeDownloadFilename,
   selectPhotosById,
@@ -425,5 +427,107 @@ describe("getOrCreateVisitorToken", () => {
     );
 
     expect(token).toBe("session-token");
+  });
+});
+
+describe("isLikelyInAppBrowser", () => {
+  it("recognises real browsers as capable of downloading", () => {
+    const realBrowsers = [
+      // iOS Safari
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+      // Chrome on iOS -- a WKWebView, but with a download manager of its own
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.0.0 Mobile/15E148 Safari/604.1",
+      // Firefox on iOS
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/133.0 Mobile/15E148 Safari/605.1.15",
+      // Chrome on Android
+      "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+      // Desktop Safari
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+    ];
+
+    for (const userAgent of realBrowsers) {
+      expect(isLikelyInAppBrowser(userAgent)).toBe(false);
+    }
+  });
+
+  it("recognises webviews that stamp a vendor token", () => {
+    const stampedWebviews = [
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 [FBAN/FBIOS;FBAV/450.0.0.0]",
+      "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36 Instagram 320.0.0.0",
+      "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 Mobile Safari/537.36 MicroMessenger/8.0.0",
+    ];
+
+    for (const userAgent of stampedWebviews) {
+      expect(isLikelyInAppBrowser(userAgent)).toBe(true);
+    }
+  });
+
+  /*
+   * The case #242 names as the one that defeats UA sniffing: Telegram's iOS
+   * browser adds no token of its own, so it is caught by the absence of a
+   * Safari token in WKWebView's untouched default UA instead.
+   */
+  it("recognises an untagged iOS webview by its missing Safari token", () => {
+    expect(
+      isLikelyInAppBrowser(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148",
+      ),
+    ).toBe(true);
+  });
+
+  it("recognises Android's system WebView marker", () => {
+    expect(
+      isLikelyInAppBrowser(
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP31; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0.0.0 Mobile Safari/537.36",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats an empty user agent as an ordinary browser", () => {
+    expect(isLikelyInAppBrowser("")).toBe(false);
+  });
+});
+
+describe("createIndividualSaveEntries", () => {
+  it("prefers the final photo's name and URL when one exists", () => {
+    const entries = createIndividualSaveEntries([
+      makePhoto({
+        id: "photo-1",
+        originalFilename: "DSC01015.ARW",
+        imageUrl: "https://example.com/original-1.jpg",
+        finalPhoto: {
+          originalFilename: "DSC01015-edited.jpg",
+          contentType: "image/jpeg",
+          byteSize: 2_000,
+          uploadedAt: "2026-01-02T00:00:00.000Z",
+          imageUrl: "https://example.com/final-1.jpg",
+          variants: { thumbnail: null, preview: null },
+        },
+      }),
+    ]);
+
+    expect(entries).toEqual([
+      {
+        photoId: "photo-1",
+        filename: "DSC01015-edited.jpg",
+        imageUrl: "https://example.com/final-1.jpg",
+      },
+    ]);
+  });
+
+  /*
+   * The per-photo list and the ZIP entries have to agree, so the same
+   * de-duplication the archive uses applies here too.
+   */
+  it("de-duplicates names the same way the archive does", () => {
+    const entries = createIndividualSaveEntries([
+      makePhoto({ id: "photo-1", originalFilename: "DSC01015.ARW" }),
+      makePhoto({ id: "photo-2", originalFilename: "DSC01015.ARW" }),
+    ]);
+
+    expect(entries.map((entry) => entry.filename)).toEqual([
+      "DSC01015.ARW",
+      "DSC01015 (2).ARW",
+    ]);
   });
 });

@@ -21,16 +21,18 @@ import type { PhotoVersion } from "../components/gallery/types";
 import {
   buildGalleryGroups,
   createArchiveFilename,
-  createUniqueDownloadNames,
+  createIndividualSaveEntries,
   formatApproximateByteSize,
   formatZipDownloadNotice,
   getDefaultPreviewUrl,
   getOrCreateVisitorToken,
   getRawRequestState,
+  isLikelyInAppBrowser,
   readStorageItem,
   selectPhotosById,
   writeStorageItem,
   type GalleryGrouping,
+  type IndividualSaveEntry,
 } from "./galleryHelpers";
 interface GalleryEvent {
   title: string;
@@ -93,6 +95,24 @@ const RAW_REQUEST_EMAIL_KEY = "pickpic-raw-request-email";
 const DOWNLOAD_STARTED_NOTICE =
   "Download started. If nothing appears in a few seconds, this browser may not support downloads -- try opening this page in Safari or Chrome instead.";
 
+/*
+ * The ZIP route gets its own wording because, unlike the RAW route, it now has
+ * somewhere to send a viewer whose download vanished: the per-photo save list
+ * is one tap away in the same banner.
+ */
+const ZIP_DOWNLOAD_STARTED_NOTICE =
+  "Download started. If no file appears in a few seconds, this browser is blocking it -- use “Save photos individually” below instead.";
+
+/*
+ * Shown when the browser looks like an in-app webview, where the ZIP is not
+ * built at all. Fetching every selected photo to assemble an archive the
+ * webview will silently drop can cost hundreds of megabytes of a phone's
+ * cellular data for nothing, so the detected case skips straight to the
+ * fallback rather than spending it first.
+ */
+const IN_APP_BROWSER_DOWNLOAD_NOTICE =
+  "This app's built-in browser cannot save a ZIP file, so the archive was skipped rather than downloading every photo for nothing. Save the photos individually below, or open this gallery in Safari or Chrome.";
+
 function GalleryPage({ shareToken }: GalleryPageProps) {
   const [visitorToken] = useState(() =>
     getOrCreateVisitorToken(
@@ -112,6 +132,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   const [downloadProgress, setDownloadProgress] = useState<{
     completed: number;
     total: number;
+  } | null>(null);
+  const [downloadFallback, setDownloadFallback] = useState<{
+    entries: IndividualSaveEntry[];
+    isOpen: boolean;
   } | null>(null);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
@@ -1064,23 +1088,35 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       return;
     }
 
-    const entryNames = createUniqueDownloadNames(
-      selectedPhotos.map(
-        (photo) => photo.finalPhoto?.originalFilename ?? photo.originalFilename,
-      ),
-    );
+    const saveEntries = createIndividualSaveEntries(selectedPhotos);
 
     setActionError(null);
     setActionNotice(null);
+
+    /*
+     * #242: an in-app webview swallows the blob: anchor below, so building the
+     * archive there would download every selected photo -- potentially
+     * hundreds of megabytes over cellular -- to produce a file the viewer can
+     * never receive. Detection is a heuristic and will miss some webviews, so
+     * it is only ever used to skip wasted work, never to withhold the ZIP from
+     * a browser that could have handled it; anything it misses still lands on
+     * the same fallback via the notice below.
+     */
+    if (isLikelyInAppBrowser(window.navigator.userAgent)) {
+      setDownloadFallback({ entries: saveEntries, isOpen: true });
+      setActionNotice(IN_APP_BROWSER_DOWNLOAD_NOTICE);
+      return;
+    }
+
+    setDownloadFallback(null);
     setDownloadProgress({ completed: 0, total: selectedPhotos.length });
     try {
       const failedFilenames: string[] = [];
 
       async function* createZipInputs() {
         for (const [index, photo] of selectedPhotos.entries()) {
-          const downloadUrl = photo.finalPhoto?.imageUrl ?? photo.imageUrl;
-          const downloadFilename =
-            photo.finalPhoto?.originalFilename ?? photo.originalFilename;
+          const { filename: downloadFilename, imageUrl: downloadUrl } =
+            saveEntries[index];
           const downloadDate = photo.finalPhoto?.uploadedAt ?? photo.createdAt;
 
           /*
@@ -1101,7 +1137,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
             failedFilenames.push(downloadFilename);
           } else {
             yield {
-              name: entryNames[index],
+              name: downloadFilename,
               lastModified: new Date(downloadDate),
               input: response.body,
             };
@@ -1139,8 +1175,17 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       link.remove();
 
       window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+
+      /*
+       * Offered rather than opened: the anchor click above works in an
+       * ordinary browser, and detection cannot prove this one is ordinary --
+       * it can only fail to recognise it. Keeping the list behind one tap is
+       * what covers the webviews the heuristic misses, Telegram's iOS browser
+       * included if it ever starts carrying a Safari token.
+       */
+      setDownloadFallback({ entries: saveEntries, isOpen: false });
       setActionNotice(
-        formatZipDownloadNotice(DOWNLOAD_STARTED_NOTICE, failedFilenames),
+        formatZipDownloadNotice(ZIP_DOWNLOAD_STARTED_NOTICE, failedFilenames),
       );
     } catch (caughtError) {
       setActionError(
@@ -1299,10 +1344,73 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
         {actionNotice && (
           <div className="gallery-action-notice" role="status">
             <span>{actionNotice}</span>
-            <button type="button" onClick={() => setActionNotice(null)}>
-              Dismiss
-            </button>
+            <div className="gallery-action-notice-actions">
+              {downloadFallback !== null && !downloadFallback.isOpen && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDownloadFallback((current) =>
+                      current === null ? current : { ...current, isOpen: true },
+                    )
+                  }
+                >
+                  Save photos individually
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setActionNotice(null);
+                  /*
+                   * Dismissing the "did it work?" banner answers it: the
+                   * offer of a fallback goes with it, and pressing Download
+                   * again brings both back.
+                   */
+                  setDownloadFallback((current) =>
+                    current?.isOpen === true ? current : null,
+                  );
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
+        )}
+
+        {downloadFallback?.isOpen === true && (
+          <section
+            className="gallery-individual-saves"
+            aria-label="Save photos individually"
+          >
+            <div className="gallery-individual-saves-header">
+              <strong>Save photos individually</strong>
+              <button
+                type="button"
+                onClick={() => setDownloadFallback(null)}
+                aria-label="Close the individual save list"
+              >
+                Close
+              </button>
+            </div>
+            <p>
+              Each link opens the full-size photo. On a phone, press and hold
+              the image and choose Save to Photos.
+            </p>
+            <ol className="gallery-individual-saves-list">
+              {downloadFallback.entries.map((entry) => (
+                <li key={entry.photoId}>
+                  <a
+                    href={entry.imageUrl}
+                    download={entry.filename}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {entry.filename}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </section>
         )}
 
         {isSelecting && (

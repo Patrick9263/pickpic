@@ -323,6 +323,109 @@ export function formatZipDownloadNotice(
   return `${baseNotice} ${failedFilenames.length} ${noun} could not be included: ${failedFilenames.join(", ")}.`;
 }
 
+/*
+ * Vendor tokens embedders stamp into the user agent. Lowercased, and matched
+ * as substrings, because the surrounding syntax varies between apps and
+ * versions. This list is allowed to be incomplete -- see
+ * isLikelyInAppBrowser below for why being wrong is survivable.
+ */
+const IN_APP_BROWSER_UA_TOKENS = [
+  "fban", // Facebook iOS
+  "fbav", // Facebook Android
+  "fb_iab", // Facebook in-app browser
+  "instagram",
+  "line/",
+  "micromessenger", // WeChat
+  "whatsapp",
+  "snapchat",
+  "twitter",
+  "linkedinapp",
+  "pinterest",
+  "tiktok",
+  "musical_ly", // older TikTok builds
+  "gsa/", // Google app
+];
+
+/*
+ * In-app browsers -- the webviews chat apps open links in -- commonly swallow
+ * a programmatic download of a blob: URL with no exception, no rejected
+ * promise and nothing a catch block can see (#218). Share links normally
+ * arrive through a chat app, so for this gallery that is the ordinary case
+ * rather than an edge one.
+ *
+ * Three signals, because no single one covers the field:
+ *
+ * 1. A vendor token (above). Cheap and exact wherever the embedder stamps one.
+ * 2. Android's `; wv` marker, which the system WebView adds and Chrome does
+ *    not.
+ * 3. An iOS WebKit UA carrying `Mobile/` but *no* `Safari/` token. #242 calls
+ *    out Telegram's iOS browser as the case that defeats UA sniffing, and it
+ *    does defeat (1) -- it stamps nothing. But it also leaves WKWebView's
+ *    default UA untouched, and that default has no `Safari/` token, while real
+ *    Mobile Safari always has one and every third-party iOS browser (CriOS,
+ *    FxiOS, EdgiOS) keeps it and adds its own. So the *absence* is the signal
+ *    the presence of a vendor token isn't.
+ *
+ * This stays a heuristic and it is allowed to be wrong in both directions,
+ * which is exactly why nothing here blocks or gates a download. A false
+ * positive costs the viewer a per-photo save list instead of a ZIP; a false
+ * negative leaves them where they already were, with that same list one tap
+ * away behind the download notice.
+ */
+export function isLikelyInAppBrowser(userAgent: string): boolean {
+  const normalized = userAgent.toLowerCase();
+
+  if (normalized === "") {
+    return false;
+  }
+
+  if (IN_APP_BROWSER_UA_TOKENS.some((token) => normalized.includes(token))) {
+    return true;
+  }
+
+  if (normalized.includes("android") && /;\s*wv\b/.test(normalized)) {
+    return true;
+  }
+
+  const isIosWebKit =
+    /iphone|ipad|ipod/.test(normalized) && normalized.includes("applewebkit");
+
+  return (
+    isIosWebKit &&
+    normalized.includes("mobile/") &&
+    !normalized.includes("safari/")
+  );
+}
+
+export interface IndividualSaveEntry {
+  photoId: string;
+  filename: string;
+  imageUrl: string;
+}
+
+/*
+ * The per-photo fallback and the ZIP have to name and address exactly the same
+ * files, so both read from here rather than each picking `finalPhoto ?? photo`
+ * for themselves. These URLs need no visitor header (the ZIP already fetches
+ * them bare), which is the whole reason the fallback can be a plain anchor a
+ * webview will honour where it silently drops a blob:.
+ */
+export function createIndividualSaveEntries(
+  photos: GalleryPhotoRecord[],
+): IndividualSaveEntry[] {
+  const filenames = createUniqueDownloadNames(
+    photos.map(
+      (photo) => photo.finalPhoto?.originalFilename ?? photo.originalFilename,
+    ),
+  );
+
+  return photos.map((photo, index) => ({
+    photoId: photo.id,
+    filename: filenames[index],
+    imageUrl: photo.finalPhoto?.imageUrl ?? photo.imageUrl,
+  }));
+}
+
 export function getDefaultPreviewUrl(photo: GalleryPhotoRecord): string {
   if (photo.finalPhoto) {
     return (

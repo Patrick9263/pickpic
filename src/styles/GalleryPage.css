@@ -243,6 +243,71 @@
   text-decoration: underline;
 }
 
+.gallery-action-notice-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.gallery-individual-saves {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+}
+
+.gallery-individual-saves-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.gallery-individual-saves-header strong {
+  color: var(--color-text);
+  font-size: 0.88rem;
+}
+
+.gallery-individual-saves-header button {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  padding: 4px;
+  text-decoration: underline;
+}
+
+.gallery-individual-saves p {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  margin: 6px 0 4px;
+}
+
+.gallery-individual-saves-list {
+  display: grid;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/*
+ * 44px so a one-handed tap on a phone hits the link rather than its
+ * neighbour -- this list is mostly reached on the devices where the ZIP
+ * failed, which are phones (#292).
+ */
+.gallery-individual-saves-list a {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  display: flex;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+  padding: 4px 0;
+}
+
+.gallery-individual-saves-list li:last-child a {
+  border-bottom: 0;
+}
+
 .gallery-selection-bar {
   align-items: center;
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
