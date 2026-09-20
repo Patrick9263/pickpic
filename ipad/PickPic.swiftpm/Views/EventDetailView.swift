@@ -669,6 +669,35 @@ struct EventDetailView: View {
                 job.eventID == event.id
             }
         }
+        /*
+         * The photo/liked/final counts in dashboardStatistics (and the
+         * copy of them the sidebar shows) come from the server, not from
+         * uploadQueue -- fetched only by loadDashboard(), which otherwise
+         * only runs on .onAppear and pull-to-refresh. Nothing was
+         * re-fetching it as proofs actually landed, so those counts sat
+         * frozen at whatever they were when the screen was last opened
+         * until the user navigated away and back (#315). Poll while this
+         * event has unfinished jobs so they move on their own during a
+         * run; restarting the task on the boolean's id means it stops
+         * cleanly the moment there is nothing left to upload.
+         */
+        .task(id: unfinishedEventJobCount > 0) {
+            guard unfinishedEventJobCount > 0 else {
+                return
+            }
+
+            while !Task.isCancelled {
+                try? await Task.sleep(
+                    for: .seconds(5)
+                )
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                await loadDashboard()
+            }
+        }
         .navigationTitle(event.title)
         .navigationBarTitleDisplayMode(.inline)
         /*
