@@ -679,7 +679,11 @@ struct EventDetailView: View {
          * until the user navigated away and back (#315). Poll while this
          * event has unfinished jobs so they move on their own during a
          * run; restarting the task on the boolean's id means it stops
-         * cleanly the moment there is nothing left to upload.
+         * cleanly the moment there is nothing left to upload. The fetch
+         * happens *before* each sleep (not after) because a small batch
+         * can finish uploading in well under the interval -- sleeping
+         * first would let the task get cancelled on completion without
+         * ever having fetched once.
          */
         .task(id: unfinishedEventJobCount > 0) {
             guard unfinishedEventJobCount > 0 else {
@@ -687,14 +691,26 @@ struct EventDetailView: View {
             }
 
             while !Task.isCancelled {
+                await loadDashboard()
+
                 try? await Task.sleep(
                     for: .seconds(5)
                 )
+            }
+        }
+        /*
+         * Catches the same fast-batch case from the other side: if the
+         * run finished between two polls above (or entirely within one
+         * interval), this fires the moment unfinishedEventJobCount drops
+         * to zero so completion is reflected immediately rather than on
+         * whatever the next poll or screen visit would have been.
+         */
+        .onChange(of: unfinishedEventJobCount) { oldCount, newCount in
+            guard oldCount > 0, newCount == 0 else {
+                return
+            }
 
-                guard !Task.isCancelled else {
-                    return
-                }
-
+            Task {
                 await loadDashboard()
             }
         }
