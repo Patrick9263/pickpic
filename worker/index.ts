@@ -2076,6 +2076,19 @@ function wouldExceedStorageCap(
 }
 
 /*
+ * `Number(null)` is 0, so reading a missing Content-Length header straight
+ * through Number() reports a declared size of zero bytes rather than "no
+ * declared size" -- silently passing every pre-upload size/cap check below
+ * regardless of the account's actual headroom. NaN (the same as a garbage
+ * header) makes those checks skip cleanly instead of trusting a false zero.
+ */
+function parseDeclaredContentLength(request: Request): number {
+  const header = request.headers.get("Content-Length");
+
+  return header === null ? NaN : Number(header);
+}
+
+/*
  * The running counter enforcement reads (AccountRecord.storageBytes) is
  * maintained here rather than by a trigger so every adjustment site is a
  * grep-able call. Clamped to zero so a missed decrement elsewhere can't
@@ -2333,7 +2346,7 @@ async function createPhoto(
 
   const { capturedAt, latitude, longitude } = metadataResult.metadata;
 
-  const declaredSize = Number(request.headers.get("Content-Length"));
+  const declaredSize = parseDeclaredContentLength(request);
 
   if (Number.isFinite(declaredSize) && declaredSize > MAX_JPEG_BYTES) {
     return jsonResponse({ error: "The JPEG must be 25 MB or smaller." }, 413);
@@ -5576,7 +5589,7 @@ async function uploadFinalPhoto(
     return jsonResponse({ error: "The final image body is required." }, 400);
   }
 
-  const declaredSize = Number(request.headers.get("Content-Length"));
+  const declaredSize = parseDeclaredContentLength(request);
 
   if (Number.isFinite(declaredSize) && declaredSize > MAX_FINAL_JPEG_BYTES) {
     return jsonResponse(
@@ -5835,7 +5848,7 @@ async function uploadRawPhoto(
     return jsonResponse({ error: "The RAW file body is required." }, 400);
   }
 
-  const declaredSize = Number(request.headers.get("Content-Length"));
+  const declaredSize = parseDeclaredContentLength(request);
 
   if (Number.isFinite(declaredSize) && declaredSize > MAX_RAW_BYTES) {
     return jsonResponse({ error: RAW_TOO_LARGE_MESSAGE }, 413);
