@@ -900,8 +900,9 @@ fi
 # Temporary: Patrick asked to pause new-issue discovery -- both the weekday follow-on analysis and
 # the surplus sweep -- until the existing ready-issue backlog is caught up and core functionality
 # ships. Ready-issue implementation above is unaffected; this only stops the job from adding more to
-# the pile. Flip back to "yes" to resume.
-FIND_NEW_ISSUES="no"
+# the pile. Flip the default below back to "yes" to resume; overridable via env so
+# scripts/review/tests/run-review.bats can still exercise the analyse/sweep logic underneath.
+FIND_NEW_ISSUES="${FIND_NEW_ISSUES:-no}"
 if [[ "$FIND_NEW_ISSUES" != "yes" ]]; then
   [[ "${DID_IMPLEMENT:-no}" != "yes" ]] && RUN_OUTCOME="skip-new-issues-paused"
   log "SKIP: new-issue discovery (analysis/sweep) is paused for now -- set FIND_NEW_ISSUES=yes above to resume"

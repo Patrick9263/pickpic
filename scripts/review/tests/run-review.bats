@@ -35,6 +35,12 @@ setup() {
     FAKE_GH_ISSUE_LABELS FAKE_UNREAD_FINDINGS
   export FAKE_SESSION_PCT=10
 
+  # run-review.sh currently defaults new-issue discovery (analyse/sweep) off -- Patrick asked for
+  # it paused until the ready-issue backlog is caught up. That's a temporary business toggle, not
+  # something this suite's decide_depth/sweep-sizing/etc. tests should have to know about, so default
+  # it back on here and let the dedicated pause test below override it.
+  export FIND_NEW_ISSUES=yes
+
   # Stands in for the real `claude` binary. The script only ever calls `claude -p "/usage"` before
   # DRY_RUN is checked (that's how it learns SESSION_PCT/WEEK_PCT) -- everything else it does under
   # --dry-run is pure bash. Percentages come from FAKE_SESSION_PCT/FAKE_WEEK_PCT, set per test.
@@ -253,6 +259,28 @@ setup() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"not implementing this run: weekly at 72%"* ]]
   [[ "$output" == *"kind=analyse target=test-area"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# FIND_NEW_ISSUES: the temporary pause on analysis/sweep while the ready-issue backlog is caught up.
+# setup() above defaults this on for every other test in the suite; these two override it back off
+# to cover the paused state itself.
+# ---------------------------------------------------------------------------
+
+@test "new-issue discovery paused: daily mode with an empty ready queue skips analysis" {
+  FIND_NEW_ISSUES=no FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 \
+    run bash "$REVIEW_SCRIPT" daily --target test-area --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SKIP: new-issue discovery"* ]]
+  [[ "$output" != *"kind=analyse"* ]]
+}
+
+@test "new-issue discovery paused: surplus mode with an empty ready queue skips the sweep" {
+  FIND_NEW_ISSUES=no FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 \
+    run bash "$REVIEW_SCRIPT" surplus --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SKIP: new-issue discovery"* ]]
+  [[ "$output" != *"kind=sweep"* ]]
 }
 
 # ---------------------------------------------------------------------------
