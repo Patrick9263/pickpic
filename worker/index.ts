@@ -1903,20 +1903,6 @@ async function deleteEvent(
   const { totalBytes } = await getEventStorageTotals(scope, eventId);
 
   try {
-    await deleteStorageObjectsByPrefix(env, `events/${eventId}/`);
-  } catch (error) {
-    console.error("Unable to delete event images:", error);
-
-    return jsonResponse(
-      {
-        error:
-          "The event images could not be deleted. The event was not removed.",
-      },
-      500,
-    );
-  }
-
-  try {
     await scope.database
       .prepare(
         `
@@ -1931,14 +1917,23 @@ async function deleteEvent(
 
     return jsonResponse(
       {
-        error:
-          "The images were deleted, but the event record could not be removed.",
+        error: "The event record could not be deleted. No images were removed.",
       },
       500,
     );
   }
 
   await adjustAccountStorageBytes(scope, -totalBytes);
+
+  try {
+    await deleteStorageObjectsByPrefix(env, `events/${eventId}/`);
+  } catch (error) {
+    // The event record is already gone, so this only leaves orphaned R2
+    // objects behind rather than a gallery with broken image rows -- the
+    // cheaper failure mode. Reconciling orphans is #230/#249's job, not this
+    // request's.
+    console.error("Unable to delete event images:", error);
+  }
 
   return jsonResponse({
     deleted: true,
@@ -1950,10 +1945,11 @@ async function deleteEvent(
  * Empties an event without removing it, so a shoot uploaded against the
  * wrong event can be re-uploaded into the right one.
  *
- * R2 objects go first: an orphaned object costs storage but is invisible,
- * whereas a photo row whose image is gone renders as a broken gallery. The
- * hearts, comments, and variant rows follow the photos through their
- * ON DELETE CASCADE foreign keys, so one delete covers them.
+ * The photo rows go first: a photo row whose image is gone renders as a
+ * broken gallery, whereas an orphaned R2 object just costs invisible
+ * storage -- the cheaper failure to risk here, and #230/#249's job to
+ * reconcile. The hearts, comments, and variant rows follow the photos
+ * through their ON DELETE CASCADE foreign keys, so one delete covers them.
  */
 async function clearEventPhotos(
   env: TenantEnv,
@@ -1990,19 +1986,6 @@ async function clearEventPhotos(
   }
 
   try {
-    await deleteStorageObjectsByPrefix(env, `events/${eventId}/photos/`);
-  } catch (error) {
-    console.error("Unable to delete event photo images:", error);
-
-    return jsonResponse(
-      {
-        error: "The event images could not be deleted. No photos were removed.",
-      },
-      500,
-    );
-  }
-
-  try {
     await scope.database
       .prepare(
         `
@@ -2018,13 +2001,23 @@ async function clearEventPhotos(
     return jsonResponse(
       {
         error:
-          "The images were deleted, but the photo records could not be removed. Try again.",
+          "The photo records could not be deleted. No images were removed.",
       },
       500,
     );
   }
 
   await adjustAccountStorageBytes(scope, -totalBytes);
+
+  try {
+    await deleteStorageObjectsByPrefix(env, `events/${eventId}/photos/`);
+  } catch (error) {
+    // The photo records are already gone, so this only leaves orphaned R2
+    // objects behind rather than a gallery with broken image rows -- the
+    // cheaper failure mode. Reconciling orphans is #230/#249's job, not this
+    // request's.
+    console.error("Unable to delete event photo images:", error);
+  }
 
   return jsonResponse({
     eventId,
