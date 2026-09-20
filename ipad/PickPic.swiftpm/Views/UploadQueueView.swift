@@ -20,9 +20,24 @@ struct UploadQueueView: View {
     @State private var showingFolderRelinker = false
     @State private var showingRelinkError = false
     @State private var relinkErrorMessage = ""
-    
+
+    /*
+     * Mirrors uploadQueue.jobs, filtered to this event. Reading
+     * uploadQueue.jobs(for:) directly from the environment object here
+     * has the same failure mode #315 found in EventListView's sidebar:
+     * NavigationSplitView does not reliably re-run this view's body from
+     * the @EnvironmentObject publish alone while its column sits
+     * unfocused, so per-photo progress here could go stale until some
+     * unrelated navigation forced a redraw. The explicit onReceive
+     * subscription below still delivers while unfocused, and writing
+     * into this @State is what reliably forces SwiftUI to redraw the
+     * rows that read it.
+     */
+    @State private var eventJobsState:
+    [UploadJob] = []
+
     private var eventJobs: [UploadJob] {
-        uploadQueue.jobs(for: event.id)
+        eventJobsState
     }
 
     private var incompleteEventJobs: [UploadJob] {
@@ -293,6 +308,11 @@ struct UploadQueueView: View {
         } message: {
             Text(relinkErrorMessage)
         }
+        .onReceive(uploadQueue.$jobs) { jobs in
+            eventJobsState = jobs.filter { job in
+                job.eventID == event.id
+            }
+        }
     }
     
     @ViewBuilder
@@ -435,14 +455,52 @@ private struct UploadJobRow: View {
 
     @State private var folderIsAccessible:
     Bool?
-    
+
+    /*
+     * Small test photos can clear an entire step -- sometimes an entire
+     * photo -- in well under this delay, so raw currentStepTitle changes
+     * faster than a person can read it (#315). Only committing a value
+     * after it has held for a bit turns that into one steady caption per
+     * photo instead of a flicker; a .task(id:) already cancels its
+     * previous instance whenever the id changes, so a value that doesn't
+     * survive the delay is simply never shown.
+     */
+    private static let stepTitleMinimumDisplayDuration:
+    Duration = .milliseconds(350)
+
+    @State private var displayedStepTitle =
+    UploadOperationStep.uploadCaptionTitle(for: nil)
+
+    /*
+     * activeBackgroundTransfer is cleared between each network step of a
+     * photo (proof upload, then variant upload) while the purely local,
+     * sub-frame variant-generation step runs in between -- so the "iPadOS
+     * background upload active" banner below was collapsing and
+     * reappearing once per photo, a layout jump too brief for a 30fps
+     * screen recording to even catch but very visible live (#315).
+     * Showing it immediately but only hiding it after a grace period
+     * bridges that gap: a background transfer that starts again before
+     * the delay elapses cancels the pending hide via .task(id:), so the
+     * banner just stays up across it.
+     */
+    private static let backgroundTransferHideDelay:
+    Duration = .milliseconds(400)
+
+    @State private var isBackgroundTransferBannerVisible = false
+
     private var capturedAtCount: Int {
         job.preparedPhotos.filter { photo in
             photo.metadata.capturedAt != nil
         }
         .count
     }
-    
+
+    private var currentStepTitle: String {
+        UploadOperationStep.uploadCaptionTitle(
+            for: job.uploadProgress.currentStep
+        )
+    }
+
     private var locationCount: Int {
         job.preparedPhotos.filter { photo in
             photo.metadata.latitude != nil
@@ -764,8 +822,42 @@ private struct UploadJobRow: View {
                         job.folderBookmarkData
                 )
         }
+        .task(id: currentStepTitle) {
+            try? await Task.sleep(
+                for: Self.stepTitleMinimumDisplayDuration
+            )
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            displayedStepTitle = currentStepTitle
+        }
+        .task(
+            id: job.uploadProgress.activeBackgroundTransfer
+                != nil
+        ) {
+            let isActive =
+            job.uploadProgress.activeBackgroundTransfer
+            != nil
+
+            guard isActive else {
+                try? await Task.sleep(
+                    for: Self.backgroundTransferHideDelay
+                )
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                isBackgroundTransferBannerVisible = false
+                return
+            }
+
+            isBackgroundTransferBannerVisible = true
+        }
     }
-    
+
     @ViewBuilder
     private var continuedProcessingNotice: some View {
         if let processing = job.continuedProcessing {
@@ -1349,9 +1441,7 @@ private struct UploadJobRow: View {
                         .lineLimit(1)
                 }
 
-                if job.uploadProgress
-                    .activeBackgroundTransfer != nil
-                {
+                if isBackgroundTransferBannerVisible {
                     Label(
                         "iPadOS background upload active",
                         systemImage: "arrow.up.circle.fill"
@@ -1389,10 +1479,7 @@ private struct UploadJobRow: View {
                         showsEstimate: false
                     )
                 } else {
-                    Text(
-                        job.uploadProgress.currentStep?.title
-                        ?? "Uploading prepared JPEG…"
-                    )
+                    Text(displayedStepTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

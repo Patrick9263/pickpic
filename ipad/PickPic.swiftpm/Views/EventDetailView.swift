@@ -22,9 +22,24 @@ struct EventDetailView: View {
     
     @EnvironmentObject private var eventFolders:
     EventFolderStore
-    
+
     @Environment(\.dismiss) private var dismiss
-    
+
+    /*
+     * Mirrors uploadQueue.jobs, filtered to this event. Reading
+     * uploadQueue.jobs(for:) directly from the environment object here
+     * has the same failure mode #315 found in EventListView's sidebar:
+     * NavigationSplitView does not reliably re-run this view's body from
+     * the @EnvironmentObject publish alone while its column sits
+     * unfocused, so a stage transition landing then could leave the
+     * primary-action card and progress state stale until some unrelated
+     * navigation forced a redraw. The explicit onReceive subscription
+     * below still delivers while unfocused, and writing into this @State
+     * is what reliably forces SwiftUI to redraw the views that read it.
+     */
+    @State private var eventJobsState:
+    [UploadJob] = []
+
     @State private var showingRenameEvent = false
     @State private var showingDeleteConfirmation = false
     @State private var isDeleting = false
@@ -207,9 +222,7 @@ struct EventDetailView: View {
     }
 
     private var eventJobs: [UploadJob] {
-        uploadQueue.jobs(
-            for: event.id
-        )
+        eventJobsState
     }
     
     private var unfinishedEventJobCount: Int {
@@ -647,6 +660,56 @@ struct EventDetailView: View {
             await loadDashboard()
         }
         .onAppear {
+            Task {
+                await loadDashboard()
+            }
+        }
+        .onReceive(uploadQueue.$jobs) { jobs in
+            eventJobsState = jobs.filter { job in
+                job.eventID == event.id
+            }
+        }
+        /*
+         * The photo/liked/final counts in dashboardStatistics (and the
+         * copy of them the sidebar shows) come from the server, not from
+         * uploadQueue -- fetched only by loadDashboard(), which otherwise
+         * only runs on .onAppear and pull-to-refresh. Nothing was
+         * re-fetching it as proofs actually landed, so those counts sat
+         * frozen at whatever they were when the screen was last opened
+         * until the user navigated away and back (#315). Poll while this
+         * event has unfinished jobs so they move on their own during a
+         * run; restarting the task on the boolean's id means it stops
+         * cleanly the moment there is nothing left to upload. The fetch
+         * happens *before* each sleep (not after) because a small batch
+         * can finish uploading in well under the interval -- sleeping
+         * first would let the task get cancelled on completion without
+         * ever having fetched once.
+         */
+        .task(id: unfinishedEventJobCount > 0) {
+            guard unfinishedEventJobCount > 0 else {
+                return
+            }
+
+            while !Task.isCancelled {
+                await loadDashboard()
+
+                try? await Task.sleep(
+                    for: .seconds(5)
+                )
+            }
+        }
+        /*
+         * Catches the same fast-batch case from the other side: if the
+         * run finished between two polls above (or entirely within one
+         * interval), this fires the moment unfinishedEventJobCount drops
+         * to zero so completion is reflected immediately rather than on
+         * whatever the next poll or screen visit would have been.
+         */
+        .onChange(of: unfinishedEventJobCount) { oldCount, newCount in
+            guard oldCount > 0, newCount == 0 else {
+                return
+            }
+
             Task {
                 await loadDashboard()
             }

@@ -1,5 +1,59 @@
 import SwiftUI
 
+/*
+ * Pulled out of the ForEach below so the counting logic is testable
+ * without SwiftUI, and so its Equatable value can be folded into each
+ * row's `.id()`. `List`'s diffable snapshot decides whether a row needs
+ * to reload by hashing the PickPicEvent it was built from, and a job
+ * finishing or reconnecting doesn't change that event -- so without an
+ * `.id()` that also depends on these counts, a badge could go stale on
+ * screen until something else (like pull-to-refresh replacing the whole
+ * events array) forced every row to reload. See #315.
+ */
+struct EventJobCounts: Equatable {
+    let unfinishedJobCount: Int
+    let stalledJobCount: Int
+    let activeJobCount: Int
+
+    init(jobs: [UploadJob]) {
+        unfinishedJobCount = jobs.filter { job in
+            job.stage != .completed
+        }
+        .count
+
+        /*
+         * A job waiting on connectivity also carries a lastFailure, but
+         * it resumes on its own and is not something to walk back to the
+         * iPad for. Only a job that has stopped for good counts as
+         * needing attention.
+         */
+        stalledJobCount = jobs.filter { job in
+            job.stage == .failed
+            || (
+                job.stage == .readyToUpload
+                && job.uploadProgress.lastFailure != nil
+                && !job.uploadProgress.isWaitingForConnectivity
+            )
+        }
+        .count
+
+        activeJobCount = jobs.filter { job in
+            switch job.stage {
+            case .preparing, .preflighting, .converting, .uploading:
+                return true
+
+            case .queued, .prepared, .readyToUpload, .completed, .failed:
+                return false
+            }
+        }
+        .count
+    }
+
+    var rowIdentitySuffix: String {
+        "\(unfinishedJobCount)-\(stalledJobCount)-\(activeJobCount)"
+    }
+}
+
 struct EventListView: View {
     let events: [PickPicEvent]
 
@@ -24,6 +78,20 @@ struct EventListView: View {
 
     @State private var showingCreateEvent = false
     @State private var searchText = ""
+
+    /*
+     * Mirrors uploadQueue.jobs, grouped by event. NavigationSplitView does
+     * not reliably re-run this view's body from the @EnvironmentObject
+     * publish alone once an event's detail is pushed on top of it in the
+     * sidebar column -- a stage transition landing while the sidebar sits
+     * unfocused could leave every row's badge stale until some unrelated
+     * navigation change forced the whole window to redraw (#315). The
+     * explicit onReceive subscription below still delivers while
+     * unfocused, and writing into this @State is what reliably forces
+     * SwiftUI to redraw the rows that read it.
+     */
+    @State private var jobsByEventID:
+    [String: [UploadJob]] = [:]
 
     /*
      * Filter and sort persist across launches because they are the only
@@ -158,71 +226,36 @@ struct EventListView: View {
                      * pushing over itself. In compact width the split
                      * view collapses and this still reads as a push.
                      */
-                    Group {
-                        let jobs = uploadQueue.jobs(
-                            for: event.id
-                        )
+                    let counts = EventJobCounts(
+                        jobs: jobsByEventID[event.id]
+                        ?? []
+                    )
 
-                        EventRow(
-                            event: event,
-                            statistics:
-                                statisticsByEventID[
-                                    event.id
-                                ],
-                            statisticsAreLoading:
-                                isLoadingStatistics
-                                && statisticsByEventID[
-                                    event.id
-                                ] == nil,
-                            statisticsUnavailable:
-                                statisticsFailedEventIDs
-                                .contains(event.id),
-                            unfinishedJobCount:
-                                jobs.filter { job in
-                                    job.stage != .completed
-                                }
-                                .count,
-                            /*
-                             * A job waiting on connectivity also carries
-                             * a lastFailure, but it resumes on its own
-                             * and is not something to walk back to the
-                             * iPad for. Only a job that has stopped for
-                             * good counts as needing attention.
-                             */
-                            stalledJobCount:
-                                jobs.filter { job in
-                                    job.stage == .failed
-                                    || (
-                                        job.stage
-                                            == .readyToUpload
-                                        && job.uploadProgress
-                                            .lastFailure != nil
-                                        && !job.uploadProgress
-                                            .isWaitingForConnectivity
-                                    )
-                                }
-                                .count,
-                            activeJobCount:
-                                jobs.filter { job in
-                                    switch job.stage {
-                                    case .preparing,
-                                            .preflighting,
-                                            .converting,
-                                            .uploading:
-                                        return true
-
-                                    case .queued,
-                                            .prepared,
-                                            .readyToUpload,
-                                            .completed,
-                                            .failed:
-                                        return false
-                                    }
-                                }
-                                .count
-                        )
-                    }
+                    EventRow(
+                        event: event,
+                        statistics:
+                            statisticsByEventID[
+                                event.id
+                            ],
+                        statisticsAreLoading:
+                            isLoadingStatistics
+                            && statisticsByEventID[
+                                event.id
+                            ] == nil,
+                        statisticsUnavailable:
+                            statisticsFailedEventIDs
+                            .contains(event.id),
+                        unfinishedJobCount:
+                            counts.unfinishedJobCount,
+                        stalledJobCount:
+                            counts.stalledJobCount,
+                        activeJobCount:
+                            counts.activeJobCount
+                    )
                     .tag(event.id)
+                    .id(
+                        "\(event.id)#\(counts.rowIdentitySuffix)"
+                    )
                 }
             }
         }
@@ -239,6 +272,12 @@ struct EventListView: View {
         )
         .refreshable {
             await onRefresh()
+        }
+        .onReceive(uploadQueue.$jobs) { jobs in
+            jobsByEventID = Dictionary(
+                grouping: jobs,
+                by: \.eventID
+            )
         }
         .toolbar {
             ToolbarItem(
@@ -355,9 +394,7 @@ struct EventListView: View {
     private func unfinishedJobCount(
         for eventID: String
     ) -> Int {
-        uploadQueue.jobs(
-            for: eventID
-        )
+        (jobsByEventID[eventID] ?? [])
         .filter { job in
             job.stage != .completed
         }
