@@ -22,6 +22,27 @@ enum UploadOperationStep:
             return "Uploading thumbnail and preview"
         }
     }
+
+    /*
+     * .variantGeneration is local canvas work on a single already-loaded
+     * image and typically finishes well under a frame, so its own title
+     * only ever flashes on screen before .variantUpload replaces it --
+     * unreadable, not informative (#315). Reporting .variantUpload's
+     * title for both steps means the caption settles on one steady
+     * message for the whole thumbnail/preview phase instead of
+     * flickering through it.
+     */
+    static func uploadCaptionTitle(
+        for step: UploadOperationStep?
+    ) -> String {
+        let displayedStep =
+        step == .variantGeneration
+        ? .variantUpload
+        : step
+
+        return displayedStep?.title
+        ?? "Uploading prepared JPEG…"
+    }
 }
 
 struct UploadFailure:

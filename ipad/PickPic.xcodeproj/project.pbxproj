@@ -78,6 +78,7 @@
 		CDFF002A0000000000000000 /* UploadQueueRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF002B0000000000000000 /* UploadQueueRecoveryTests.swift */; };
 		CDFF002C0000000000000000 /* BackgroundUploadCompletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF002D0000000000000000 /* BackgroundUploadCompletionTests.swift */; };
 		CDFF002F0000000000000000 /* EventJobCountsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF002E0000000000000000 /* EventJobCountsTests.swift */; };
+		CDFF00300000000000000000 /* UploadOperationStepTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00310000000000000000 /* UploadOperationStepTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -150,6 +151,7 @@
 		CDFF002B0000000000000000 /* UploadQueueRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueRecoveryTests.swift; sourceTree = "<group>"; };
 		CDFF002D0000000000000000 /* BackgroundUploadCompletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundUploadCompletionTests.swift; sourceTree = "<group>"; };
 		CDFF002E0000000000000000 /* EventJobCountsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventJobCountsTests.swift; sourceTree = "<group>"; };
+		CDFF00310000000000000000 /* UploadOperationStepTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadOperationStepTests.swift; sourceTree = "<group>"; };
 		CDFF00220000000000000000 /* EditedFolderServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditedFolderServiceTests.swift; sourceTree = "<group>"; };
 		CDEE00010000000000000000 /* PickPicEventStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickPicEventStatusTests.swift; sourceTree = "<group>"; };
 		CDFF00240000000000000000 /* ConversionFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversionFailureTests.swift; sourceTree = "<group>"; };
@@ -243,6 +245,7 @@
 				CDFF002B0000000000000000 /* UploadQueueRecoveryTests.swift */,
 				CDFF002D0000000000000000 /* BackgroundUploadCompletionTests.swift */,
 				CDFF002E0000000000000000 /* EventJobCountsTests.swift */,
+				CDFF00310000000000000000 /* UploadOperationStepTests.swift */,
 			);
 			path = PickPicTests;
 			sourceTree = "<group>";
@@ -570,6 +573,7 @@
 				CDFF002A0000000000000000 /* UploadQueueRecoveryTests.swift in Sources */,
 				CDFF002C0000000000000000 /* BackgroundUploadCompletionTests.swift in Sources */,
 				CDFF002F0000000000000000 /* EventJobCountsTests.swift in Sources */,
+				CDFF00300000000000000000 /* UploadOperationStepTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -462,7 +462,13 @@ private struct UploadJobRow: View {
         }
         .count
     }
-    
+
+    private var currentStepTitle: String {
+        UploadOperationStep.uploadCaptionTitle(
+            for: job.uploadProgress.currentStep
+        )
+    }
+
     private var locationCount: Int {
         job.preparedPhotos.filter { photo in
             photo.metadata.latitude != nil
@@ -1409,10 +1415,7 @@ private struct UploadJobRow: View {
                         showsEstimate: false
                     )
                 } else {
-                    Text(
-                        job.uploadProgress.currentStep?.title
-                        ?? "Uploading prepared JPEG…"
-                    )
+                    Text(currentStepTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
