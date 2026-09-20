@@ -455,7 +455,22 @@ private struct UploadJobRow: View {
 
     @State private var folderIsAccessible:
     Bool?
-    
+
+    /*
+     * Small test photos can clear an entire step -- sometimes an entire
+     * photo -- in well under this delay, so raw currentStepTitle changes
+     * faster than a person can read it (#315). Only committing a value
+     * after it has held for a bit turns that into one steady caption per
+     * photo instead of a flicker; a .task(id:) already cancels its
+     * previous instance whenever the id changes, so a value that doesn't
+     * survive the delay is simply never shown.
+     */
+    private static let stepTitleMinimumDisplayDuration:
+    Duration = .milliseconds(350)
+
+    @State private var displayedStepTitle =
+    UploadOperationStep.uploadCaptionTitle(for: nil)
+
     private var capturedAtCount: Int {
         job.preparedPhotos.filter { photo in
             photo.metadata.capturedAt != nil
@@ -789,6 +804,17 @@ private struct UploadJobRow: View {
                     using:
                         job.folderBookmarkData
                 )
+        }
+        .task(id: currentStepTitle) {
+            try? await Task.sleep(
+                for: Self.stepTitleMinimumDisplayDuration
+            )
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            displayedStepTitle = currentStepTitle
         }
     }
     
@@ -1415,7 +1441,7 @@ private struct UploadJobRow: View {
                         showsEstimate: false
                     )
                 } else {
-                    Text(currentStepTitle)
+                    Text(displayedStepTitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
