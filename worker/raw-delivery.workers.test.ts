@@ -97,6 +97,33 @@ function pathOf(email: CapturedEmail): string {
 }
 
 /*
+ * The confirmation link now lands on an SPA page rather than the API route
+ * (#323), so a test can no longer just GET the mailed link -- it has to pull
+ * the token out of it and POST that token the way the page does.
+ */
+function tokenFromEmail(email: CapturedEmail): string {
+  const url = new URL(linkFromEmail(email));
+
+  return url.searchParams.get("t") ?? "";
+}
+
+interface ConfirmBody {
+  photoId?: string;
+  error?: string;
+}
+
+function confirmRaw(
+  token: string,
+  shareToken: string = SHARE_TOKEN,
+): Promise<{ status: number; body: ConfirmBody }> {
+  return galleryRequest<ConfirmBody>(
+    "POST",
+    `/api/galleries/${shareToken}/raw-confirm`,
+    { json: { token } },
+  );
+}
+
+/*
  * Driven directly rather than through galleryRequest, for the reason that
  * helper's sibling in gallery.workers.test.ts already documents: the
  * downloaded_at stamp rides on a waitUntil that only settles once the body has
@@ -150,22 +177,20 @@ describe("confirming the address before a request exists", () => {
   it("creates the request and returns to the gallery when redeemed", async () => {
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
 
-    const redeemed = await galleryRequest("GET", pathOf(mail.sent[0]));
+    const redeemed = await confirmRaw(tokenFromEmail(mail.sent[0]));
 
-    expect(redeemed.status).toBe(302);
-    expect(redeemed.response.headers.get("Location")).toBe(
-      `/g/${SHARE_TOKEN}?photo=${PHOTO_ID}`,
-    );
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.body).toMatchObject({ photoId: PHOTO_ID });
     expect(await countRawRequests()).toBe(1);
   });
 
   it("refuses a token that has already been redeemed", async () => {
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
 
-    const path = pathOf(mail.sent[0]);
+    const token = tokenFromEmail(mail.sent[0]);
 
-    await galleryRequest("GET", path);
-    const replayed = await galleryRequest("GET", path);
+    await confirmRaw(token);
+    const replayed = await confirmRaw(token);
 
     expect(replayed.status).toBe(400);
     expect(await countRawRequests()).toBe(1);
@@ -178,7 +203,7 @@ describe("confirming the address before a request exists", () => {
       .bind("2020-01-01T00:00:00.000Z")
       .run();
 
-    const redeemed = await galleryRequest("GET", pathOf(mail.sent[0]));
+    const redeemed = await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     expect(redeemed.status).toBe(400);
     expect(await countRawRequests()).toBe(0);
@@ -199,12 +224,9 @@ describe("confirming the address before a request exists", () => {
 
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
 
-    const crossed = pathOf(mail.sent[0]).replace(
-      SHARE_TOKEN,
-      "share-elsewhere",
-    );
+    const token = tokenFromEmail(mail.sent[0]);
 
-    expect((await galleryRequest("GET", crossed)).status).toBe(400);
+    expect((await confirmRaw(token, "share-elsewhere")).status).toBe(400);
     expect(await countRawRequests()).toBe(0);
   });
 
@@ -215,7 +237,7 @@ describe("confirming the address before a request exists", () => {
    */
   it("skips confirmation once the address has a request in the event", async () => {
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
-    await galleryRequest("GET", pathOf(mail.sent[0]));
+    await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     const second = await requestRaw(
       VISITOR_TOKEN,
@@ -254,7 +276,7 @@ describe("the address is the identity, not the browser", () => {
    */
   it("attaches a second browser to the existing request", async () => {
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
-    await galleryRequest("GET", pathOf(mail.sent[0]));
+    await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     const fromLaptop = await requestRaw(OTHER_VISITOR_TOKEN, GUEST_EMAIL);
 
@@ -294,7 +316,7 @@ describe("the address is the identity, not the browser", () => {
     });
 
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
-    await galleryRequest("GET", pathOf(mail.sent[0]));
+    await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     const sentBefore = mail.sent.length;
 
@@ -404,7 +426,7 @@ describe("a plain duplicate of an already-fulfilled request", () => {
     });
 
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
-    await galleryRequest("GET", pathOf(mail.sent[0]));
+    await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     const path = pathOf(mail.sent[mail.sent.length - 1]);
     const sentBefore = mail.sent.length;
@@ -442,7 +464,7 @@ describe("correcting a mistyped address", () => {
      * crash rather than a bug: the corrected address has no row to attach to,
      * so the only uniqueness left to violate is the surviving primary key.
      */
-    await galleryRequest("GET", pathOf(mail.sent[0]));
+    await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     expect(await countRawRequests()).toBe(1);
 
@@ -476,7 +498,7 @@ describe("correcting a mistyped address", () => {
     });
 
     await requestRaw(VISITOR_TOKEN, "alice@example.com");
-    await galleryRequest("GET", pathOf(mail.sent[0]));
+    await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     const row = await env.DB.prepare(
       "SELECT download_token_hash AS hash FROM raw_requests WHERE photo_id = ?",
@@ -512,7 +534,7 @@ describe("downloading with the emailed token", () => {
     });
 
     await requestRaw(VISITOR_TOKEN, GUEST_EMAIL);
-    await galleryRequest("GET", pathOf(mail.sent[0]));
+    await confirmRaw(tokenFromEmail(mail.sent[0]));
 
     return pathOf(mail.sent[mail.sent.length - 1]);
   }

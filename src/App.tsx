@@ -5,6 +5,7 @@ import AccountSettingsPage from "./pages/AccountSettingsPage";
 import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
+import RawConfirmPage from "./pages/RawConfirmPage";
 import SignInPage from "./pages/SignInPage";
 import SignUpPage from "./pages/SignUpPage";
 
@@ -57,6 +58,14 @@ function App() {
 
   if (galleryMatch) {
     return <GalleryPage shareToken={safeDecodeShareToken(galleryMatch[1])} />;
+  }
+
+  const rawConfirmMatch = pathname.match(/^\/g\/([^/]+)\/raw-confirm\/?$/);
+
+  if (rawConfirmMatch) {
+    return (
+      <RawConfirmPage shareToken={safeDecodeShareToken(rawConfirmMatch[1])} />
+    );
   }
 
   if (/^\/sign-in\/?$/.test(pathname)) {
