@@ -80,6 +80,20 @@ struct EventListView: View {
     @State private var searchText = ""
 
     /*
+     * Mirrors uploadQueue.jobs, grouped by event. NavigationSplitView does
+     * not reliably re-run this view's body from the @EnvironmentObject
+     * publish alone once an event's detail is pushed on top of it in the
+     * sidebar column -- a stage transition landing while the sidebar sits
+     * unfocused could leave every row's badge stale until some unrelated
+     * navigation change forced the whole window to redraw (#315). The
+     * explicit onReceive subscription below still delivers while
+     * unfocused, and writing into this @State is what reliably forces
+     * SwiftUI to redraw the rows that read it.
+     */
+    @State private var jobsByEventID:
+    [String: [UploadJob]] = [:]
+
+    /*
      * Filter and sort persist across launches because they are the only
      * way to organise the sidebar; a search term does not, since it is a
      * momentary lookup rather than a chosen arrangement. An unrecognised
@@ -213,9 +227,8 @@ struct EventListView: View {
                      * view collapses and this still reads as a push.
                      */
                     let counts = EventJobCounts(
-                        jobs: uploadQueue.jobs(
-                            for: event.id
-                        )
+                        jobs: jobsByEventID[event.id]
+                        ?? []
                     )
 
                     EventRow(
@@ -259,6 +272,12 @@ struct EventListView: View {
         )
         .refreshable {
             await onRefresh()
+        }
+        .onReceive(uploadQueue.$jobs) { jobs in
+            jobsByEventID = Dictionary(
+                grouping: jobs,
+                by: \.eventID
+            )
         }
         .toolbar {
             ToolbarItem(
@@ -375,9 +394,7 @@ struct EventListView: View {
     private func unfinishedJobCount(
         for eventID: String
     ) -> Int {
-        uploadQueue.jobs(
-            for: eventID
-        )
+        (jobsByEventID[eventID] ?? [])
         .filter { job in
             job.stage != .completed
         }
