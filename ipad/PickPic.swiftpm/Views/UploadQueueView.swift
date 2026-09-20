@@ -471,6 +471,23 @@ private struct UploadJobRow: View {
     @State private var displayedStepTitle =
     UploadOperationStep.uploadCaptionTitle(for: nil)
 
+    /*
+     * activeBackgroundTransfer is cleared between each network step of a
+     * photo (proof upload, then variant upload) while the purely local,
+     * sub-frame variant-generation step runs in between -- so the "iPadOS
+     * background upload active" banner below was collapsing and
+     * reappearing once per photo, a layout jump too brief for a 30fps
+     * screen recording to even catch but very visible live (#315).
+     * Showing it immediately but only hiding it after a grace period
+     * bridges that gap: a background transfer that starts again before
+     * the delay elapses cancels the pending hide via .task(id:), so the
+     * banner just stays up across it.
+     */
+    private static let backgroundTransferHideDelay:
+    Duration = .milliseconds(400)
+
+    @State private var isBackgroundTransferBannerVisible = false
+
     private var capturedAtCount: Int {
         job.preparedPhotos.filter { photo in
             photo.metadata.capturedAt != nil
@@ -816,8 +833,31 @@ private struct UploadJobRow: View {
 
             displayedStepTitle = currentStepTitle
         }
+        .task(
+            id: job.uploadProgress.activeBackgroundTransfer
+                != nil
+        ) {
+            let isActive =
+            job.uploadProgress.activeBackgroundTransfer
+            != nil
+
+            guard isActive else {
+                try? await Task.sleep(
+                    for: Self.backgroundTransferHideDelay
+                )
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                isBackgroundTransferBannerVisible = false
+                return
+            }
+
+            isBackgroundTransferBannerVisible = true
+        }
     }
-    
+
     @ViewBuilder
     private var continuedProcessingNotice: some View {
         if let processing = job.continuedProcessing {
@@ -1401,9 +1441,7 @@ private struct UploadJobRow: View {
                         .lineLimit(1)
                 }
 
-                if job.uploadProgress
-                    .activeBackgroundTransfer != nil
-                {
+                if isBackgroundTransferBannerVisible {
                     Label(
                         "iPadOS background upload active",
                         systemImage: "arrow.up.circle.fill"
