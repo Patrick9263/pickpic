@@ -20,9 +20,24 @@ struct UploadQueueView: View {
     @State private var showingFolderRelinker = false
     @State private var showingRelinkError = false
     @State private var relinkErrorMessage = ""
-    
+
+    /*
+     * Mirrors uploadQueue.jobs, filtered to this event. Reading
+     * uploadQueue.jobs(for:) directly from the environment object here
+     * has the same failure mode #315 found in EventListView's sidebar:
+     * NavigationSplitView does not reliably re-run this view's body from
+     * the @EnvironmentObject publish alone while its column sits
+     * unfocused, so per-photo progress here could go stale until some
+     * unrelated navigation forced a redraw. The explicit onReceive
+     * subscription below still delivers while unfocused, and writing
+     * into this @State is what reliably forces SwiftUI to redraw the
+     * rows that read it.
+     */
+    @State private var eventJobsState:
+    [UploadJob] = []
+
     private var eventJobs: [UploadJob] {
-        uploadQueue.jobs(for: event.id)
+        eventJobsState
     }
 
     private var incompleteEventJobs: [UploadJob] {
@@ -292,6 +307,11 @@ struct UploadQueueView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(relinkErrorMessage)
+        }
+        .onReceive(uploadQueue.$jobs) { jobs in
+            eventJobsState = jobs.filter { job in
+                job.eventID == event.id
+            }
         }
     }
     
