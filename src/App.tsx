@@ -5,6 +5,7 @@ import AccountSettingsPage from "./pages/AccountSettingsPage";
 import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
+import OperatorPage from "./pages/OperatorPage";
 import RawConfirmPage from "./pages/RawConfirmPage";
 import SignInPage from "./pages/SignInPage";
 import SignUpPage from "./pages/SignUpPage";
@@ -78,6 +79,21 @@ function App() {
 
   if (/^\/admin\/?$/.test(pathname)) {
     return <DashboardPage />;
+  }
+
+  /*
+   * Not gated on APP_ORIGIN the way /account is, and not linked from anywhere.
+   *
+   * Ungated because the console is useful from either authenticated origin --
+   * app.pickpic.photos under a session, admin.pickpic.photos under Access --
+   * and the page renders nothing either way unless /api/operator/accounts
+   * answers, which is the real gate. Unlinked because the alternative is
+   * teaching the session endpoint to report an operator flag, which would cost
+   * every sign-in an extra query to answer a question that is true for one
+   * person.
+   */
+  if (/^\/operator\/?$/.test(pathname)) {
+    return <OperatorPage />;
   }
 
   if (window.location.origin === APP_ORIGIN && pathname === "/") {

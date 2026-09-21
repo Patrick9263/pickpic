@@ -24,6 +24,7 @@ import {
   requireOwnerRole,
   type AdminPrincipal,
 } from "./access.ts";
+import { handleOperatorRequest, requireOperatorPrincipal } from "./operator.ts";
 import {
   scheduleUploadStartedNotification,
   scheduleRawRequestNotification,
@@ -6981,6 +6982,52 @@ async function routeRequest(
 
   if (authResponse) {
     return authResponse;
+  }
+
+  /*
+   * Ahead of the /api/admin/* block, and it never reaches createAccountScope.
+   *
+   * An operator handler is typed against Env rather than AccountScope, so the
+   * cross-account split is enforced by the type system instead of by review --
+   * see the header comment in worker/operator.ts for why the alternative
+   * (teaching createAccountScope to skip :accountId for an operator) would have
+   * disarmed tenancy everywhere.
+   *
+   * requireAdminPrincipal is reused for the authentication half because it is
+   * the only thing that knows how to resolve an identity under either
+   * AUTH_MODE. That also gives /api/operator/* the same Origin requirement on
+   * state-changing requests that /api/admin/* has. Nothing here is
+   * state-changing today -- requireOperatorPrincipal refuses every non-GET --
+   * but having the check already in place is what makes the first operator
+   * action safe by default rather than by remembering.
+   */
+  if (url.pathname.startsWith("/api/operator/")) {
+    const access = await requireAdminPrincipal(
+      request,
+      env.DB,
+      env as Env & AuthEnvironment,
+      ctx,
+    );
+
+    if (!access.ok) {
+      return access.response;
+    }
+
+    const denied = await requireOperatorPrincipal(
+      request,
+      env.DB,
+      access.principal,
+    );
+
+    if (denied) {
+      return denied;
+    }
+
+    const operatorResponse = await handleOperatorRequest(request, url, env);
+
+    if (operatorResponse) {
+      return operatorResponse;
+    }
   }
 
   if (url.pathname.startsWith("/api/admin/")) {
