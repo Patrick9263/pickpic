@@ -85,20 +85,36 @@ interface EventRecord {
   createdAt: string;
   updatedAt: string;
   rawRequestsEnabled: boolean;
+
+  /*
+   * Whether any photo in this event has ever had a RAW request (#266) --
+   * distinct from rawRequestsEnabled, which is just the current opt-in
+   * toggle. Drives hiding the "Release collected RAW files" control for the
+   * common case of an event that has never used RAW requests at all.
+   */
+  hasRawRequests: boolean;
 }
 
 /*
- * D1 has no boolean column type -- raw_requests_enabled comes back as 0/1.
- * Every SELECT that builds an EventRecord reads into this shape first, then
- * converts through toEventRecord() so a real JS boolean is what ever reaches
- * a JSON response.
+ * D1 has no boolean column type -- raw_requests_enabled and the EXISTS below
+ * come back as 0/1. Every SELECT that builds an EventRecord reads into this
+ * shape first, then converts through toEventRecord() so real JS booleans are
+ * what ever reach a JSON response.
  */
-type EventQueryRow = Omit<EventRecord, "rawRequestsEnabled"> & {
+type EventQueryRow = Omit<
+  EventRecord,
+  "rawRequestsEnabled" | "hasRawRequests"
+> & {
   rawRequestsEnabled: number;
+  hasRawRequests: number;
 };
 
 function toEventRecord(row: EventQueryRow): EventRecord {
-  return { ...row, rawRequestsEnabled: Boolean(row.rawRequestsEnabled) };
+  return {
+    ...row,
+    rawRequestsEnabled: Boolean(row.rawRequestsEnabled),
+    hasRawRequests: Boolean(row.hasRawRequests),
+  };
 }
 
 interface SetEventRawRequestsEnabledBody {
@@ -1199,7 +1215,13 @@ async function findEventById(
         status,
         created_at AS createdAt,
         updated_at AS updatedAt,
-        raw_requests_enabled AS rawRequestsEnabled
+        raw_requests_enabled AS rawRequestsEnabled,
+        EXISTS (
+          SELECT 1
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          WHERE p.event_id = events.id
+        ) AS hasRawRequests
       FROM events
       WHERE
         id = ?
@@ -1256,7 +1278,13 @@ async function setEventStatus(
         status,
         created_at AS createdAt,
         updated_at AS updatedAt,
-        raw_requests_enabled AS rawRequestsEnabled
+        raw_requests_enabled AS rawRequestsEnabled,
+        EXISTS (
+          SELECT 1
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          WHERE p.event_id = events.id
+        ) AS hasRawRequests
       FROM events
       WHERE
         id = ?
@@ -1329,7 +1357,13 @@ async function setEventRawRequestsEnabled(
         status,
         created_at AS createdAt,
         updated_at AS updatedAt,
-        raw_requests_enabled AS rawRequestsEnabled
+        raw_requests_enabled AS rawRequestsEnabled,
+        EXISTS (
+          SELECT 1
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          WHERE p.event_id = events.id
+        ) AS hasRawRequests
       FROM events
       WHERE
         id = ?
@@ -1569,6 +1603,7 @@ async function createEvent(
     createdAt: now,
     updatedAt: now,
     rawRequestsEnabled: false,
+    hasRawRequests: false,
   };
 
   try {
@@ -1765,7 +1800,13 @@ async function updateEvent(
         status,
         created_at AS createdAt,
         updated_at AS updatedAt,
-        raw_requests_enabled AS rawRequestsEnabled
+        raw_requests_enabled AS rawRequestsEnabled,
+        EXISTS (
+          SELECT 1
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          WHERE p.event_id = events.id
+        ) AS hasRawRequests
       FROM events
       WHERE
         id = ?
@@ -2056,7 +2097,13 @@ async function listEvents(scope: AccountScope): Promise<Response> {
         status,
         created_at AS createdAt,
         updated_at AS updatedAt,
-        raw_requests_enabled AS rawRequestsEnabled
+        raw_requests_enabled AS rawRequestsEnabled,
+        EXISTS (
+          SELECT 1
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          WHERE p.event_id = events.id
+        ) AS hasRawRequests
       FROM events
       WHERE account_id = :accountId
       ORDER BY created_at DESC

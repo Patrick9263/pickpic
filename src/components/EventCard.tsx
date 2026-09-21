@@ -403,24 +403,28 @@ function EventCard(props: EventCardProps) {
             Not gated on rawRequestsEnabled. Turning the toggle off does not
             reclaim anything already delivered, so hiding this with it would
             withdraw the control at exactly the moment storage is stuck.
+            Gated on hasRawRequests instead (#266): an event that has never
+            had a RAW request has nothing this control could ever release.
           */}
-          <div className="event-raw-release-control">
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={releasingEventRawsId === eventRecord.id}
-              onClick={() => void handleReleaseCollectedRaws(eventRecord)}
-            >
-              {releasingEventRawsId === eventRecord.id
-                ? "Releasing…"
-                : "Release collected RAW files"}
-            </button>
+          {eventRecord.hasRawRequests && (
+            <div className="event-raw-release-control">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={releasingEventRawsId === eventRecord.id}
+                onClick={() => void handleReleaseCollectedRaws(eventRecord)}
+              >
+                {releasingEventRawsId === eventRecord.id
+                  ? "Releasing…"
+                  : "Release collected RAW files"}
+              </button>
 
-            <p className="event-raw-release-hint">
-              {rawReleaseSummary ??
-                "Frees the storage for every RAW in this event that all of its requesters have already downloaded, instead of waiting out the 24-hour grace period."}
-            </p>
-          </div>
+              <p className="event-raw-release-hint">
+                {rawReleaseSummary ??
+                  "Frees the storage for every RAW in this event that all of its requesters have already downloaded, instead of waiting out the 24-hour grace period."}
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="event-title-row">

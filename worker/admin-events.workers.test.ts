@@ -149,7 +149,11 @@ describe("POST /api/admin/events", () => {
 });
 
 interface EventListBody {
-  events: Array<{ id: string; rawRequestsEnabled: boolean }>;
+  events: Array<{
+    id: string;
+    rawRequestsEnabled: boolean;
+    hasRawRequests: boolean;
+  }>;
 }
 
 describe("GET /api/admin/events", () => {
@@ -183,6 +187,47 @@ describe("GET /api/admin/events", () => {
     );
 
     expect(event?.rawRequestsEnabled).toBe(true);
+  });
+
+  /*
+   * hasRawRequests (#266) drives whether the dashboard's "Release collected
+   * RAW files" control renders at all -- it must stay false for an event
+   * that has never had one, and flip true as soon as a photo does, even
+   * with the request still outstanding (unfulfilled).
+   */
+  it("reports hasRawRequests only once a photo in the event has one", async () => {
+    const created = await adminRequest<EventBody>("POST", "/api/admin/events", {
+      json: { title: "Never requested" },
+    });
+
+    const eventId = created.body.event.id;
+
+    const beforeRequest = await adminRequest<EventListBody>(
+      "GET",
+      "/api/admin/events",
+    );
+
+    expect(
+      beforeRequest.body.events.find((candidate) => candidate.id === eventId)
+        ?.hasRawRequests,
+    ).toBe(false);
+
+    await insertPhoto({ id: "photo-has-raw-requests", eventId });
+    await insertRawRequest({
+      photoId: "photo-has-raw-requests",
+      eventId,
+      visitorToken: "visitor-token-has-raw-requests",
+    });
+
+    const afterRequest = await adminRequest<EventListBody>(
+      "GET",
+      "/api/admin/events",
+    );
+
+    expect(
+      afterRequest.body.events.find((candidate) => candidate.id === eventId)
+        ?.hasRawRequests,
+    ).toBe(true);
   });
 });
 
