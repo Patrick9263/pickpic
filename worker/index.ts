@@ -1159,10 +1159,10 @@ async function markEventUploadStarted(
     return;
   }
 
-  eventsMarkedUploadStarted.add(eventId);
-
   await openDraftEventForUpload(scope, eventId);
   scheduleUploadStartedNotification(scope.database, env, ctx, eventId);
+
+  eventsMarkedUploadStarted.add(eventId);
 }
 
 async function eventExists(
