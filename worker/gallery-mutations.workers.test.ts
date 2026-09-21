@@ -113,6 +113,24 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
     },
   );
 
+  it("allows DELETE .../raw-request once the gallery is completed, unlike PUT (#326)", async () => {
+    await seedGallery("completed");
+    await insertRawRequest({
+      photoId: PHOTO_ID,
+      eventId: EVENT_ID,
+      visitorToken: VISITOR_TOKEN,
+      email: GUEST_EMAIL,
+    });
+
+    const result = await galleryRequest(
+      "DELETE",
+      `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
+      { headers: { "X-PickPic-Visitor": VISITOR_TOKEN } },
+    );
+
+    expect(result.body).toEqual({ requested: false });
+  });
+
   it("404s a mutation against an unknown share token before touching the photo", async () => {
     const result = await galleryRequest(
       "PUT",

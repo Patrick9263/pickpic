@@ -7039,12 +7039,25 @@ async function routeRequest(
    * simply never reaches the check -- which is how hearts silently escaped it
    * and kept accepting edit requests on a `completed` gallery the UI had
    * already told the viewer was closed.
+   *
+   * DELETE on raw-request is exempted (#326): withdrawing isn't a new
+   * request, it's the only lever a viewer has to release an already-delivered
+   * RAW early, and blocking it just pins the object in R2 for the full TTL.
+   * findPhotoInShare inside removeRawRequest already scopes to a
+   * ready/completed gallery, so the 404 case stays covered without this
+   * guard.
    */
   const galleryMutationMatch = url.pathname.match(
     /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|raw-request|comments(?:\/[^/]+)?)$/,
   );
+  const isRawRequestWithdrawal =
+    request.method === "DELETE" && /\/raw-request$/.test(url.pathname);
 
-  if (galleryMutationMatch && request.method !== "GET") {
+  if (
+    galleryMutationMatch &&
+    request.method !== "GET" &&
+    !isRawRequestWithdrawal
+  ) {
     const shareToken = safeDecodePathSegment(galleryMutationMatch[1]);
 
     if (shareToken === null) {
