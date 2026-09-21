@@ -46,6 +46,20 @@ describe("POST /api/admin/events", () => {
     expectError(result, 400, "An event title is required.");
   });
 
+  /*
+   * JSON.parse("null") does not throw, so a literal `null` body used to
+   * clear the try/catch around request.json() and crash on the first
+   * property read (500) instead of returning the 400 every other malformed
+   * body gets (#325).
+   */
+  it("rejects a null body with 400, not 500", async () => {
+    const result = await adminRequest("POST", "/api/admin/events", {
+      json: null,
+    });
+
+    expectError(result, 400, "The request body must be valid JSON.");
+  });
+
   it.each(["   ", ""])(
     "rejects a title that trims to empty (%j)",
     async (title) => {

@@ -144,6 +144,42 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
   });
 });
 
+/*
+ * JSON.parse("null") does not throw, so a literal `null` body used to clear
+ * the try/catch around request.json() and crash on the first property read
+ * (500) instead of returning the 400 every other malformed body gets (#325).
+ * These routes are reachable with no credential at all, so a null body is a
+ * public, unauthenticated way to have hit that crash.
+ */
+describe("a null JSON body on gallery mutation routes", () => {
+  it.each([
+    {
+      label: "PUT .../heart",
+      method: "PUT",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/heart`,
+    },
+    {
+      label: "PUT .../raw-request",
+      method: "PUT",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
+    },
+    {
+      label: "POST .../comments",
+      method: "POST",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/comments`,
+    },
+  ])("rejects $label with 400, not 500", async ({ method, path }) => {
+    await seedGallery("ready");
+
+    const result = await galleryRequest(method, path, {
+      json: null,
+      headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+    });
+
+    expectError(result, 400, "The request body must be valid JSON.");
+  });
+});
+
 describe("PUT/DELETE .../raw-request", () => {
   const RAW_REQUEST_PATH = `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`;
 

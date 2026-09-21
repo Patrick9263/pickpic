@@ -176,6 +176,31 @@ function jsonResponse(
   });
 }
 
+/*
+ * A literal `null` body is valid JSON, so it clears a bare try/catch around
+ * request.json() -- every call site's first property read then throws a
+ * TypeError instead of returning the 400 it meant to. Centralized here so a
+ * new route can't forget the check.
+ */
+async function parseJsonObjectBody<T extends object>(
+  request: Request,
+  invalidBodyMessage: string,
+): Promise<T | Response> {
+  let body: T | null;
+
+  try {
+    body = (await request.json()) as T | null;
+  } catch {
+    return jsonResponse({ error: invalidBodyMessage }, 400);
+  }
+
+  if (body === null || typeof body !== "object") {
+    return jsonResponse({ error: invalidBodyMessage }, 400);
+  }
+
+  return body;
+}
+
 function unauthorized(error: string): AdminAccessResult {
   return {
     ok: false,
@@ -537,13 +562,16 @@ async function requestMagicLink(
   database: D1Database,
   environment: AuthEnvironment,
 ): Promise<Response> {
-  let body: MagicLinkRequestBody;
+  const parsedBody = await parseJsonObjectBody<MagicLinkRequestBody>(
+    request,
+    "Enter an email address.",
+  );
 
-  try {
-    body = (await request.json()) as MagicLinkRequestBody;
-  } catch {
-    return jsonResponse({ error: "Enter an email address." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   const email = normalizeEmail(body.email);
 
@@ -723,13 +751,16 @@ async function consumeMagicLink(
   request: Request,
   database: D1Database,
 ): Promise<Response> {
-  let body: ConsumeTokenBody;
+  const parsedBody = await parseJsonObjectBody<ConsumeTokenBody>(
+    request,
+    "This sign-in link is not valid.",
+  );
 
-  try {
-    body = (await request.json()) as ConsumeTokenBody;
-  } catch {
-    return jsonResponse({ error: "This sign-in link is not valid." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (typeof body.token !== "string" || body.token.trim().length === 0) {
     return jsonResponse({ error: "This sign-in link is not valid." }, 400);
@@ -846,13 +877,16 @@ async function requestSignup(
   environment: AuthEnvironment,
   inviteCode: string,
 ): Promise<Response> {
-  let body: SignupRequestBody;
+  const parsedBody = await parseJsonObjectBody<SignupRequestBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = (await request.json()) as SignupRequestBody;
-  } catch {
-    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   /*
    * Checked before the address and the name, so a caller without the code
@@ -1106,13 +1140,16 @@ async function consumeSignup(
   request: Request,
   database: D1Database,
 ): Promise<Response> {
-  let body: ConsumeTokenBody;
+  const parsedBody = await parseJsonObjectBody<ConsumeTokenBody>(
+    request,
+    "This confirmation link is not valid.",
+  );
 
-  try {
-    body = (await request.json()) as ConsumeTokenBody;
-  } catch {
-    return jsonResponse({ error: "This confirmation link is not valid." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (typeof body.token !== "string" || body.token.trim().length === 0) {
     return jsonResponse({ error: "This confirmation link is not valid." }, 400);

@@ -790,6 +790,31 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
+/*
+ * A literal `null` body is valid JSON, so it clears a bare try/catch around
+ * request.json() -- every call site's first property read then throws a
+ * TypeError instead of returning the 400 it meant to. Centralized here so a
+ * new route can't forget the check.
+ */
+async function parseJsonObjectBody<T extends object>(
+  request: Request,
+  invalidBodyMessage: string,
+): Promise<T | Response> {
+  let body: T | null;
+
+  try {
+    body = await request.json<T | null>();
+  } catch {
+    return jsonResponse({ error: invalidBodyMessage }, 400);
+  }
+
+  if (body === null || typeof body !== "object") {
+    return jsonResponse({ error: invalidBodyMessage }, 400);
+  }
+
+  return body;
+}
+
 function generateShareToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
 
@@ -1201,18 +1226,16 @@ async function setEventStatus(
   scope: AccountScope,
   eventId: string,
 ): Promise<Response> {
-  let body: SetEventStatusBody;
+  const parsedBody = await parseJsonObjectBody<SetEventStatusBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<SetEventStatusBody>();
-  } catch {
-    return jsonResponse(
-      {
-        error: "The request body must be valid JSON.",
-      },
-      400,
-    );
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (!isGalleryStatus(body.status)) {
     return jsonResponse(
@@ -1276,18 +1299,16 @@ async function setEventRawRequestsEnabled(
   scope: AccountScope,
   eventId: string,
 ): Promise<Response> {
-  let body: SetEventRawRequestsEnabledBody;
+  const parsedBody = await parseJsonObjectBody<SetEventRawRequestsEnabledBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<SetEventRawRequestsEnabledBody>();
-  } catch {
-    return jsonResponse(
-      {
-        error: "The request body must be valid JSON.",
-      },
-      400,
-    );
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (typeof body.enabled !== "boolean") {
     return jsonResponse(
@@ -1492,13 +1513,16 @@ async function createEvent(
   request: Request,
   scope: AccountScope,
 ): Promise<Response> {
-  let body: CreateEventBody;
+  const parsedBody = await parseJsonObjectBody<CreateEventBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<CreateEventBody>();
-  } catch {
-    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (typeof body.title !== "string") {
     return jsonResponse({ error: "An event title is required." }, 400);
@@ -1594,18 +1618,16 @@ async function updateAccount(
   request: Request,
   scope: AccountScope,
 ): Promise<Response> {
-  let body: UpdateAccountBody;
+  const parsedBody = await parseJsonObjectBody<UpdateAccountBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<UpdateAccountBody>();
-  } catch {
-    return jsonResponse(
-      {
-        error: "The request body must be valid JSON.",
-      },
-      400,
-    );
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   const hasName = body.name !== undefined;
   const hasTtl = body.rawDeliveryTtlMs !== undefined;
@@ -1702,18 +1724,16 @@ async function updateEvent(
   scope: AccountScope,
   eventId: string,
 ): Promise<Response> {
-  let body: UpdateEventBody;
+  const parsedBody = await parseJsonObjectBody<UpdateEventBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<UpdateEventBody>();
-  } catch {
-    return jsonResponse(
-      {
-        error: "The request body must be valid JSON.",
-      },
-      400,
-    );
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (typeof body.title !== "string") {
     return jsonResponse(
@@ -3114,13 +3134,16 @@ async function addHeart(
     return jsonResponse({ error: "A valid visitor token is required." }, 400);
   }
 
-  let body: HeartRequestBody;
+  const parsedBody = await parseJsonObjectBody<HeartRequestBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<HeartRequestBody>();
-  } catch {
-    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (typeof body.displayName !== "string") {
     return jsonResponse(
@@ -3243,13 +3266,16 @@ async function addRawRequest(
     return jsonResponse({ error: "A valid visitor token is required." }, 400);
   }
 
-  let body: RawRequestRequestBody;
+  const parsedBody = await parseJsonObjectBody<RawRequestRequestBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<RawRequestRequestBody>();
-  } catch {
-    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (typeof body.displayName !== "string") {
     return jsonResponse(
@@ -4631,13 +4657,16 @@ async function addComment(
     return jsonResponse({ error: "A valid visitor token is required." }, 400);
   }
 
-  let requestBody: CommentRequestBody;
+  const parsedBody = await parseJsonObjectBody<CommentRequestBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    requestBody = await request.json<CommentRequestBody>();
-  } catch {
-    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const requestBody = parsedBody;
 
   if (
     typeof requestBody.displayName !== "string" ||
@@ -4783,13 +4812,16 @@ async function updateComment(
     return jsonResponse({ error: "A valid visitor token is required." }, 400);
   }
 
-  let requestBody: UpdateCommentRequestBody;
+  const parsedBody = await parseJsonObjectBody<UpdateCommentRequestBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    requestBody = await request.json<UpdateCommentRequestBody>();
-  } catch {
-    return jsonResponse({ error: "The request body must be valid JSON." }, 400);
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const requestBody = parsedBody;
 
   if (typeof requestBody.body !== "string") {
     return jsonResponse({ error: "A comment is required." }, 400);
@@ -4890,18 +4922,16 @@ async function setPhotoWorkflowStatus(
   scope: AccountScope,
   photoId: string,
 ): Promise<Response> {
-  let body: SetPhotoWorkflowBody;
+  const parsedBody = await parseJsonObjectBody<SetPhotoWorkflowBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
 
-  try {
-    body = await request.json<SetPhotoWorkflowBody>();
-  } catch {
-    return jsonResponse(
-      {
-        error: "The request body must be valid JSON.",
-      },
-      400,
-    );
+  if (parsedBody instanceof Response) {
+    return parsedBody;
   }
+
+  const body = parsedBody;
 
   if (!isPhotoWorkflowStatus(body.status)) {
     return jsonResponse(
