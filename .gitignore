@@ -168,6 +168,8 @@ vite.config.ts.timestamp-*
 
 # Claude Code local settings
 .claude/settings.local.json
+# Format and test each worktree from its own root.
+.claude/worktrees/
 
 # Swift / Xcode
 **/.build/
