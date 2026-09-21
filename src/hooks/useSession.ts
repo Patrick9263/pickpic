@@ -8,6 +8,14 @@ interface UseSessionResult {
   status: SessionStatus;
   account: SessionAccount | null;
   user: SessionUser | null;
+
+  /*
+   * Defaults to false and is cleared on sign-out, so a nav link is never shown
+   * on a stale flag. It only decides whether the link is drawn — the worker
+   * checks the real thing on every operator request.
+   */
+  isOperator: boolean;
+
   signOutError: string | null;
   refresh: () => void;
   signOut: () => Promise<void>;
@@ -17,6 +25,7 @@ export function useSession(): UseSessionResult {
   const [status, setStatus] = useState<SessionStatus>("loading");
   const [account, setAccount] = useState<SessionAccount | null>(null);
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [isOperator, setIsOperator] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -32,6 +41,7 @@ export function useSession(): UseSessionResult {
 
         setAccount(response.account);
         setUser(response.user);
+        setIsOperator(response.isOperator === true);
         setStatus("signedIn");
       })
       .catch(() => {
@@ -41,6 +51,7 @@ export function useSession(): UseSessionResult {
 
         setAccount(null);
         setUser(null);
+        setIsOperator(false);
         setStatus("signedOut");
       });
 
@@ -71,9 +82,18 @@ export function useSession(): UseSessionResult {
       // session state with the server.
       setAccount(null);
       setUser(null);
+      setIsOperator(false);
       setStatus("signedOut");
     }
   }, []);
 
-  return { status, account, user, signOutError, refresh, signOut };
+  return {
+    status,
+    account,
+    user,
+    isOperator,
+    signOutError,
+    refresh,
+    signOut,
+  };
 }

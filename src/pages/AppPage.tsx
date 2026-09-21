@@ -4,13 +4,24 @@ import SignInPage from "./SignInPage";
 
 function SignOutControl({
   email,
+  isOperator,
   onSignOut,
 }: {
   email: string;
+  isOperator: boolean;
   onSignOut: () => void;
 }) {
   return (
     <div className="header-account">
+      {/*
+       * Only shown to an operator, but nothing depends on hiding it: the route
+       * refuses a non-operator and the worker refuses the data behind it.
+       */}
+      {isOperator && (
+        <a className="header-account-link" href="/operator">
+          Operator
+        </a>
+      )}
       <a className="header-account-link" href="/account">
         Account settings
       </a>
@@ -23,7 +34,7 @@ function SignOutControl({
 }
 
 function AppPage() {
-  const { status, user, signOut, signOutError } = useSession();
+  const { status, user, isOperator, signOut, signOutError } = useSession();
 
   if (status === "loading") {
     return (
@@ -41,7 +52,11 @@ function AppPage() {
   return (
     <DashboardPage
       headerExtra={
-        <SignOutControl email={user.email} onSignOut={() => void signOut()} />
+        <SignOutControl
+          email={user.email}
+          isOperator={isOperator}
+          onSignOut={() => void signOut()}
+        />
       }
       signOutError={signOutError}
     />

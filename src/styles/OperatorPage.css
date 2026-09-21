@@ -1,0 +1,125 @@
+.operator-panel {
+  display: grid;
+  gap: 22px;
+}
+
+/*
+ * The panel is a grid, so its children default to a minimum size of their
+ * content. Without this a long account name or email stretches the whole page
+ * sideways on a phone -- the same fix .storage-panel needs.
+ */
+.operator-panel > * {
+  min-width: 0;
+}
+
+.operator-accounts {
+  display: grid;
+  gap: 14px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.operator-account {
+  background: #f7f5f0;
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+}
+
+.operator-account-heading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.operator-account-heading h3 {
+  font-size: 1.05rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.operator-account-plan {
+  color: #77736b;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/*
+ * Two columns on a phone rather than four: the iPad is the point, but the
+ * operator also checks this from a phone, and four columns of numbers wrap
+ * into an unreadable stack below about 480px.
+ */
+.operator-account-stats {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+@media (min-width: 720px) {
+  .operator-account-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.operator-account-stats dt {
+  color: #77736b;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.operator-account-stats dd {
+  color: #171717;
+  font-size: 1.1rem;
+  font-weight: 800;
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.operator-account-cap {
+  color: #77736b;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.operator-account-meter {
+  background: #e6e2da;
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+}
+
+.operator-account-meter span {
+  background: #171717;
+  display: block;
+  height: 100%;
+}
+
+.operator-account-users {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.operator-account-users li {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+  overflow-wrap: anywhere;
+}
+
+.operator-account-user-meta,
+.operator-account-empty {
+  color: #77736b;
+  font-size: 0.8rem;
+}

@@ -67,6 +67,21 @@ AUTH_MODE=session
 # locally at all.
 SIGNUP_INVITE_CODE=local-dev-invite
 
+# Who may open the operator console at /operator -- the cross-account view of
+# every account, its users and its storage (#195). Comma- or whitespace-separated
+# addresses, compared against the verified email on the signed-in principal.
+#
+# Unset means no operator exists anywhere and every /api/admin/operator/* request
+# answers 403, which is the intended state on the public and admin workers. In
+# production it is a secret rather than a var in wrangler.jsonc -- `wrangler
+# secret put OPERATOR_EMAILS --env app` -- because this repository is public and
+# a list of real addresses does not belong in a committed file, even though it is
+# not a credential.
+#
+# Only reachable with AUTH_MODE=session: the local-development principal the
+# access branch synthesises carries no email at all, so it can never match.
+# OPERATOR_EMAILS=you@example.com
+
 # Sign in with Apple. All five values come from the Apple Developer portal:
 # APPLE_TEAM_ID from Membership details, APPLE_CLIENT_ID from the Services ID
 # registered for Sign in with Apple, and APPLE_KEY_ID plus APPLE_PRIVATE_KEY

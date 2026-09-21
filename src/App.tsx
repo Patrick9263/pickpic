@@ -5,6 +5,7 @@ import AccountSettingsPage from "./pages/AccountSettingsPage";
 import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
+import OperatorPage from "./pages/OperatorPage";
 import RawConfirmPage from "./pages/RawConfirmPage";
 import SignInPage from "./pages/SignInPage";
 import SignUpPage from "./pages/SignUpPage";
@@ -89,6 +90,19 @@ function App() {
     /^\/account\/?$/.test(pathname)
   ) {
     return <AccountSettingsPage />;
+  }
+
+  /*
+   * Gated to the app origin alongside /account, and for a stronger reason: the
+   * operator console's data only exists where AUTH_MODE is 'session', so on any
+   * other origin this route could only ever render its own refusal. A 404 is
+   * the honest answer there.
+   */
+  if (
+    window.location.origin === APP_ORIGIN &&
+    /^\/operator\/?$/.test(pathname)
+  ) {
+    return <OperatorPage />;
   }
 
   if (pathname === "/") {

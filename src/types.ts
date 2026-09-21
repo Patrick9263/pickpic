@@ -177,6 +177,40 @@ export interface SessionUser {
 export interface SessionResponse {
   account: SessionAccount;
   user: SessionUser;
+
+  /*
+   * Whether this address is in the deployment's OPERATOR_EMAILS list. Used
+   * only to decide whether to offer the operator console in the nav — the
+   * worker re-checks it on every /api/admin/operator/* request, so this
+   * grants nothing on its own.
+   */
+  isOperator: boolean;
+}
+
+export interface OperatorAccountUser {
+  id: string;
+  email: string | null;
+  role: string;
+  authProvider: string;
+  createdAt: string;
+}
+
+export interface OperatorAccountSummary {
+  id: string;
+  name: string;
+  status: string;
+  plan: string;
+  storageBytes: number;
+  storageCapBytes: number;
+  eventCount: number;
+  photoCount: number;
+  lastPhotoUploadedAt: string | null;
+  createdAt: string;
+  users: OperatorAccountUser[];
+}
+
+export interface OperatorAccountsResponse {
+  accounts: OperatorAccountSummary[];
 }
 
 export interface UpdateAccountResponse {

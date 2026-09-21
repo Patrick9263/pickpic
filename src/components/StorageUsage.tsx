@@ -1,3 +1,4 @@
+import { formatPlanLabel, formatStorageSize } from "../storageFormat";
 import type { EventStorageRecord, StorageUsageRecord } from "../types";
 import "../styles/StorageUsage.css";
 
@@ -7,36 +8,8 @@ interface StorageUsageProps {
   onRefresh: () => void;
 }
 
-// Decimal (1000-based), matching the iPad app's ByteCountFormatter(.file)
-// output so the two faces show the same figure for the same bytes.
-function formatStorageSize(byteSize: number): string {
-  if (byteSize < 1000) {
-    return `${byteSize} B`;
-  }
-
-  if (byteSize < 1000 * 1000) {
-    return `${Math.round(byteSize / 1000)} KB`;
-  }
-
-  if (byteSize < 1000 * 1000 * 1000) {
-    return `${(byteSize / (1000 * 1000)).toFixed(1)} MB`;
-  }
-
-  return `${(byteSize / (1000 * 1000 * 1000)).toFixed(2)} GB`;
-}
-
 function formatCount(value: number, noun: string): string {
   return `${value.toLocaleString()} ${noun}${value === 1 ? "" : "s"}`;
-}
-
-const PLAN_LABELS: Record<string, string> = {
-  free: "Free",
-  solo: "Solo",
-  studio: "Studio",
-};
-
-function formatPlanLabel(plan: string): string {
-  return PLAN_LABELS[plan] ?? plan;
 }
 
 function StorageUsage({ storage, isLoading, onRefresh }: StorageUsageProps) {

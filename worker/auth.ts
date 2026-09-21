@@ -16,6 +16,7 @@ import {
   type AppleEnvironment,
 } from "./apple.ts";
 import { sendMagicLinkEmail, type EmailEnvironment } from "./email.ts";
+import { isOperatorPrincipal, type OperatorEnvironment } from "./operator.ts";
 import {
   clearedSessionCookieHeader,
   createSession,
@@ -48,7 +49,8 @@ export type AuthMode = "access" | "session";
 
 export type AuthEnvironment = AccessEnvironment &
   EmailEnvironment &
-  AppleEnvironment & {
+  AppleEnvironment &
+  OperatorEnvironment & {
     AUTH_MODE?: string;
 
     /*
@@ -508,7 +510,7 @@ export async function handleAuthRequest(
 
   if (url.pathname === "/api/auth/session") {
     if (request.method === "GET") {
-      return getSession(request, database);
+      return getSession(request, database, environment);
     }
 
     if (request.method === "DELETE") {
@@ -1773,6 +1775,7 @@ async function deleteSignupTokensForEmail(
 async function getSession(
   request: Request,
   database: D1Database,
+  environment: AuthEnvironment,
 ): Promise<Response> {
   const token = readSessionCookie(request);
 
@@ -1813,6 +1816,14 @@ async function getSession(
       email: session.principal.email,
       role: session.principal.role,
     },
+
+    /*
+     * Only so the SPA knows whether to offer the operator console in its nav.
+     * It grants nothing: /api/admin/operator/* re-derives this from the
+     * principal on every request, so a client that flipped the flag would get
+     * a 403 for its trouble.
+     */
+    isOperator: isOperatorPrincipal(session.principal, environment),
   });
 }
 

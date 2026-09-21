@@ -24,6 +24,7 @@ import {
   requireOwnerRole,
   type AdminPrincipal,
 } from "./access.ts";
+import { handleOperatorRequest, type OperatorEnvironment } from "./operator.ts";
 import {
   scheduleUploadStartedNotification,
   scheduleRawRequestNotification,
@@ -6993,6 +6994,28 @@ async function routeRequest(
 
     if (!access.ok) {
       return access.response;
+    }
+
+    /*
+     * Ahead of the account scope, not inside handleAdminRequest, because the
+     * operator console is the one admin surface that is deliberately not
+     * scoped to an account -- see the design note at the top of
+     * worker/operator.ts. handleAdminRequest cannot serve it even in
+     * principle: it is typed against TenantEnv, which has no DB binding at
+     * all. Running first also means an operator whose own account is
+     * suspended still gets the console, which is the right answer for a
+     * read-only view that has nothing to do with that account.
+     */
+    const operatorResponse = await handleOperatorRequest(
+      request,
+      url,
+      env.DB,
+      env as Env & OperatorEnvironment,
+      access.principal,
+    );
+
+    if (operatorResponse) {
+      return operatorResponse;
     }
 
     const account = await resolveAccountForPrincipal(env.DB, access.principal);
