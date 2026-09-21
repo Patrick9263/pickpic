@@ -30,7 +30,7 @@ LOG_FILE="$STATE_DIR/logs/run-$(date +%Y-%m).log"
 LOCK_DIR="$STATE_DIR/.lock"
 
 # launchd starts jobs with a minimal PATH, and none of node/npm/gh resolve without this.
-export PATH="/Users/patrick/.local/bin:/Users/patrick/.nvm/versions/node/v26.5.1/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/Users/patrick/.local/bin:/Users/patrick/.nvm/versions/node/v22.23.2/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Re-exec from a snapshot outside the repo before doing anything else.
 #
