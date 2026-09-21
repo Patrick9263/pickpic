@@ -183,6 +183,55 @@ export interface UpdateAccountResponse {
   account: SessionAccount;
 }
 
+export interface OperatorUserRecord {
+  id: string;
+  email: string | null;
+  role: string;
+  authProvider: string;
+  createdAt: string;
+
+  /*
+   * Drawn from the newest un-revoked session, so it reads null once every
+   * session a user ever held has expired and been swept -- which is the honest
+   * answer for someone who has not signed in for over a month, not a bug.
+   */
+  lastSeenAt: string | null;
+}
+
+export interface OperatorAccountRecord {
+  id: string;
+  name: string;
+  status: string;
+  plan: string;
+  createdAt: string;
+  databaseId: string | null;
+
+  /*
+   * The maintained counter rather than a live sum; the worker reconciles it on
+   * every dashboard load, so it can lag for an account nobody has opened
+   * recently. See listOperatorAccounts in worker/operator.ts.
+   */
+  storageBytes: number;
+  storageCapBytes: number;
+  rawDeliveryTtlMs: number;
+
+  eventCount: number;
+  photoCount: number;
+  lastEventAt: string | null;
+  lastPhotoAt: string | null;
+
+  users: OperatorUserRecord[];
+}
+
+export interface OperatorAccountsResponse {
+  accounts: OperatorAccountRecord[];
+
+  /* Every account, even when `accounts` was cut short. */
+  accountCount: number;
+
+  truncated: boolean;
+}
+
 export interface StorageUsageRecord {
   photoCount: number;
   finalCount: number;

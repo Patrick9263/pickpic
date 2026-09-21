@@ -1,0 +1,125 @@
+/*
+ * The operator console (#195). Mobile-first like everything else here: the
+ * whole point of putting this in the SPA rather than leaving it to a D1 console
+ * is that it is readable from the iPad, so this is a stack of cards rather than
+ * the wide table the data would suggest.
+ */
+
+.operator-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.operator-account {
+  border: 1px solid #e6e3dc;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.operator-account-heading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.operator-account-heading h3 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.operator-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.operator-tag {
+  background: #f4f2ed;
+  border-radius: 999px;
+  color: #625f58;
+  font-size: 0.72rem;
+  font-weight: 650;
+  padding: 4px 9px;
+  text-transform: lowercase;
+}
+
+.operator-tag-warn {
+  background: #fdf1e3;
+  color: #8a5a12;
+}
+
+/*
+ * auto-fit rather than a fixed column count so four metrics sit on one row on
+ * an iPad and wrap to two on a phone without a media query.
+ */
+.operator-metrics {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  margin: 0;
+}
+
+.operator-metrics dt {
+  color: #8a867d;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.operator-metrics dd {
+  color: #171717;
+  font-size: 0.95rem;
+  font-weight: 650;
+  margin: 2px 0 0;
+}
+
+.operator-metric-note {
+  color: #8a867d;
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.operator-users {
+  border-top: 1px solid #efece5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 12px 0 0;
+}
+
+.operator-user {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.operator-user-email {
+  font-size: 0.9rem;
+  /* Beta-tester addresses are long and a phone is narrow. */
+  overflow-wrap: anywhere;
+}
+
+.operator-user-meta,
+.operator-account-footer {
+  color: #8a867d;
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.operator-user-empty {
+  color: #8a867d;
+  font-size: 0.82rem;
+}

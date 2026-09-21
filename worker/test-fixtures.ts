@@ -11,6 +11,13 @@ import { createAccountScope, type AccountScope } from "./tenancy.ts";
  * failure of whatever is actually under test.
  */
 
+/*
+ * accountId defaults to the bootstrap account, which is the only one every
+ * other test file cares about. It is settable so the operator-console tests can
+ * seed a second tenant and prove the cross-account counts are really per
+ * account. Migration 0014's trigger requires a photo's account_id to match its
+ * parent event's, so the two seeds have to be given the same value.
+ */
 interface EventSeed {
   id: string;
   shareToken: string;
@@ -18,6 +25,7 @@ interface EventSeed {
   status?: string;
   createdAt?: string;
   rawRequestsEnabled?: boolean;
+  accountId?: string;
 }
 
 interface PhotoSeed {
@@ -30,6 +38,7 @@ interface PhotoSeed {
   latitude?: number | null;
   longitude?: number | null;
   createdAt?: string;
+  accountId?: string;
 }
 
 /*
@@ -118,7 +127,7 @@ export async function insertEvent(seed: EventSeed): Promise<void> {
       seed.status ?? "ready",
       createdAt,
       createdAt,
-      BOOTSTRAP_ACCOUNT_ID,
+      seed.accountId ?? BOOTSTRAP_ACCOUNT_ID,
       seed.rawRequestsEnabled ? 1 : 0,
     )
     .run();
@@ -162,7 +171,7 @@ export async function insertPhoto(seed: PhotoSeed): Promise<void> {
       seed.latitude ?? null,
       seed.longitude ?? null,
       seed.createdAt ?? new Date().toISOString(),
-      BOOTSTRAP_ACCOUNT_ID,
+      seed.accountId ?? BOOTSTRAP_ACCOUNT_ID,
     )
     .run();
 }
