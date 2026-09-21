@@ -275,6 +275,34 @@ describe("DashboardPage", () => {
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
+  it("hides the release-collected-RAWs control for an event that has never had a RAW request", async () => {
+    const readyEvent = makeReadyTripEvent({ hasRawRequests: false });
+
+    setUpDashboard({ events: [readyEvent] });
+
+    render(<DashboardPage />);
+
+    await screen.findByText("Trip");
+
+    expect(
+      screen.queryByRole("button", { name: /Release collected RAW files/ }),
+    ).toBeNull();
+  });
+
+  it("shows the release-collected-RAWs control once the event has had a RAW request", async () => {
+    const readyEvent = makeReadyTripEvent({ hasRawRequests: true });
+
+    setUpDashboard({ events: [readyEvent] });
+
+    render(<DashboardPage />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: /Release collected RAW files/,
+      }),
+    ).not.toBeNull();
+  });
+
   it("copies the gallery share link built from VITE_PUBLIC_APP_ORIGIN, then resets the copied indicator", async () => {
     const readyEvent = makeReadyTripEvent({ shareToken: "share-xyz" });
 

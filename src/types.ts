@@ -10,6 +10,14 @@ export interface EventRecord {
   createdAt: string;
   updatedAt: string;
   rawRequestsEnabled: boolean;
+
+  /*
+   * Whether any photo in this event has ever had a RAW request (#266) --
+   * distinct from rawRequestsEnabled, which is just the current opt-in
+   * toggle. Drives hiding the "Release collected RAW files" control for the
+   * common case of an event that has never used RAW requests at all.
+   */
+  hasRawRequests: boolean;
 }
 
 export interface PhotoCommentRecord {
