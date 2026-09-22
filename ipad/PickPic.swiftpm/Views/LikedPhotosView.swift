@@ -22,7 +22,17 @@ struct LikedPhotosView: View {
 
     @StateObject private var viewModel =
     LikedPhotosViewModel()
-    
+
+    /*
+     * A singleton rather than an @EnvironmentObject (#268): the one thing
+     * that writes it, RawRequestSyncService.sync, is only ever invoked
+     * from App.swift's automatic sweep, several layers away from this
+     * view, and threading a new environment object through there just to
+     * read it back here would be a bigger diff for no behavioral gain.
+     */
+    @ObservedObject private var rawDeliveryProgress =
+    RawDeliveryProgress.shared
+
     @State private var showingFolderPicker = false
 
     @State private var dragErrorMessage: String?
@@ -346,7 +356,7 @@ struct LikedPhotosView: View {
                 ForEach(
                     viewModel.pendingRawUploadPhotos
                 ) { photo in
-                    Text(photo.originalFilename)
+                    pendingRawUploadRow(for: photo)
                 }
             }
 
@@ -395,6 +405,81 @@ struct LikedPhotosView: View {
                 "Originals PickPic sends automatically to viewers who asked for them. A failure or a missing file here clears once it's resolved and the next automatic check runs."
             )
         }
+    }
+
+    /*
+     * Byte-level progress for the one file RawRequestSyncService.sync is
+     * actively staging or sending; every other row just reads "Waiting" --
+     * the ordered list above is already the queue, so no per-row state is
+     * needed for anything but the active upload (#268). A static
+     * "Uploading…" on what can be a 100 MB transfer is indistinguishable
+     * from a hang, especially over cellular.
+     */
+    @ViewBuilder
+    private func pendingRawUploadRow(
+        for photo: ServerPhotoRecord
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(photo.originalFilename)
+
+            if
+                rawDeliveryProgress.currentPhotoID
+                    == photo.id,
+                let phase = rawDeliveryProgress.phase
+            {
+                activeRawUploadStatus(for: phase)
+            } else {
+                Text("Waiting")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func activeRawUploadStatus(
+        for phase: RawDeliveryProgress.Phase
+    ) -> some View {
+        switch phase {
+        case .staging:
+            Label("Staging…", systemImage: "hourglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+        case let .uploading(sentBytes, totalBytes):
+            if let fraction = phase.fractionCompleted {
+                VStack(alignment: .leading, spacing: 2) {
+                    ProgressView(value: fraction)
+
+                    Text(
+                        uploadProgressDescription(
+                            sentBytes: sentBytes,
+                            totalBytes: totalBytes
+                        )
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            } else {
+                Label(
+                    "Uploading…",
+                    systemImage: "arrow.up.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func uploadProgressDescription(
+        sentBytes: Int64,
+        totalBytes: Int64
+    ) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+
+        return
+            "\(formatter.string(fromByteCount: sentBytes)) of \(formatter.string(fromByteCount: totalBytes))"
     }
 
     private var likedPhotosSection: some View {
