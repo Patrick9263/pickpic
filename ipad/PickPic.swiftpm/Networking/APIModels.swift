@@ -299,7 +299,10 @@ struct EventPhotoStatistics:
                     + statistics.uploadedFinalCount,
                 missingVariantPhotoCount:
                     result.missingVariantPhotoCount
-                    + statistics.missingVariantPhotoCount
+                    + statistics.missingVariantPhotoCount,
+                pendingRawRequestCount:
+                    result.pendingRawRequestCount
+                    + statistics.pendingRawRequestCount
             )
         }
     }
@@ -311,13 +314,23 @@ struct EventPhotoStatistics:
     let uploadedFinalCount: Int
     let missingVariantPhotoCount: Int
 
+    /*
+     * Pending-only (undelivered), not also counting requests already
+     * delivered but not yet downloaded — mirrors needsRawUpload below
+     * rather than the web dashboard's separate awaitingRawDownloadCount,
+     * since this is meant as a "the iPad still owes something" signal
+     * rather than a full request-lifecycle breakdown.
+     */
+    let pendingRawRequestCount: Int
+
     static let empty = EventPhotoStatistics(
         uploadedProofCount: 0,
         likedPhotoCount: 0,
         totalHeartCount: 0,
         editingPhotoCount: 0,
         uploadedFinalCount: 0,
-        missingVariantPhotoCount: 0
+        missingVariantPhotoCount: 0,
+        pendingRawRequestCount: 0
     )
 
     init(
@@ -326,7 +339,8 @@ struct EventPhotoStatistics:
         totalHeartCount: Int,
         editingPhotoCount: Int,
         uploadedFinalCount: Int,
-        missingVariantPhotoCount: Int
+        missingVariantPhotoCount: Int,
+        pendingRawRequestCount: Int
     ) {
         self.uploadedProofCount =
         uploadedProofCount
@@ -340,6 +354,8 @@ struct EventPhotoStatistics:
         uploadedFinalCount
         self.missingVariantPhotoCount =
         missingVariantPhotoCount
+        self.pendingRawRequestCount =
+        pendingRawRequestCount
     }
 
     init(photos: [ServerPhotoRecord]) {
@@ -378,6 +394,11 @@ struct EventPhotoStatistics:
             )
         }
         .count
+
+        pendingRawRequestCount =
+        photos.reduce(0) { total, photo in
+            total + photo.pendingRawRequests
+        }
     }
 }
 
