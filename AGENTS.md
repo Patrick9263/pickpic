@@ -98,6 +98,10 @@ These are **noncanonical summaries**, not substitutes for the linked sections.
   its PR merges, from a checkout containing the new file. All three Workers share
   the database, and a push to `main` deploys all three. A green check is not
   authorization to run those operations.
+- [Conventions](CLAUDE.md#conventions): the web app is dark-themed and every
+  colour comes from the custom properties in `src/index.css`; never write a
+  literal hex value into a new stylesheet, and do not copy colours out of the
+  top half of `src/App.css`, which is overridden wholesale further down.
 - [Conventions](CLAUDE.md#conventions): never commit secrets, credentials, local
   environment files, or Claude local settings. Runtime secrets live in Cloudflare.
   Preserve custom domains and admin Access protection. Security findings must
