@@ -5,6 +5,7 @@ import {
   createArchiveFilename,
   createIndividualSaveEntries,
   createUniqueDownloadNames,
+  encodePendingRawBatch,
   formatApproximateByteSize,
   formatDayGroupLabel,
   formatZipDownloadNotice,
@@ -12,9 +13,13 @@ import {
   getOrCreateVisitorToken,
   getRawRequestState,
   isLikelyInAppBrowser,
+  parsePendingRawBatch,
   readStorageItem,
+  removeStorageItem,
   sanitizeDownloadFilename,
   selectPhotosById,
+  selectReadyRawPhotos,
+  selectRequestableRawPhotos,
   writeStorageItem,
 } from "./galleryHelpers";
 import { makeGalleryPhoto as makePhoto } from "../testing/factories";
@@ -390,6 +395,30 @@ describe("writeStorageItem", () => {
   });
 });
 
+describe("removeStorageItem", () => {
+  it("removes the stored value", () => {
+    const removeItem = vi.fn();
+
+    removeStorageItem(() => ({ removeItem }), "key");
+
+    expect(removeItem).toHaveBeenCalledWith("key");
+  });
+
+  it("silently no-ops when accessing storage throws", () => {
+    expect(() => removeStorageItem(blockedStorageAccess, "key")).not.toThrow();
+  });
+
+  it("silently no-ops when removeItem throws", () => {
+    const storage = {
+      removeItem: vi.fn(() => {
+        throw new DOMException("Blocked", "SecurityError");
+      }),
+    };
+
+    expect(() => removeStorageItem(() => storage, "key")).not.toThrow();
+  });
+});
+
 describe("getOrCreateVisitorToken", () => {
   it("returns the stored token without generating a new one", () => {
     const storage = {
@@ -529,5 +558,131 @@ describe("createIndividualSaveEntries", () => {
       "DSC01015.ARW",
       "DSC01015 (2).ARW",
     ]);
+  });
+});
+
+describe("selectRequestableRawPhotos", () => {
+  const ready = {
+    filename: "DSC01015.ARW",
+    byteSize: 100_000,
+    expiresAt: "2026-02-15T00:00:00.000Z",
+  };
+
+  it("returns nothing once RAW requests are disabled, however the photos look", () => {
+    const photos = [
+      makePhoto({ id: "photo-1" }),
+      makePhoto({ id: "photo-2", viewerRequestedRaw: true }),
+    ];
+
+    expect(selectRequestableRawPhotos(photos, false)).toEqual([]);
+  });
+
+  /*
+   * Mirrors the inline per-photo button's own rule (getRawRequestState's
+   * comment): only "none" invites a brand new ask. Everything already
+   * confirming, waiting, ready or collected is excluded from a fresh batch
+   * request rather than made unselectable, so a mixed selection still shows
+   * an accurate count.
+   */
+  it("excludes every state except none", () => {
+    const photos = [
+      makePhoto({ id: "photo-none" }),
+      makePhoto({ id: "photo-confirming", viewerRawConfirmationPending: true }),
+      makePhoto({ id: "photo-waiting", viewerRequestedRaw: true }),
+      makePhoto({
+        id: "photo-ready",
+        viewerRequestedRaw: true,
+        viewerRawDownload: ready,
+      }),
+      makePhoto({
+        id: "photo-collected",
+        viewerRequestedRaw: true,
+        viewerRawDownloadedAt: "2026-02-02T00:00:00.000Z",
+      }),
+    ];
+
+    expect(
+      selectRequestableRawPhotos(photos, true).map((photo) => photo.id),
+    ).toEqual(["photo-none"]);
+  });
+});
+
+describe("selectReadyRawPhotos", () => {
+  const ready = {
+    filename: "DSC01015.ARW",
+    byteSize: 100_000,
+    expiresAt: "2026-02-15T00:00:00.000Z",
+  };
+
+  it("returns only photos with a live download", () => {
+    const photos = [
+      makePhoto({ id: "photo-none" }),
+      makePhoto({
+        id: "photo-ready",
+        viewerRequestedRaw: true,
+        viewerRawDownload: ready,
+      }),
+      makePhoto({
+        id: "photo-collected",
+        viewerRequestedRaw: true,
+        viewerRawDownloadedAt: "2026-02-02T00:00:00.000Z",
+      }),
+    ];
+
+    expect(selectReadyRawPhotos(photos).map((photo) => photo.id)).toEqual([
+      "photo-ready",
+    ]);
+  });
+
+  it("returns an empty list when nothing is ready", () => {
+    expect(selectReadyRawPhotos([makePhoto()])).toEqual([]);
+  });
+});
+
+describe("encodePendingRawBatch / parsePendingRawBatch", () => {
+  const batch = {
+    shareToken: "share-1",
+    photoIds: ["photo-1", "photo-2"],
+    displayName: "Guest",
+    email: "guest@example.com",
+  };
+
+  it("round-trips a batch through encode and parse", () => {
+    expect(
+      parsePendingRawBatch(encodePendingRawBatch(batch), "share-1"),
+    ).toEqual(batch);
+  });
+
+  it("returns null when nothing is stored", () => {
+    expect(parsePendingRawBatch(null, "share-1")).toBeNull();
+  });
+
+  it("returns null on malformed JSON", () => {
+    expect(parsePendingRawBatch("not json", "share-1")).toBeNull();
+  });
+
+  /*
+   * The one mismatch that matters most: a batch left over from a different
+   * gallery must never be picked up by this one's confirmation page.
+   */
+  it("returns null when the share token doesn't match", () => {
+    expect(
+      parsePendingRawBatch(encodePendingRawBatch(batch), "share-2"),
+    ).toBeNull();
+  });
+
+  it("returns null when photoIds is empty", () => {
+    const raw = encodePendingRawBatch({ ...batch, photoIds: [] });
+
+    expect(parsePendingRawBatch(raw, "share-1")).toBeNull();
+  });
+
+  it("returns null on a shape missing required fields", () => {
+    expect(
+      parsePendingRawBatch(
+        JSON.stringify({ shareToken: "share-1" }),
+        "share-1",
+      ),
+    ).toBeNull();
   });
 });

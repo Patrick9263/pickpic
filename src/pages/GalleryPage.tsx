@@ -22,14 +22,19 @@ import {
   buildGalleryGroups,
   createArchiveFilename,
   createIndividualSaveEntries,
+  encodePendingRawBatch,
   formatApproximateByteSize,
   formatZipDownloadNotice,
   getDefaultPreviewUrl,
   getOrCreateVisitorToken,
   getRawRequestState,
   isLikelyInAppBrowser,
+  PENDING_RAW_BATCH_KEY,
   readStorageItem,
   selectPhotosById,
+  selectReadyRawPhotos,
+  selectRequestableRawPhotos,
+  VISITOR_TOKEN_KEY,
   writeStorageItem,
   type GalleryGrouping,
   type IndividualSaveEntry,
@@ -72,6 +77,13 @@ interface RawRequestResponse {
   rawDownloadedAt: string | null;
 }
 
+interface RawRequestBatchResponse {
+  requested: number;
+  confirmationPending: boolean;
+  email: string;
+  photoIds: string[];
+}
+
 interface CommentResponse {
   comment: ViewerPhotoCommentRecord;
 }
@@ -81,7 +93,6 @@ interface GalleryPageProps {
 }
 
 type GalleryFilter = "all" | "liked" | "finals";
-const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
 const DISPLAY_NAME_KEY = "pickpic-display-name";
 const RAW_REQUEST_EMAIL_KEY = "pickpic-raw-request-email";
 
@@ -137,6 +148,7 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     entries: IndividualSaveEntry[];
     isOpen: boolean;
   } | null>(null);
+  const [isRequestingRawBatch, setIsRequestingRawBatch] = useState(false);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(null);
   const [togglingPhotoId, setTogglingPhotoId] = useState<string | null>(null);
   const [downloadingRawPhotoId, setDownloadingRawPhotoId] = useState<
@@ -208,6 +220,18 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
   );
   const interactionsEnabled = gallery?.event.status === "ready";
   const rawRequestsEnabled = gallery?.event.rawRequestsEnabled ?? false;
+  const requestableSelectedRawPhotos = useMemo(
+    () =>
+      selectRequestableRawPhotos(
+        selectPhotosById(gallery?.photos ?? [], selectedPhotoIds),
+        rawRequestsEnabled,
+      ),
+    [gallery, selectedPhotoIds, rawRequestsEnabled],
+  );
+  const readyRawPhotos = useMemo(
+    () => selectReadyRawPhotos(gallery?.photos ?? []),
+    [gallery],
+  );
   const selectedPhotoIndex =
     selectedPhotoId === null
       ? -1
@@ -1197,6 +1221,106 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       setDownloadProgress(null);
     }
   }
+
+  /*
+   * Multi-select "Request originals (N)" (#271). Requesting is the batched
+   * half of the feature -- collection stays per-photo through the "Your
+   * originals" panel below, one download and one user gesture at a time, so
+   * Safari never sees a second programmatic download it would silently drop.
+   */
+  async function requestRawForSelectedPhotos(): Promise<void> {
+    if (
+      !interactionsEnabled ||
+      isRequestingRawBatch ||
+      requestableSelectedRawPhotos.length === 0
+    ) {
+      return;
+    }
+
+    const resolvedDisplayName = await resolveDisplayName();
+
+    if (!resolvedDisplayName) {
+      return;
+    }
+
+    const resolvedEmail = await resolveEmail(false, null);
+
+    if (!resolvedEmail) {
+      return;
+    }
+
+    const photoIds = requestableSelectedRawPhotos.map((photo) => photo.id);
+
+    setIsRequestingRawBatch(true);
+    setActionError(null);
+    setActionNotice(null);
+
+    try {
+      const body = await fetchJson<RawRequestBatchResponse>(
+        `/api/galleries/${encodeURIComponent(shareToken)}/raw-requests`,
+        {
+          method: "PUT",
+          headers: {
+            "X-PickPic-Visitor": visitorToken,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            displayName: resolvedDisplayName,
+            email: resolvedEmail,
+            photoIds,
+          }),
+        },
+      );
+
+      if (body.confirmationPending) {
+        /*
+         * The rest of the batch can only be finished from this browser --
+         * see queueRawRequestConfirmation's comment in worker/index.ts. A
+         * different device confirming the link still proves the address and
+         * requests the one anchor photo; it just cannot pick up this list.
+         */
+        writeStorageItem(
+          () => window.localStorage,
+          PENDING_RAW_BATCH_KEY,
+          encodePendingRawBatch({
+            shareToken,
+            photoIds: body.photoIds,
+            displayName: resolvedDisplayName,
+            email: resolvedEmail,
+          }),
+        );
+
+        setActionNotice(
+          `Check ${body.email} and open the link to request ${
+            body.photoIds.length === 1
+              ? "this file"
+              : `all ${body.photoIds.length} files`
+          }.`,
+        );
+      } else {
+        setActionNotice(
+          `Requested ${body.requested} original file${
+            body.requested === 1 ? "" : "s"
+          }. You'll get an email when each is ready to download.`,
+        );
+
+        // The batch response reports counts, not per-photo state, so the
+        // simplest correct way to reflect every changed row -- request
+        // state, an instant "ready" for a RAW already sitting in R2, etc. --
+        // is to re-fetch rather than guess it client-side.
+        await loadGallery({ silent: true });
+      }
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to request the original files.",
+      );
+    } finally {
+      setIsRequestingRawBatch(false);
+    }
+  }
+
   const selectedImageUrl = selectedPhoto
     ? selectedVersion === "final" && selectedPhoto.finalPhoto
       ? (selectedPhoto.finalPhoto.variants.preview?.imageUrl ??
@@ -1413,6 +1537,47 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           </section>
         )}
 
+        {readyRawPhotos.length > 0 && (
+          <section
+            className="gallery-raw-collection"
+            aria-label="Your originals"
+          >
+            <div className="gallery-raw-collection-header">
+              <strong>Your originals</strong>
+              <span>
+                {readyRawPhotos.length}{" "}
+                {readyRawPhotos.length === 1 ? "file" : "files"} ready to
+                download
+              </span>
+            </div>
+            {/*
+             * One row, one Download button, one download each -- the same
+             * per-photo route and gesture the inline grid/lightbox button
+             * already uses (downloadRawPhoto), just gathered in one place so
+             * a batch request doesn't need a scroll through the whole
+             * gallery to collect (#271). Deliberately not a ZIP: see
+             * downloadSelectedPhotos's own comment on why RAWs never go
+             * through client-zip.
+             */}
+            <ul className="gallery-raw-collection-list">
+              {readyRawPhotos.map((photo) => (
+                <li key={photo.id}>
+                  <span>{photo.viewerRawDownload?.filename}</span>
+                  <button
+                    type="button"
+                    disabled={downloadingRawPhotoId !== null}
+                    onClick={() => void downloadRawPhoto(photo)}
+                  >
+                    {downloadingRawPhotoId === photo.id
+                      ? "Downloading…"
+                      : "Download"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
         {isSelecting && (
           <div className="gallery-selection-bar">
             <div className="gallery-selection-summary">
@@ -1421,6 +1586,10 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                 {selectedPhotoIds.size === 1 ? "photo" : "photos"} selected
               </strong>
               <span>
+                {rawRequestsEnabled &&
+                requestableSelectedRawPhotos.length !== selectedPhotoIds.size
+                  ? `${requestableSelectedRawPhotos.length} can be requested. `
+                  : ""}
                 {selectedDownloadByteSize > 0
                   ? `Approx. ${formatApproximateByteSize(selectedDownloadByteSize)} download`
                   : "Selected photos are ready to download."}
@@ -1441,6 +1610,29 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
                   ? "Clear selection"
                   : `Select all (${downloadableVisiblePhotos.length})`}
               </button>
+              {rawRequestsEnabled && (
+                <button
+                  className="gallery-raw-request-batch-button"
+                  type="button"
+                  disabled={
+                    requestableSelectedRawPhotos.length === 0 ||
+                    isRequestingRawBatch ||
+                    !interactionsEnabled
+                  }
+                  onClick={() => void requestRawForSelectedPhotos()}
+                  title={
+                    interactionsEnabled ? undefined : "This gallery is closed"
+                  }
+                >
+                  {isRequestingRawBatch
+                    ? "Requesting…"
+                    : `Request originals${
+                        requestableSelectedRawPhotos.length > 0
+                          ? ` (${requestableSelectedRawPhotos.length})`
+                          : ""
+                      }`}
+                </button>
+              )}
               <button
                 className="gallery-download-button"
                 type="button"
