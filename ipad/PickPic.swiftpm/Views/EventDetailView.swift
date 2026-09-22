@@ -65,6 +65,11 @@ struct EventDetailView: View {
     
     @State private var showingDeleteError = false
     @State private var deleteErrorMessage = ""
+
+    @State private var showingStopOfferingRawsConfirmation = false
+    @State private var isStoppingOfferingRaws = false
+    @State private var showingStopOfferingRawsError = false
+    @State private var stopOfferingRawsErrorMessage = ""
     
     @State private var isUpdatingStatus = false
     @State private var showingArchiveConfirmation = false
@@ -606,6 +611,27 @@ struct EventDetailView: View {
             
             Section {
                 Button {
+                    showingStopOfferingRawsConfirmation = true
+                } label: {
+                    Label(
+                        "Stop Offering Originals",
+                        systemImage: "stop.circle"
+                    )
+                }
+                .disabled(isStoppingOfferingRaws)
+            } footer: {
+                Text(
+                    """
+                    Turns off RAW requests, cancels every pending delivery, \
+                    and frees all storage for this event now, regardless of \
+                    collection status. Reversible: turn requests back on \
+                    and the next request re-uploads.
+                    """
+                )
+            }
+
+            Section {
+                Button {
                     showingRenameEvent = true
                 } label: {
                     Label(
@@ -617,7 +643,7 @@ struct EventDetailView: View {
                     isDeleting
                     || isUpdatingStatus
                 )
-                
+
                 Button(
                     role: .destructive
                 ) {
@@ -899,6 +925,38 @@ struct EventDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(deleteErrorMessage)
+        }
+        .alert(
+            "Stop Offering Originals for \(event.title)?",
+            isPresented:
+                $showingStopOfferingRawsConfirmation
+        ) {
+            Button(
+                "Stop Offering Originals",
+                role: .destructive
+            ) {
+                Task {
+                    await stopOfferingRawRequests()
+                }
+            }
+
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                """
+                This cancels every pending RAW delivery for this event and \
+                frees the storage now, regardless of collection status. \
+                Requests stay off until you turn them back on.
+                """
+            )
+        }
+        .alert(
+            "Unable to Stop Offering Originals",
+            isPresented: $showingStopOfferingRawsError
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(stopOfferingRawsErrorMessage)
         }
     }
     
@@ -1383,8 +1441,40 @@ struct EventDetailView: View {
         } catch {
             deleteErrorMessage =
             error.localizedDescription
-            
+
             showingDeleteError = true
+        }
+    }
+
+    private func stopOfferingRawRequests() async {
+        guard !isStoppingOfferingRaws else {
+            return
+        }
+
+        isStoppingOfferingRaws = true
+
+        defer {
+            isStoppingOfferingRaws = false
+        }
+
+        do {
+            let client =
+            try configuration.makeClient()
+
+            let updatedEvent =
+            try await client.stopOfferingRawRequests(
+                eventID: event.id
+            )
+
+            event = updatedEvent
+            onEventUpdated(updatedEvent)
+
+            await loadDashboard()
+        } catch {
+            stopOfferingRawsErrorMessage =
+            error.localizedDescription
+
+            showingStopOfferingRawsError = true
         }
     }
 }
