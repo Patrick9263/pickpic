@@ -261,11 +261,17 @@ struct EventListView: View {
         }
         .navigationTitle("Events")
         /*
-         * A large title sits on its own line instead of competing with
-         * the filter, settings, add and sidebar controls, which in a
-         * narrow sidebar left room for only "Ev…".
+         * #353: the system large title collapses behind the
+         * topBarLeading/topBarTrailing Liquid Glass button platters on
+         * iOS 26 -- transiently while scrolling in .large mode, and
+         * permanently in .inline mode (both tried and failed on-device;
+         * see PR #355). A .principal toolbar item renders through the
+         * same layering as the buttons instead of the special
+         * collapsing-title layer, so it sidesteps the bug rather than
+         * fighting it. .inline suppresses the system title text so this
+         * custom one is the only thing drawn.
          */
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .searchable(
             text: $searchText,
             prompt: "Search events"
@@ -280,6 +286,11 @@ struct EventListView: View {
             )
         }
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("Events")
+                    .font(.headline)
+            }
+
             ToolbarItem(
                 placement: .topBarLeading
             ) {
