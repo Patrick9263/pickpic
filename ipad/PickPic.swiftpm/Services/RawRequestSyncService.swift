@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 struct RawRequestSyncResult: Sendable {
@@ -5,6 +6,140 @@ struct RawRequestSyncResult: Sendable {
     let uploadedByteCount: Int64
     let missingFilenames: [String]
     let failures: [String]
+}
+
+/*
+ * What LikedPhotosView reads to show per-file progress for the one RAW
+ * request sync() is actively working on (#268) -- everywhere else in the
+ * pending list still just reads "Waiting", since the queue itself is
+ * already the ordered photo list the view has from the server.
+ *
+ * Deliberately not a persisted model mirroring UploadJob/UploadStage: the
+ * server is the durable record of what still needs delivering (see the
+ * note atop RawRequestSyncService), so nothing here needs to survive a
+ * relaunch on its own. The one exception is reattach(), used when a
+ * transfer is found already in flight from a previous process -- that
+ * only re-seeds state this process would otherwise have no way to know,
+ * it does not persist anything to disk.
+ */
+@MainActor
+final class RawDeliveryProgress: ObservableObject {
+    enum Phase: Equatable, Sendable {
+        case staging
+        case uploading(sentBytes: Int64, totalBytes: Int64)
+    }
+
+    static let shared = RawDeliveryProgress()
+
+    @Published private(set) var pendingPhotoIDs: [String] =
+        []
+
+    @Published private(set) var currentPhotoID: String?
+
+    @Published private(set) var phase: Phase?
+
+    private init() {}
+
+    fileprivate func begin(pendingPhotoIDs: [String]) {
+        self.pendingPhotoIDs = pendingPhotoIDs
+    }
+
+    fileprivate func startStaging(photoID: String) {
+        currentPhotoID = photoID
+        phase = .staging
+    }
+
+    fileprivate func updateProgress(
+        sentBytes: Int64,
+        totalBytes: Int64
+    ) {
+        phase = .uploading(
+            sentBytes: sentBytes,
+            totalBytes: totalBytes
+        )
+    }
+
+    fileprivate func finish(photoID: String) {
+        pendingPhotoIDs.removeAll { pendingPhotoID in
+            pendingPhotoID == photoID
+        }
+
+        if currentPhotoID == photoID {
+            currentPhotoID = nil
+            phase = nil
+        }
+    }
+
+    /*
+     * Re-seeds state for a transfer this process did not start itself --
+     * RawUploadSession.reattachActiveUpload found it still running under a
+     * relaunched background session. Without this the row for that photo
+     * would show "Waiting" while 100 MB moved quietly in the background.
+     */
+    fileprivate func reattach(
+        photoID: String,
+        pendingPhotoIDs: [String]
+    ) {
+        self.pendingPhotoIDs = pendingPhotoIDs
+        currentPhotoID = photoID
+        phase = .uploading(sentBytes: 0, totalBytes: 0)
+    }
+
+    fileprivate func reset() {
+        pendingPhotoIDs = []
+        currentPhotoID = nil
+        phase = nil
+    }
+
+    /*
+     * The entry point every onProgress closure below actually captures.
+     * RawUploadSession's didSendBodyData fires from its own delegate
+     * queue, not the main actor, so a closure that calls updateProgress
+     * directly would be isolation-unsafe to hand to it. Being nonisolated
+     * lets a plain @Sendable closure call this synchronously from any
+     * thread; the actual mutation still only ever happens on the main
+     * actor, inside the Task.
+     */
+    nonisolated static func scheduleProgressUpdate(
+        sentBytes: Int64,
+        totalBytes: Int64
+    ) {
+        Task { @MainActor in
+            RawDeliveryProgress.shared.updateProgress(
+                sentBytes: sentBytes,
+                totalBytes: totalBytes
+            )
+        }
+    }
+}
+
+extension RawDeliveryProgress.Phase {
+    /*
+     * A 0...1 fraction for a determinate ProgressView, or nil when there is
+     * nothing meaningful to show a bar for: still staging (no bytes sent
+     * yet), or totalBytes not yet known. That second case covers both
+     * URLSession reporting -1 for totalBytesExpectedToSend before it has
+     * resolved the request body length, and reattach() seeding a fresh
+     * reattachment with 0/0 before the first didSendBodyData callback
+     * lands. Clamped because a task can report totalBytesSent fractionally
+     * over totalBytesExpectedToSend right at completion.
+     */
+    var fractionCompleted: Double? {
+        switch self {
+        case .staging:
+            return nil
+
+        case let .uploading(sentBytes, totalBytes):
+            guard totalBytes > 0 else {
+                return nil
+            }
+
+            let fraction =
+                Double(sentBytes) / Double(totalBytes)
+
+            return min(max(fraction, 0), 1)
+        }
+    }
 }
 
 /*
@@ -41,19 +176,6 @@ enum RawRequestSyncService {
             activeEventIDs.remove(eventID)
         }
 
-        /*
-         * A relaunch can land while iPadOS is still finishing a transfer the
-         * previous process started. That upload has not reached the server
-         * yet, so its request still reads as pending — staging and sending it
-         * again would push the same RAW twice.
-         */
-        guard
-            await !RawUploadSession.shared
-                .hasActiveUploads()
-        else {
-            return nil
-        }
-
         let currentPhotos:
         [ServerPhotoRecord]
 
@@ -80,8 +202,56 @@ enum RawRequestSyncService {
             }
 
         guard !photosNeedingRaw.isEmpty else {
+            RawDeliveryProgress.shared.reset()
             return nil
         }
+
+        /*
+         * A relaunch can land while iPadOS is still finishing a transfer the
+         * previous process started. That upload has not reached the server
+         * yet, so its request still reads as pending — staging and sending it
+         * again would push the same RAW twice.
+         *
+         * That transfer is still worth showing progress for, though (#268) —
+         * reattachActiveUpload finds it, tags a handler onto it, and hands
+         * back the photo id its task was tagged with so the view has
+         * something other than "Waiting" for it.
+         */
+        guard
+            await !RawUploadSession.shared
+                .hasActiveUploads()
+        else {
+            if
+                RawDeliveryProgress.shared.currentPhotoID
+                    == nil,
+                let reattachedPhotoID =
+                    await RawUploadSession.shared
+                    .reattachActiveUpload(
+                        onProgress: { sentBytes, totalBytes in
+                            RawDeliveryProgress
+                                .scheduleProgressUpdate(
+                                    sentBytes: sentBytes,
+                                    totalBytes: totalBytes
+                                )
+                        }
+                    ),
+                photosNeedingRaw.contains(where: { photo in
+                    photo.id == reattachedPhotoID
+                })
+            {
+                RawDeliveryProgress.shared.reattach(
+                    photoID: reattachedPhotoID,
+                    pendingPhotoIDs:
+                        photosNeedingRaw.map(\.id)
+                )
+            }
+
+            return nil
+        }
+
+        RawDeliveryProgress.shared.begin(
+            pendingPhotoIDs: photosNeedingRaw.map(\.id)
+        )
 
         var uploadedPhotoCount = 0
         var uploadedByteCount: Int64 = 0
@@ -92,6 +262,10 @@ enum RawRequestSyncService {
             guard !Task.isCancelled else {
                 break
             }
+
+            RawDeliveryProgress.shared.startStaging(
+                photoID: photo.id
+            )
 
             let staged: StagedRawUpload
 
@@ -116,19 +290,32 @@ enum RawRequestSyncService {
                  * the rest of the event's requests.
                  */
                 missingFilenames.append(filename)
+                RawDeliveryProgress.shared.finish(
+                    photoID: photo.id
+                )
                 continue
             } catch {
                 failures.append(
                     photo.originalFilename
                 )
 
+                RawDeliveryProgress.shared.finish(
+                    photoID: photo.id
+                )
                 continue
             }
 
             do {
                 _ = try await client.uploadRawPhoto(
                     staged,
-                    to: photo.id
+                    to: photo.id,
+                    onProgress: { sentBytes, totalBytes in
+                        RawDeliveryProgress
+                            .scheduleProgressUpdate(
+                                sentBytes: sentBytes,
+                                totalBytes: totalBytes
+                            )
+                    }
                 )
 
                 uploadedPhotoCount += 1
@@ -139,6 +326,10 @@ enum RawRequestSyncService {
                 )
             }
 
+            RawDeliveryProgress.shared.finish(
+                photoID: photo.id
+            )
+
             /*
              * Removed whether or not the upload succeeded: a retry re-stages
              * from the event folder, and these are the largest files the app
@@ -148,6 +339,8 @@ enum RawRequestSyncService {
                 photoID: photo.id
             )
         }
+
+        RawDeliveryProgress.shared.reset()
 
         return RawRequestSyncResult(
             uploadedPhotoCount: uploadedPhotoCount,

@@ -79,6 +79,14 @@ final class RawUploadSession:
 
     private var responseDataByTaskID: [Int: Data] = [:]
 
+    /*
+     * Keyed by taskIdentifier rather than photo id, matching continuations
+     * and responseDataByTaskID above -- a task outlives any one process's
+     * notion of which photo it belongs to (see reattachActiveUpload).
+     */
+    private var progressHandlersByTaskID:
+        [Int: @Sendable (Int64, Int64) -> Void] = [:]
+
     private var backgroundEventsCompletionHandler:
         (() -> Void)?
 
@@ -95,7 +103,10 @@ final class RawUploadSession:
 
     func upload(
         request: URLRequest,
-        fromFile fileURL: URL
+        fromFile fileURL: URL,
+        photoID: String,
+        onProgress: (@Sendable (Int64, Int64) -> Void)? =
+            nil
     ) async throws -> (Data, URLResponse) {
         try await withCheckedThrowingContinuation {
             continuation in
@@ -104,14 +115,65 @@ final class RawUploadSession:
                 fromFile: fileURL
             )
 
+            /*
+             * Read back by reattachActiveUpload after a relaunch, when this
+             * process never called upload() for the task and so has no
+             * other record of which photo it belongs to.
+             */
+            task.taskDescription = photoID
+
             lock.lock()
             continuations[task.taskIdentifier] =
                 continuation
             responseDataByTaskID[task.taskIdentifier] =
                 Data()
+            if let onProgress {
+                progressHandlersByTaskID[
+                    task.taskIdentifier
+                ] = onProgress
+            }
             lock.unlock()
 
             task.resume()
+        }
+    }
+
+    /*
+     * Called once per activation, only when hasActiveUploads() has already
+     * reported a transfer in flight that this process did not start itself
+     * -- i.e. it survived a relaunch. Finds that task, registers a progress
+     * handler for it going forward, and hands back the photo id its
+     * taskDescription was tagged with so the caller can re-seed
+     * RawDeliveryProgress. Returns nil if the task has already finished
+     * between the two checks, or was never tagged (an older build's
+     * transfer still in flight).
+     */
+    func reattachActiveUpload(
+        onProgress:
+            @escaping @Sendable (Int64, Int64) -> Void
+    ) async -> String? {
+        await withCheckedContinuation { continuation in
+            session.getAllTasks { tasks in
+                guard
+                    let activeTask = tasks.first(
+                        where: { task in
+                            task.state != .completed
+                        }
+                    ),
+                    let photoID = activeTask.taskDescription
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+
+                self.lock.lock()
+                self.progressHandlersByTaskID[
+                    activeTask.taskIdentifier
+                ] = onProgress
+                self.lock.unlock()
+
+                continuation.resume(returning: photoID)
+            }
         }
     }
 
@@ -163,6 +225,36 @@ final class RawUploadSession:
         lock.unlock()
     }
 
+    /*
+     * The only per-file progress signal the app has (issue #268): these are
+     * the largest transfers it makes, one at a time, possibly over
+     * cellular, and a static "Uploading..." on a 100 MB file is
+     * indistinguishable from a hang.
+     */
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        lock.lock()
+        let handler =
+            progressHandlersByTaskID[task.taskIdentifier]
+        lock.unlock()
+
+        guard let handler else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            handler(
+                totalBytesSent,
+                totalBytesExpectedToSend
+            )
+        }
+    }
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,
@@ -176,6 +268,8 @@ final class RawUploadSession:
             responseDataByTaskID
             .removeValue(forKey: task.taskIdentifier)
             ?? Data()
+        progressHandlersByTaskID
+            .removeValue(forKey: task.taskIdentifier)
         lock.unlock()
 
         /*

@@ -737,7 +737,9 @@ struct APIClient {
      */
     func uploadRawPhoto(
         _ stagedUpload: StagedRawUpload,
-        to photoID: String
+        to photoID: String,
+        onProgress: (@Sendable (Int64, Int64) -> Void)? =
+            nil
     ) async throws -> RawPhotoUploadResponse {
         let fileValues =
         try? stagedUpload.fileURL.resourceValues(
@@ -814,7 +816,9 @@ struct APIClient {
         let (data, response) =
         try await RawUploadSession.shared.upload(
             request: request,
-            fromFile: stagedUpload.fileURL
+            fromFile: stagedUpload.fileURL,
+            photoID: photoID,
+            onProgress: onProgress
         )
 
         guard

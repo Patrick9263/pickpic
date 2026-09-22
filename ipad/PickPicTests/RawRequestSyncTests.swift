@@ -195,6 +195,61 @@ struct EventPhotoStatisticsPendingRawRequestTests {
     }
 }
 
+// RawDeliveryProgress itself is @MainActor and only ever mutated from
+// RawRequestSyncService's sync loop, so it isn't exercised directly here --
+// see the note on UploadQueueStore's own untestability in CLAUDE.md for why
+// that kind of state-machine glue stays out of this target. fractionCompleted
+// is the pure piece pulled out of it (#268): what a progress bar should show
+// for a given phase, including the edge cases URLSession and a relaunch
+// reattachment can both produce.
+struct RawDeliveryProgressPhaseTests {
+    @Test
+    func stagingHasNoFraction() {
+        let phase = RawDeliveryProgress.Phase.staging
+
+        #expect(phase.fractionCompleted == nil)
+    }
+
+    // URLSession reports totalBytesExpectedToSend == -1 until it has
+    // resolved the request body length, and reattachActiveUpload seeds a
+    // fresh reattachment with 0/0 before the first didSendBodyData callback
+    // lands. Neither should render as "0% complete".
+    @Test
+    func unknownTotalHasNoFraction() {
+        for totalBytes: Int64 in [0, -1] {
+            let phase = RawDeliveryProgress.Phase.uploading(
+                sentBytes: 0,
+                totalBytes: totalBytes
+            )
+
+            #expect(phase.fractionCompleted == nil)
+        }
+    }
+
+    @Test
+    func computesAFractionOnceTotalsAreKnown() {
+        let phase = RawDeliveryProgress.Phase.uploading(
+            sentBytes: 25_000_000,
+            totalBytes: 100_000_000
+        )
+
+        #expect(phase.fractionCompleted == 0.25)
+    }
+
+    // A task can report totalBytesSent fractionally over
+    // totalBytesExpectedToSend right at completion; the bar must not
+    // overshoot 1.0.
+    @Test
+    func clampsAFractionOverOne() {
+        let phase = RawDeliveryProgress.Phase.uploading(
+            sentBytes: 100_000_001,
+            totalBytes: 100_000_000
+        )
+
+        #expect(phase.fractionCompleted == 1)
+    }
+}
+
 struct RawUploadFileServiceValidationTests {
     @Test
     func acceptsAPlainFilename() throws {
