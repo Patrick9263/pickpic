@@ -10,6 +10,16 @@ import type { GalleryPhotoGroup } from "../components/gallery/types";
 
 export type GalleryGrouping = "all" | "day" | "location";
 
+export const VISITOR_TOKEN_KEY = "pickpic-visitor-token";
+
+/*
+ * Shared between GalleryPage (writer) and RawConfirmPage (reader), which is
+ * why it lives here rather than in either page -- it is the only channel
+ * between the two for finishing a batch request after the anchor photo's
+ * confirmation link is clicked (#271). See PendingRawBatch below.
+ */
+export const PENDING_RAW_BATCH_KEY = "pickpic-raw-batch-pending";
+
 /*
  * Safari's "Block All Cookies" setting throws a SecurityError on merely
  * *accessing* window.localStorage, not just on getItem/setItem — so the
@@ -38,6 +48,17 @@ export function writeStorageItem(
     getStorage().setItem(key, value);
   } catch {
     // Storage may be blocked; the value just won't survive a reload.
+  }
+}
+
+export function removeStorageItem(
+  getStorage: () => Pick<Storage, "removeItem">,
+  key: string,
+): void {
+  try {
+    getStorage().removeItem(key);
+  } catch {
+    // Storage may be blocked; there is nothing to clean up in that case.
   }
 }
 
@@ -157,6 +178,109 @@ export function getRawRequestState(
    * sit there unexpired. Whatever actually exists on the server wins.
    */
   return photo.viewerRawConfirmationPending ? "confirming" : "none";
+}
+
+/*
+ * The multi-select "Request originals" action (#271) only ever asks for
+ * photos with nothing outstanding yet -- state "none" is the same "would
+ * invite a brand new ask" rule getRawRequestState's own comment describes for
+ * the single-photo button, and rawRequestsEnabled gates a *new* ask the same
+ * way there too. Anything already confirming, waiting, ready or collected is
+ * excluded rather than made unselectable, so a viewer selecting a mixed batch
+ * sees an accurate "N can be requested" instead of losing photos from their
+ * selection outright.
+ */
+export function selectRequestableRawPhotos(
+  photos: GalleryPhotoRecord[],
+  rawRequestsEnabled: boolean,
+): GalleryPhotoRecord[] {
+  if (!rawRequestsEnabled) {
+    return [];
+  }
+
+  return photos.filter((photo) => getRawRequestState(photo) === "none");
+}
+
+/*
+ * Backs the "Your originals" collection panel (#271): every RAW this viewer
+ * can currently download, gathered in one place instead of requiring a scroll
+ * through the whole gallery to find each one's inline button. "ready" already
+ * means viewerRawDownload is non-null (see getRawRequestState), so nothing
+ * further needs deriving here.
+ */
+export function selectReadyRawPhotos(
+  photos: GalleryPhotoRecord[],
+): GalleryPhotoRecord[] {
+  return photos.filter((photo) => getRawRequestState(photo) === "ready");
+}
+
+/*
+ * What a batch request that had to wait on confirmation leaves behind so
+ * RawConfirmPage can finish the rest of the batch once the anchor photo's
+ * link is confirmed (#271) -- see addRawRequestsBatch's comment on why only
+ * the anchor gets a real confirmation row. Kept as plain JSON in localStorage
+ * rather than anything richer since it only has to survive a same-device trip
+ * to the Mail app and back; a different device simply never finds it, which
+ * is the documented, acceptable degradation.
+ */
+export interface PendingRawBatch {
+  shareToken: string;
+  photoIds: string[];
+  displayName: string;
+  email: string;
+}
+
+export function encodePendingRawBatch(batch: PendingRawBatch): string {
+  return JSON.stringify(batch);
+}
+
+/*
+ * Returns null on anything that doesn't look like a batch pending for this
+ * exact gallery -- malformed JSON, a stale shape, or (most commonly) a batch
+ * left over from a different share token -- rather than throwing, since a
+ * miss here should fall back to RawConfirmPage's ordinary single-photo
+ * behaviour instead of breaking the confirmation the viewer actually came to
+ * finish.
+ */
+export function parsePendingRawBatch(
+  raw: string | null,
+  shareToken: string,
+): PendingRawBatch | null {
+  if (raw === null) {
+    return null;
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+
+  const candidate = parsed as Partial<PendingRawBatch>;
+
+  if (
+    candidate.shareToken !== shareToken ||
+    typeof candidate.displayName !== "string" ||
+    typeof candidate.email !== "string" ||
+    !Array.isArray(candidate.photoIds) ||
+    candidate.photoIds.length === 0 ||
+    !candidate.photoIds.every((id) => typeof id === "string")
+  ) {
+    return null;
+  }
+
+  return {
+    shareToken: candidate.shareToken,
+    photoIds: candidate.photoIds,
+    displayName: candidate.displayName,
+    email: candidate.email,
+  };
 }
 
 export function createArchiveFilename(title: string): string {

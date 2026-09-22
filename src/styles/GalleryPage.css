@@ -308,6 +308,81 @@
   border-bottom: 0;
 }
 
+.gallery-raw-collection {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+}
+
+.gallery-raw-collection-header {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.gallery-raw-collection-header strong {
+  color: var(--color-text);
+  font-size: 0.88rem;
+}
+
+.gallery-raw-collection-header span {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.gallery-raw-collection-list {
+  display: grid;
+  gap: 0;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.gallery-raw-collection-list li {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 4px 0;
+}
+
+.gallery-raw-collection-list li:last-child {
+  border-bottom: 0;
+}
+
+.gallery-raw-collection-list span {
+  color: var(--color-text);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.gallery-raw-collection-list button {
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: 10px;
+  color: #ffffff;
+  flex-shrink: 0;
+  font-size: 0.76rem;
+  font-weight: 750;
+  min-height: 36px;
+  padding: 6px 12px;
+}
+
+.gallery-raw-collection-list button:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.gallery-raw-collection-list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .gallery-selection-bar {
   align-items: center;
   background: color-mix(in srgb, var(--color-surface) 94%, transparent);
@@ -385,6 +460,19 @@
 }
 
 .gallery-select-all-button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+.gallery-raw-request-batch-button {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+  color: var(--color-text);
+}
+
+.gallery-raw-request-batch-button:hover:not(:disabled) {
   background: var(--color-surface-hover);
   border-color: var(--color-accent);
   color: var(--color-text);

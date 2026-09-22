@@ -78,6 +78,12 @@ interface RawRequestRequestBody {
   email?: unknown;
 }
 
+interface RawRequestBatchRequestBody {
+  displayName?: unknown;
+  email?: unknown;
+  photoIds?: unknown;
+}
+
 interface EventRecord {
   id: string;
   title: string;
@@ -681,6 +687,31 @@ const RAW_CONFIRMATION_TTL_MS = 24 * 60 * 60 * 1000;
 const RAW_EMAIL_CAP_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RAW_EMAIL_CAP_PER_ADDRESS = 12;
 const RAW_EMAIL_CAP_PER_VISITOR = 12;
+
+/*
+ * How many originals one confirmed address may hold "in flight" -- requested
+ * but not yet collected -- across one event at once (#271). This is a
+ * storage cap, not a mail cap: RAW_EMAIL_CAP_* above bounds sends, and a
+ * batch request sends at most one, so it does not constrain a large batch the
+ * way this does. Each in-flight request can pin up to MAX_RAW_BYTES in R2
+ * until it is downloaded or reclaimed, so an unbounded batch (or an
+ * unbounded run of individual taps) could otherwise hold this cap's worth of
+ * originals open at once -- 25 x 100 MB is 2.5 GB against the account's
+ * storage cap. Refusing here, before anything is written, is better than
+ * surfacing that as a failed iPad upload later.
+ */
+const RAW_REQUESTS_IN_FLIGHT_CAP = 25;
+
+/*
+ * A sanity bound on one batch request's photoIds array, independent of
+ * RAW_REQUESTS_IN_FLIGHT_CAP above -- that cap is evaluated against the
+ * event, not the request body, so without this a caller could still send an
+ * enormous array that is mostly rejected but costs a lookup each. Generous
+ * relative to the in-flight cap on purpose: most of a large array is expected
+ * to already be "requested" or "ready" and therefore excluded client-side
+ * before it ever reaches here.
+ */
+const RAW_REQUEST_BATCH_MAX_PHOTO_IDS = 200;
 
 /*
  * Hardcoded rather than derived from the incoming request, matching
@@ -3541,6 +3572,253 @@ async function addRawRequest(
 }
 
 /*
+ * Multi-select "Request originals (N)" (#271). The design deliberately keeps
+ * this to requesting -- collection stays one file, one tap, one download,
+ * through the existing per-photo GET route -- because confirmation is what
+ * actually costs a viewer N taps today, not the download.
+ *
+ * The already-confirmed case (the common one, since it only takes one prior
+ * request anywhere in the event) is just writeRawRequest looped once per
+ * photo. The not-yet-confirmed case cannot loop the same way without mailing
+ * one confirmation per photo, which is the exact problem this endpoint
+ * exists to avoid -- so it sends exactly one confirmation, for one anchor
+ * photo, describing the whole batch, and leaves the rest of the batch for the
+ * client to finish once that one link is confirmed (RawConfirmPage.tsx).
+ * That means a confirmation redeemed on a different device than the one that
+ * submitted the batch only completes the anchor photo -- the other photos
+ * are simply never requested rather than silently requested for the wrong
+ * visitor, and the viewer can just select them again now that the address is
+ * proven. Device independence for a *single* request is unaffected; see
+ * writeRawRequest's own handling of that case.
+ */
+async function addRawRequestsBatch(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  shareToken: string,
+): Promise<Response> {
+  const visitorToken = getVisitorToken(request);
+
+  if (!visitorToken) {
+    return jsonResponse({ error: "A valid visitor token is required." }, 400);
+  }
+
+  const parsedBody = await parseJsonObjectBody<RawRequestBatchRequestBody>(
+    request,
+    "The request body must be valid JSON.",
+  );
+
+  if (parsedBody instanceof Response) {
+    return parsedBody;
+  }
+
+  const body = parsedBody;
+
+  if (typeof body.displayName !== "string") {
+    return jsonResponse(
+      { error: "Enter your name before requesting the original files." },
+      400,
+    );
+  }
+
+  const displayName = body.displayName.trim();
+
+  if (displayName.length === 0 || displayName.length > 80) {
+    return jsonResponse(
+      { error: "Your name must be between 1 and 80 characters." },
+      400,
+    );
+  }
+
+  const email = normalizeEmail(body.email);
+
+  if (!email) {
+    return jsonResponse(
+      { error: "Enter a valid email address to request the original files." },
+      400,
+    );
+  }
+
+  if (!Array.isArray(body.photoIds) || body.photoIds.length === 0) {
+    return jsonResponse(
+      { error: "Select at least one photo to request." },
+      400,
+    );
+  }
+
+  if (body.photoIds.length > RAW_REQUEST_BATCH_MAX_PHOTO_IDS) {
+    return jsonResponse(
+      {
+        error: `Request at most ${RAW_REQUEST_BATCH_MAX_PHOTO_IDS} original files at once.`,
+      },
+      400,
+    );
+  }
+
+  const photoIds = Array.from(
+    new Set(body.photoIds.filter((id): id is string => typeof id === "string")),
+  );
+
+  if (photoIds.length === 0) {
+    return jsonResponse(
+      { error: "Select at least one photo to request." },
+      400,
+    );
+  }
+
+  /*
+   * Looked up rather than trusted from the client, same as the single-photo
+   * route -- a stale or foreign id is silently dropped rather than failing
+   * the whole batch, since the selection this responds to was built from a
+   * gallery snapshot that may be a little behind the server's.
+   */
+  const galleryPhotos: GalleryPhotoRow[] = [];
+
+  for (const photoId of photoIds) {
+    const galleryPhoto = await findPhotoInShare(env, shareToken, photoId);
+
+    if (galleryPhoto && galleryPhoto.rawRequestsEnabled) {
+      galleryPhotos.push(galleryPhoto);
+    }
+  }
+
+  if (galleryPhotos.length === 0) {
+    return jsonResponse(
+      { error: "None of the selected photos can be requested right now." },
+      404,
+    );
+  }
+
+  const eventId = galleryPhotos[0].eventId;
+
+  /*
+   * Checked once, up front, against the whole batch rather than left to each
+   * photo's own writeRawRequest check -- a partial batch succeeding and the
+   * rest failing one by one is a worse experience than one clear refusal
+   * before anything is written, which is the same call #271's design makes
+   * for the storage cap generally.
+   */
+  const inFlightCount = await countInFlightRawRequests(env, eventId, email);
+  const available = RAW_REQUESTS_IN_FLIGHT_CAP - inFlightCount;
+
+  if (galleryPhotos.length > Math.max(available, 0)) {
+    return jsonResponse(
+      {
+        error:
+          available > 0
+            ? `You can request ${available} more original file${
+                available === 1 ? "" : "s"
+              } right now -- select fewer, or download some of your pending files first.`
+            : `You already have ${RAW_REQUESTS_IN_FLIGHT_CAP} original files pending, which is the most you can hold at once. Download or withdraw one before requesting more.`,
+      },
+      409,
+    );
+  }
+
+  const requestedPhotoIds = galleryPhotos.map((photo) => photo.photoId);
+
+  if (!(await isAddressConfirmedInEvent(env, eventId, email))) {
+    const anchor = galleryPhotos[0];
+    const filenameLabel =
+      galleryPhotos.length === 1
+        ? (anchor.rawOriginalFilename ?? anchor.originalFilename)
+        : `${galleryPhotos.length} original files`;
+
+    await queueRawRequestConfirmation(
+      request,
+      env,
+      ctx,
+      anchor,
+      anchor.photoId,
+      visitorToken,
+      displayName,
+      email,
+      filenameLabel,
+    );
+
+    return jsonResponse({
+      requested: 0,
+      confirmationPending: true,
+      email,
+      photoIds: requestedPhotoIds,
+    });
+  }
+
+  const visitor = await upsertGalleryVisitor(
+    env,
+    eventId,
+    visitorToken,
+    displayName,
+  );
+
+  if (!visitor) {
+    return jsonResponse(
+      { error: "The visitor identity could not be saved." },
+      500,
+    );
+  }
+
+  let requestedCount = 0;
+
+  for (const galleryPhoto of galleryPhotos) {
+    const result = await writeRawRequest(
+      request,
+      env,
+      ctx,
+      galleryPhoto,
+      galleryPhoto.photoId,
+      visitor.id,
+      email,
+    );
+
+    if (result.ok) {
+      requestedCount += 1;
+    }
+  }
+
+  return jsonResponse({
+    requested: requestedCount,
+    confirmationPending: false,
+    email,
+    photoIds: requestedPhotoIds,
+  });
+}
+
+/*
+ * How many originals a confirmed address has asked for in this event that it
+ * has not yet collected -- "in flight" against RAW_REQUESTS_IN_FLIGHT_CAP
+ * (#271). downloaded_at IS NULL is the live definition regardless of whether
+ * the RAW has actually been delivered yet: a request still waiting on the
+ * iPad counts the same as one already sitting in R2, because both hold the
+ * same slot open. excludePhotoId lets a caller ask "how many others", which
+ * is what re-arming a request that is already in flight (or unchanged, e.g.
+ * an address correction) needs to avoid counting its own row twice.
+ */
+async function countInFlightRawRequests(
+  env: Env,
+  eventId: string,
+  email: string,
+  excludePhotoId: string | null = null,
+): Promise<number> {
+  const row = await env.DB.prepare(
+    `
+      SELECT COUNT(*) AS total
+      FROM raw_requests r
+      INNER JOIN photos p ON p.id = r.photo_id
+      WHERE
+        p.event_id = ?1
+        AND r.email = ?2
+        AND r.downloaded_at IS NULL
+        AND (?3 IS NULL OR r.photo_id != ?3)
+    `,
+  )
+    .bind(eventId, email, excludePhotoId)
+    .first<{ total: number }>();
+
+  return row?.total ?? 0;
+}
+
+/*
  * Writes (or re-points) the one raw_requests row that belongs to this address,
  * having established that the address is confirmed for this event.
  *
@@ -3633,6 +3911,37 @@ async function writeRawRequest(
       )
         .bind(photoId, visitorRow.visitorId)
         .run();
+    }
+  }
+
+  /*
+   * RAW_REQUESTS_IN_FLIGHT_CAP (#271) only has to be checked when this write
+   * is about to make one more row count as in flight -- a brand new row, or
+   * an "ask again" reactivation below that clears downloaded_at back to null.
+   * A plain duplicate, an address correction, or a re-attach to an existing
+   * row changes nothing about how many rows are in flight, so re-checking
+   * there would block a request that isn't actually adding to the count.
+   * photoId is excluded from the count so a row already counted as in flight
+   * (the ask-again case) is not double-counted against itself.
+   */
+  const increasesInFlightCount =
+    !previous || (previous.fulfilledAt !== null && fulfilledAt === null);
+
+  if (increasesInFlightCount) {
+    const inFlightCount = await countInFlightRawRequests(
+      env,
+      galleryPhoto.eventId,
+      email,
+      photoId,
+    );
+
+    if (inFlightCount >= RAW_REQUESTS_IN_FLIGHT_CAP) {
+      return jsonResponse(
+        {
+          error: `You already have ${RAW_REQUESTS_IN_FLIGHT_CAP} original files pending, which is the most you can hold at once. Download or withdraw one before requesting another.`,
+        },
+        409,
+      );
     }
   }
 
@@ -3864,8 +4173,18 @@ async function isAddressConfirmedInEvent(
  * collect keeps isRawReclaimable's awaitingCount veto true and pins ~120 MB for
  * the account's full raw_delivery_ttl_ms (#225). A typo must therefore cost
  * one undeliverable email and nothing else.
+ *
+ * Split out from startRawRequestConfirmation (#271) so a batch request can
+ * reuse it for a single anchor photo with a filenameLabel describing the
+ * whole batch ("3 original files") rather than mailing one link per photo --
+ * see addRawRequestsBatch. photoId still names exactly one photo: the
+ * confirmation row's schema only ever held one, and redeeming it only ever
+ * writes one raw_requests row (confirmRawRequest). The rest of a batch is
+ * finished client-side once that one row is confirmed, since the address is
+ * then proven for the whole event and every other request in it goes
+ * straight through with no further mail.
  */
-async function startRawRequestConfirmation(
+async function queueRawRequestConfirmation(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
@@ -3874,7 +4193,8 @@ async function startRawRequestConfirmation(
   visitorToken: string,
   displayName: string,
   email: string,
-): Promise<Response> {
+  filenameLabel: string,
+): Promise<void> {
   const now = new Date();
   const nowIso = now.toISOString();
 
@@ -3892,66 +4212,90 @@ async function startRawRequestConfirmation(
     visitorToken,
   );
 
-  if (!capped) {
-    /*
-     * A second attempt adds a row rather than replacing the first, which is
-     * what gives the cap above something to count -- a replace-in-place would
-     * hold the count at one however many addresses were tried.
-     *
-     * Leaving both live costs nothing: every pending row for this photo
-     * redeems to the same request, and the first redemption deletes the rest
-     * for that address anyway. A row for a *different* address staying live is
-     * correct, since proving that address is exactly what it was issued for.
-     */
-    const token = generateAuthToken();
-
-    await env.DB.prepare(
-      `
-        INSERT INTO raw_request_confirmations (
-          id,
-          token_hash,
-          event_id,
-          photo_id,
-          email,
-          visitor_token,
-          display_name,
-          created_at,
-          expires_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
-      .bind(
-        crypto.randomUUID(),
-        await hashAuthToken(token),
-        galleryPhoto.eventId,
-        photoId,
-        email,
-        visitorToken,
-        displayName,
-        nowIso,
-        new Date(now.getTime() + RAW_CONFIRMATION_TTL_MS).toISOString(),
-      )
-      .run();
-
-    /*
-     * Points at the SPA page, not the API route -- see confirmRawRequest for
-     * why (#323).
-     */
-    ctx.waitUntil(
-      sendGalleryEmailSafely(request, env, {
-        kind: "raw-confirm",
-        to: email,
-        url: `${PUBLIC_GALLERY_ORIGIN}/g/${encodeURIComponent(
-          galleryPhoto.shareToken,
-        )}/raw-confirm?t=${encodeURIComponent(token)}`,
-        eventTitle: galleryPhoto.eventTitle,
-        filename:
-          galleryPhoto.rawOriginalFilename ?? galleryPhoto.originalFilename,
-        displayName,
-      }),
-    );
+  if (capped) {
+    return;
   }
+
+  /*
+   * A second attempt adds a row rather than replacing the first, which is
+   * what gives the cap above something to count -- a replace-in-place would
+   * hold the count at one however many addresses were tried.
+   *
+   * Leaving both live costs nothing: every pending row for this photo
+   * redeems to the same request, and the first redemption deletes the rest
+   * for that address anyway. A row for a *different* address staying live is
+   * correct, since proving that address is exactly what it was issued for.
+   */
+  const token = generateAuthToken();
+
+  await env.DB.prepare(
+    `
+      INSERT INTO raw_request_confirmations (
+        id,
+        token_hash,
+        event_id,
+        photo_id,
+        email,
+        visitor_token,
+        display_name,
+        created_at,
+        expires_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+  )
+    .bind(
+      crypto.randomUUID(),
+      await hashAuthToken(token),
+      galleryPhoto.eventId,
+      photoId,
+      email,
+      visitorToken,
+      displayName,
+      nowIso,
+      new Date(now.getTime() + RAW_CONFIRMATION_TTL_MS).toISOString(),
+    )
+    .run();
+
+  /*
+   * Points at the SPA page, not the API route -- see confirmRawRequest for
+   * why (#323).
+   */
+  ctx.waitUntil(
+    sendGalleryEmailSafely(request, env, {
+      kind: "raw-confirm",
+      to: email,
+      url: `${PUBLIC_GALLERY_ORIGIN}/g/${encodeURIComponent(
+        galleryPhoto.shareToken,
+      )}/raw-confirm?t=${encodeURIComponent(token)}`,
+      eventTitle: galleryPhoto.eventTitle,
+      filename: filenameLabel,
+      displayName,
+    }),
+  );
+}
+
+async function startRawRequestConfirmation(
+  request: Request,
+  env: Env,
+  ctx: ExecutionContext,
+  galleryPhoto: GalleryPhotoRow,
+  photoId: string,
+  visitorToken: string,
+  displayName: string,
+  email: string,
+): Promise<Response> {
+  await queueRawRequestConfirmation(
+    request,
+    env,
+    ctx,
+    galleryPhoto,
+    photoId,
+    visitorToken,
+    displayName,
+    email,
+    galleryPhoto.rawOriginalFilename ?? galleryPhoto.originalFilename,
+  );
 
   /*
    * The response is identical whether or not the cap suppressed the send. The
@@ -7286,9 +7630,12 @@ async function routeRequest(
    * findPhotoInShare inside removeRawRequest already scopes to a
    * ready/completed gallery, so the 404 case stays covered without this
    * guard.
+   *
+   * raw-requests (plural, #271) has no per-photo segment and no DELETE, so it
+   * only needs the one alternative added to the path half of this regex.
    */
   const galleryMutationMatch = url.pathname.match(
-    /^\/api\/galleries\/([^/]+)\/photos\/[^/]+\/(?:heart|raw-request|comments(?:\/[^/]+)?)$/,
+    /^\/api\/galleries\/([^/]+)\/(?:photos\/[^/]+\/(?:heart|raw-request|comments(?:\/[^/]+)?)|raw-requests)$/,
   );
   const isRawRequestWithdrawal =
     request.method === "DELETE" && /\/raw-request$/.test(url.pathname);
@@ -7329,6 +7676,31 @@ async function routeRequest(
 
     if (request.method === "DELETE") {
       return removeHeart(request, env, shareToken, photoId);
+    }
+
+    return jsonResponse({ error: "Method not allowed." }, 405);
+  }
+
+  /*
+   * Plural, and no photo id segment -- this is the multi-select batch route
+   * (#271), sitting beside the singular one below rather than replacing it.
+   * Collection is still always the singular per-photo GET route; see
+   * addRawRequestsBatch's own comment for why requesting is the only half
+   * that batches.
+   */
+  const galleryRawRequestsBatchMatch = url.pathname.match(
+    /^\/api\/galleries\/([^/]+)\/raw-requests$/,
+  );
+
+  if (galleryRawRequestsBatchMatch) {
+    const shareToken = safeDecodePathSegment(galleryRawRequestsBatchMatch[1]);
+
+    if (shareToken === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    if (request.method === "PUT") {
+      return addRawRequestsBatch(request, env, ctx, shareToken);
     }
 
     return jsonResponse({ error: "Method not allowed." }, 405);
