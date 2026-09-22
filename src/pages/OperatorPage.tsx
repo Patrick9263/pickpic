@@ -233,13 +233,19 @@ function OperatorPage() {
                 </p>
               </div>
 
-              <button type="button" onClick={() => void load()}>
-                Refresh
-              </button>
+              <div className="section-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void load()}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
 
             {state.data.truncated && (
-              <p className="section-description">
+              <p className="section-description operator-notice">
                 Showing the {state.data.accounts.length} newest of{" "}
                 {state.data.accountCount}.
               </p>
