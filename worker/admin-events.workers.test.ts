@@ -555,6 +555,166 @@ describe("POST /api/admin/events/:id/raw-releases", () => {
   });
 });
 
+/*
+ * "Stop offering originals for this event" (#282) -- the force-clear #219's
+ * release button deliberately declines to do on its own. Unlike that suite,
+ * these assert the reclaim itself as well as the eligibility rule: the whole
+ * point of this route is to force a reclaim through the awaitingCount veto
+ * and the 24h grace period that raw-releases respects.
+ */
+describe("POST /api/admin/events/:id/raw-requests/stop", () => {
+  const EVENT_ID = "event-raw-stop";
+  const SHARE_TOKEN = "share-raw-stop";
+  const STOP_PATH = `/api/admin/events/${EVENT_ID}/raw-requests/stop`;
+
+  interface StopBody {
+    event: { id: string; rawRequestsEnabled: boolean };
+    cancelledRequestCount: number;
+  }
+
+  function agoIso(milliseconds: number): string {
+    return new Date(Date.now() - milliseconds).toISOString();
+  }
+
+  async function readRequestRow(photoId: string): Promise<{
+    downloadedAt: string | null;
+    releasedAt: string | null;
+  } | null> {
+    return env.DB.prepare(
+      `
+        SELECT downloaded_at AS downloadedAt, released_at AS releasedAt
+        FROM raw_requests
+        WHERE photo_id = ?
+      `,
+    )
+      .bind(photoId)
+      .first<{ downloadedAt: string | null; releasedAt: string | null }>();
+  }
+
+  beforeEach(async () => {
+    await insertEvent({
+      id: EVENT_ID,
+      shareToken: SHARE_TOKEN,
+      rawRequestsEnabled: true,
+    });
+  });
+
+  it("cancels a request nobody has uploaded a RAW for yet", async () => {
+    await insertPhoto({ id: "photo-unfulfilled", eventId: EVENT_ID });
+    await insertRawRequest({
+      photoId: "photo-unfulfilled",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-unfulfilled",
+    });
+
+    const result = await adminRequest<StopBody>("POST", STOP_PATH);
+
+    expect(result.status).toBe(200);
+    expect(result.body.cancelledRequestCount).toBe(1);
+    expect(await readRequestRow("photo-unfulfilled")).toBeNull();
+  });
+
+  it("cancels a delivered RAW nobody has downloaded, and reclaims it", async () => {
+    await insertPhoto({ id: "photo-undownloaded", eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: "photo-undownloaded",
+      eventId: EVENT_ID,
+    });
+
+    await insertRawRequest({
+      photoId: "photo-undownloaded",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-undownloaded",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+    });
+
+    const result = await adminRequest<StopBody>("POST", STOP_PATH);
+
+    expect(result.body.cancelledRequestCount).toBe(1);
+    expect(await readRequestRow("photo-undownloaded")).toBeNull();
+
+    const state = await readRawPhotoState("photo-undownloaded", storageKey);
+    expect(state.objectExists).toBe(false);
+    expect(state.rawStorageKey).toBeNull();
+  });
+
+  /*
+   * The load-bearing case: a collected RAW downloaded a minute ago, well
+   * inside the 24h grace period and never explicitly released. raw-releases
+   * would hold this; this route must free it anyway, because the whole
+   * point is "regardless of collection status".
+   */
+  it("force-reclaims a collected but unreleased RAW without waiting the grace period", async () => {
+    await insertPhoto({ id: "photo-collected", eventId: EVENT_ID });
+
+    const storageKey = await deliverRawPhoto({
+      photoId: "photo-collected",
+      eventId: EVENT_ID,
+    });
+
+    await insertRawRequest({
+      photoId: "photo-collected",
+      eventId: EVENT_ID,
+      visitorToken: "visitor-token-collected",
+      fulfilledAt: agoIso(60 * 60 * 1000),
+      downloadedAt: agoIso(60 * 1000),
+    });
+
+    const result = await adminRequest<StopBody>("POST", STOP_PATH);
+
+    /* Collected requests are history, not cancelled. */
+    expect(result.body.cancelledRequestCount).toBe(0);
+
+    const row = await readRequestRow("photo-collected");
+    expect(row?.downloadedAt).not.toBeNull();
+    expect(row?.releasedAt).not.toBeNull();
+
+    const state = await readRawPhotoState("photo-collected", storageKey);
+    expect(state.objectExists).toBe(false);
+    expect(state.rawStorageKey).toBeNull();
+  });
+
+  it("turns raw_requests_enabled off", async () => {
+    const result = await adminRequest<StopBody>("POST", STOP_PATH);
+
+    expect(result.body.event.rawRequestsEnabled).toBe(false);
+  });
+
+  it("leaves another event's requests untouched", async () => {
+    const OTHER_EVENT_ID = "event-raw-stop-other";
+
+    await insertEvent({
+      id: OTHER_EVENT_ID,
+      shareToken: "share-raw-stop-other",
+      rawRequestsEnabled: true,
+    });
+    await insertPhoto({ id: "photo-bystander", eventId: OTHER_EVENT_ID });
+    await insertRawRequest({
+      photoId: "photo-bystander",
+      eventId: OTHER_EVENT_ID,
+      visitorToken: "visitor-token-bystander",
+    });
+
+    await adminRequest("POST", STOP_PATH);
+
+    expect(await readRequestRow("photo-bystander")).not.toBeNull();
+  });
+
+  it("404s for an event that doesn't exist", async () => {
+    const result = await adminRequest(
+      "POST",
+      "/api/admin/events/no-such-event/raw-requests/stop",
+    );
+
+    expectError(result, 404, "Event not found.");
+  });
+
+  it("405s on a non-POST method", async () => {
+    expectMethodNotAllowed(await adminRequest("GET", STOP_PATH));
+  });
+});
+
 describe("DELETE /api/admin/events/:id", () => {
   it("deletes the event row", async () => {
     await insertEvent({ id: "event-delete", shareToken: "share-delete" });

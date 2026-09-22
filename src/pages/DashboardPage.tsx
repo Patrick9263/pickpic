@@ -30,7 +30,10 @@ import {
   collectFulfilledPhotoEntries,
   getMissingVariantSources,
 } from "./dashboardHelpers";
-import { describeRawRelease } from "../appHelpers";
+import {
+  describeRawRelease,
+  describeStopOfferingRawsConfirmation,
+} from "../appHelpers";
 
 interface EventsResponse {
   events: EventRecord[];
@@ -93,6 +96,11 @@ interface SetEventRawRequestsEnabledResponse {
 interface ReleaseCollectedRawsResponse {
   releasedPhotoCount: number;
   awaitingPhotoCount: number;
+}
+
+interface StopOfferingRawRequestsResponse {
+  event: EventRecord;
+  cancelledRequestCount: number;
 }
 
 const MAX_JPEG_BYTES = 25 * 1024 * 1024;
@@ -228,6 +236,9 @@ function DashboardPage({ headerExtra, signOutError }: DashboardPageProps = {}) {
   const [rawReleaseSummaries, setRawReleaseSummaries] = useState<
     Record<string, string>
   >({});
+  const [stoppingOfferingRawsId, setStoppingOfferingRawsId] = useState<
+    string | null
+  >(null);
   const [cancelingRawDeliveryPhotoId, setCancelingRawDeliveryPhotoId] =
     useState<string | null>(null);
   const [updatingEventTitleId, setUpdatingEventTitleId] = useState<
@@ -1119,6 +1130,69 @@ function DashboardPage({ headerExtra, signOutError }: DashboardPageProps = {}) {
     }
   }
 
+  async function handleStopOfferingRawRequests(
+    eventRecord: EventRecord,
+  ): Promise<void> {
+    const waitingCount = (photosByEvent[eventRecord.id] ?? []).reduce(
+      (total, photo) =>
+        total +
+        (photo.pendingRawRequestCount ?? 0) +
+        (photo.awaitingRawDownloadCount ?? 0),
+      0,
+    );
+
+    const shouldStop = window.confirm(
+      describeStopOfferingRawsConfirmation(waitingCount, eventRecord.title),
+    );
+
+    if (!shouldStop) {
+      return;
+    }
+
+    setStoppingOfferingRawsId(eventRecord.id);
+    setError(null);
+
+    try {
+      const response = await fetchJson<StopOfferingRawRequestsResponse>(
+        `/api/admin/events/${encodeURIComponent(eventRecord.id)}/raw-requests/stop`,
+        {
+          method: "POST",
+        },
+      );
+
+      setEvents((currentEvents) =>
+        currentEvents.map((currentEvent) =>
+          currentEvent.id === eventRecord.id ? response.event : currentEvent,
+        ),
+      );
+
+      setPhotosByEvent((currentPhotos) => ({
+        ...currentPhotos,
+        [eventRecord.id]: (currentPhotos[eventRecord.id] ?? []).map(
+          (currentPhoto) => ({
+            ...currentPhoto,
+            pendingRawRequestCount: 0,
+            awaitingRawDownloadCount: 0,
+          }),
+        ),
+      }));
+
+      /*
+       * Mirrors handleReleaseCollectedRaws: the route reclaims before it
+       * answers, so the freed bytes are already off the account by now.
+       */
+      void loadStorageUsage();
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Unable to stop offering originals for this event.",
+      );
+    } finally {
+      setStoppingOfferingRawsId(null);
+    }
+  }
+
   async function handleCancelRawDelivery(
     eventId: string,
     photo: PhotoRecord,
@@ -1570,6 +1644,10 @@ function DashboardPage({ headerExtra, signOutError }: DashboardPageProps = {}) {
                         rawReleaseSummaries[eventRecord.id] ?? null
                       }
                       handleReleaseCollectedRaws={handleReleaseCollectedRaws}
+                      stoppingOfferingRawsId={stoppingOfferingRawsId}
+                      handleStopOfferingRawRequests={
+                        handleStopOfferingRawRequests
+                      }
                       cancelingRawDeliveryPhotoId={cancelingRawDeliveryPhotoId}
                       handleCancelRawDelivery={handleCancelRawDelivery}
                       handleSetEventRawRequestsEnabled={

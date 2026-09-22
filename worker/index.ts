@@ -1513,6 +1513,134 @@ async function releaseCollectedRawPhotos(
   });
 }
 
+/*
+ * "Stop offering originals for this event" (#282) -- the per-event force-clear
+ * #221 explicitly declined to add on its own ("a blanket per-event cancel
+ * would revoke every outstanding delivery in a shoot in one click"). What
+ * makes it safe to offer here anyway is that it designs the actual risk out
+ * instead of gating on it:
+ *
+ *  - reclaimRawPhotos already only *re-arms* the pipeline (see its own
+ *    comment above) -- nothing this deletes is a permanent loss. The
+ *    original never left the iPad, and a later request re-uploads it.
+ *  - the real risk is silently revoking a stranger's pending delivery, which
+ *    is why the dashboard confirms with the real waiting count before this
+ *    ever runs.
+ *  - a bare reclaim would also just re-arm within minutes the moment a
+ *    viewer re-opens the gallery and asks again, which is why this also
+ *    turns raw_requests_enabled off -- that is what actually holds the
+ *    reclaim rather than inviting the bytes straight back.
+ *
+ * One atomic action rather than three separate calls a page reload could
+ * catch half-applied: delete every request nobody has downloaded yet
+ * (unfulfilled or delivered-but-uncollected both read as "still waiting"
+ * from the requester's side, which is why this widens #221's WHERE instead
+ * of reusing it verbatim), force-release what is left -- by construction,
+ * only rows every live requester has already downloaded -- and reclaim
+ * through the ordinary #219 pipeline. Reusing that pipeline is what lets
+ * this force a reclaim through collection status and the 24h grace period
+ * without a second, bypassing delete path into R2.
+ */
+async function stopOfferingRawRequests(
+  env: TenantEnv,
+  scope: AccountScope,
+  eventId: string,
+): Promise<Response> {
+  if (!(await eventExists(scope, eventId))) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  const now = new Date().toISOString();
+
+  const cancelled = await scope
+    .prepare(
+      `
+      DELETE FROM raw_requests
+      WHERE
+        downloaded_at IS NULL
+        AND photo_id IN (
+          SELECT id FROM photos
+          WHERE event_id = ? AND account_id = :accountId
+        )
+    `,
+      eventId,
+    )
+    .run();
+
+  await scope
+    .prepare(
+      `
+      UPDATE raw_requests
+      SET released_at = ?
+      WHERE
+        released_at IS NULL
+        AND photo_id IN (
+          SELECT id FROM photos
+          WHERE event_id = ? AND account_id = :accountId
+        )
+    `,
+      now,
+      eventId,
+    )
+    .run();
+
+  await scope.database
+    .prepare(
+      `
+      UPDATE events
+      SET
+        raw_requests_enabled = 0,
+        updated_at = ?
+      WHERE id = ?
+    `,
+    )
+    .bind(now, eventId)
+    .run();
+
+  /*
+   * Awaited rather than deferred, matching releaseCollectedRawPhotos and
+   * cancelUndeliveredRawRequests: this route exists to make the bytes go
+   * away now, and the dashboard's storage figure reloads the moment it
+   * returns.
+   */
+  await reclaimRawPhotos(scope.database, env, "p.event_id = ?", eventId);
+
+  const updatedEvent = await scope
+    .prepare(
+      `
+      SELECT
+        id,
+        title,
+        share_token AS shareToken,
+        status,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        raw_requests_enabled AS rawRequestsEnabled,
+        EXISTS (
+          SELECT 1
+          FROM raw_requests r
+          INNER JOIN photos p ON p.id = r.photo_id
+          WHERE p.event_id = events.id
+        ) AS hasRawRequests
+      FROM events
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      eventId,
+    )
+    .first<EventQueryRow>();
+
+  if (!updatedEvent) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  return jsonResponse({
+    event: toEventRecord(updatedEvent),
+    cancelledRequestCount: cancelled.meta.changes ?? 0,
+  });
+}
+
 async function requireOpenGallery(
   env: Env,
   shareToken: string,
@@ -6686,6 +6814,24 @@ async function handleAdminRequest(
     }
 
     return releaseCollectedRawPhotos(env, scope, eventId);
+  }
+
+  const adminEventStopOfferingRawsMatch = url.pathname.match(
+    /^\/api\/admin\/events\/([^/]+)\/raw-requests\/stop$/,
+  );
+
+  if (adminEventStopOfferingRawsMatch) {
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const eventId = safeDecodePathSegment(adminEventStopOfferingRawsMatch[1]);
+
+    if (eventId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return stopOfferingRawRequests(env, scope, eventId);
   }
 
   const eventPhotosPreflightMatch = url.pathname.match(

@@ -41,3 +41,35 @@ export function describeRawRelease(summary: {
 
   return `${released}${waiting}`;
 }
+
+/*
+ * The confirmation dialog for "Stop offering originals for this event" (#282),
+ * a force-clear that revokes every RAW request nobody has downloaded yet,
+ * regardless of collection status. Pulled out here for the same reason as
+ * describeRawRelease above: the interesting case is naming the real human
+ * cost -- how many strangers are about to have their pending delivery
+ * revoked -- rather than a generic "are you sure?" that would understate it.
+ */
+export function describeStopOfferingRawsConfirmation(
+  waitingCount: number,
+  eventTitle: string,
+): string {
+  const tail =
+    "Your files are still on the iPad -- turn originals back on and " +
+    "they'll upload again if asked for.";
+
+  if (waitingCount === 0) {
+    return (
+      `Stop offering originals for "${eventTitle}"? Viewers won't be able ` +
+      `to request them until you turn requests back on. ${tail}`
+    );
+  }
+
+  const viewers =
+    waitingCount === 1 ? "1 viewer is" : `${waitingCount} viewers are`;
+
+  return (
+    `${viewers} waiting for originals from "${eventTitle}". They'll stop ` +
+    `waiting, and this gallery will stop offering originals. ${tail}`
+  );
+}
