@@ -3,19 +3,49 @@
  * whole point of putting this in the SPA rather than leaving it to a D1 console
  * is that it is readable from the iPad, so this is a stack of cards rather than
  * the wide table the data would suggest.
+ *
+ * Every colour comes from the tokens in src/index.css. The first version of
+ * this file hardcoded light-theme hex values, which put near-black metric
+ * numbers on the dark surface this app actually renders — invisible rather than
+ * merely off-palette. Nothing here should introduce a literal colour again.
  */
 
+/*
+ * .section-heading is a flex row with no gap of its own, so a long description
+ * runs right up against the action beside it. Scoped to this page rather than
+ * fixed globally: the same latent crowding exists elsewhere, but changing a
+ * shared rule is a visual change to screens this PR cannot check.
+ */
+.operator-page .section-heading {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.operator-page .section-heading > div:first-child {
+  /* Lets the text column shrink below its content width so the row can wrap
+     instead of squeezing the button. */
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+/*
+ * .panel is plain padding with no internal gap, so the list needs its own
+ * separation from the heading row above it — a ul's default margin is reset to
+ * zero by the base stylesheet.
+ */
 .operator-accounts {
   display: flex;
   flex-direction: column;
   gap: 16px;
   list-style: none;
-  margin: 0;
+  margin: 20px 0 0;
   padding: 0;
 }
 
 .operator-account {
-  border: 1px solid #e6e3dc;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
   border-radius: 14px;
   display: flex;
   flex-direction: column;
@@ -32,6 +62,7 @@
 }
 
 .operator-account-heading h3 {
+  color: var(--color-text);
   font-size: 1.05rem;
   margin: 0;
 }
@@ -42,10 +73,11 @@
   gap: 6px;
 }
 
+/* Matches .status-badge's treatment in App.css rather than inventing a pill. */
 .operator-tag {
-  background: #f4f2ed;
+  background: var(--color-accent-soft);
   border-radius: 999px;
-  color: #625f58;
+  color: var(--color-accent-hover);
   font-size: 0.72rem;
   font-weight: 650;
   padding: 4px 9px;
@@ -53,8 +85,8 @@
 }
 
 .operator-tag-warn {
-  background: #fdf1e3;
-  color: #8a5a12;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 /*
@@ -69,7 +101,7 @@
 }
 
 .operator-metrics dt {
-  color: #8a867d;
+  color: var(--color-text-subtle);
   font-size: 0.72rem;
   font-weight: 650;
   letter-spacing: 0.02em;
@@ -77,21 +109,21 @@
 }
 
 .operator-metrics dd {
-  color: #171717;
+  color: var(--color-text);
   font-size: 0.95rem;
   font-weight: 650;
   margin: 2px 0 0;
 }
 
 .operator-metric-note {
-  color: #8a867d;
+  color: var(--color-text-muted);
   display: block;
   font-size: 0.78rem;
   font-weight: 500;
 }
 
 .operator-users {
-  border-top: 1px solid #efece5;
+  border-top: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -107,6 +139,7 @@
 }
 
 .operator-user-email {
+  color: var(--color-text);
   font-size: 0.9rem;
   /* Beta-tester addresses are long and a phone is narrow. */
   overflow-wrap: anywhere;
@@ -114,12 +147,20 @@
 
 .operator-user-meta,
 .operator-account-footer {
-  color: #8a867d;
+  color: var(--color-text-muted);
   font-size: 0.78rem;
   margin: 0;
 }
 
 .operator-user-empty {
-  color: #8a867d;
+  color: var(--color-text-muted);
   font-size: 0.82rem;
+}
+
+/*
+ * The truncation and "not an operator" notices are the only loose paragraphs in
+ * their panels, so without this they sit flush against the heading above them.
+ */
+.operator-notice {
+  margin: 16px 0 0;
 }
