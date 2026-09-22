@@ -717,6 +717,26 @@ struct EventOverview: View {
                 systemImage:
                     "clock.arrow.circlepath"
             )
+
+            /*
+             * Conditional like missingVariantPhotoCount's row metric
+             * below — most events have nothing outstanding, and a
+             * permanent zero here would just be noise next to the
+             * always-present counts above.
+             */
+            if
+                !showsPlaceholder
+                && statistics.pendingRawRequestCount > 0
+            {
+                EventOverviewMetric(
+                    title: "RAW Requests",
+                    value: statisticsValue(
+                        statistics.pendingRawRequestCount
+                    ),
+                    systemImage:
+                        "tray.and.arrow.up.fill"
+                )
+            }
         }
         .padding(.vertical, 8)
     }
@@ -1241,6 +1261,21 @@ private struct EventRow: View {
                         systemImage:
                             "exclamationmark.triangle.fill",
                         name: "needing web versions"
+                    )
+                    .foregroundStyle(.orange)
+                }
+
+                if
+                    statistics
+                        .pendingRawRequestCount > 0
+                {
+                    EventRowMetric(
+                        value:
+                            statistics
+                            .pendingRawRequestCount,
+                        systemImage:
+                            "tray.and.arrow.up.fill",
+                        name: "pending RAW requests"
                     )
                     .foregroundStyle(.orange)
                 }

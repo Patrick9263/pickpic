@@ -117,6 +117,84 @@ struct ServerPhotoRecordRawRequestTests {
     }
 }
 
+// #267: pendingRawRequestCount is summed into EventPhotoStatistics the same
+// way likedPhotoCount etc. already are, so the overview grid and per-event
+// row can surface it without any new server plumbing.
+struct EventPhotoStatisticsPendingRawRequestTests {
+    private static func photo(
+        pendingRawRequestCount: Int
+    ) throws -> ServerPhotoRecord {
+        let json = """
+            {
+                "id": "photo-\(pendingRawRequestCount)-\(UUID().uuidString)",
+                "originalFilename": "DSC01015.ARW",
+                "heartCount": 0,
+                "workflowStatus": "idle",
+                "variants": {},
+                "finalPhoto": null,
+                "capturedAt": null,
+                "pendingRawRequestCount": \(pendingRawRequestCount),
+                "rawPhoto": null
+            }
+            """
+
+        return try JSONDecoder().decode(
+            ServerPhotoRecord.self,
+            from: Data(json.utf8)
+        )
+    }
+
+    private static func event(
+        id: String
+    ) -> PickPicEvent {
+        PickPicEvent(
+            id: id,
+            title: id,
+            shareToken: id,
+            status: .ready,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+    }
+
+    @Test
+    func sumsPendingRawRequestsAcrossPhotosInAnEvent() throws {
+        let photos = try [
+            Self.photo(pendingRawRequestCount: 2),
+            Self.photo(pendingRawRequestCount: 0),
+            Self.photo(pendingRawRequestCount: 1)
+        ]
+
+        let statistics = EventPhotoStatistics(
+            photos: photos
+        )
+
+        #expect(statistics.pendingRawRequestCount == 3)
+    }
+
+    @Test
+    func totalSumsAcrossEventsAndSkipsUnloadedOnes() throws {
+        let loadedEvent = Self.event(id: "event-1")
+        let unloadedEvent = Self.event(id: "event-2")
+
+        let statistics = EventPhotoStatistics(
+            photos: try [
+                Self.photo(pendingRawRequestCount: 3),
+                Self.photo(pendingRawRequestCount: 1)
+            ]
+        )
+
+        let total = EventPhotoStatistics.total(
+            for: [loadedEvent, unloadedEvent],
+            statisticsByEventID: [
+                loadedEvent.id: statistics
+            ]
+        )
+
+        #expect(total.pendingRawRequestCount == 4)
+    }
+}
+
 struct RawUploadFileServiceValidationTests {
     @Test
     func acceptsAPlainFilename() throws {
