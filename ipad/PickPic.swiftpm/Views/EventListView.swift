@@ -266,14 +266,6 @@ struct EventListView: View {
          * narrow sidebar left room for only "Ev…".
          */
         .navigationBarTitleDisplayMode(.large)
-        /*
-         * Without an explicit bar material, mid-scroll the collapsing
-         * large title draws with no backdrop and lands partially behind
-         * the topBarLeading/topBarTrailing buttons instead of being
-         * clipped by the bar first. Forcing the material visible even
-         * at the top keeps the collapse transition clean.
-         */
-        .toolbarBackground(.visible, for: .navigationBar)
         .searchable(
             text: $searchText,
             prompt: "Search events"
