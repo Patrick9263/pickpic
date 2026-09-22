@@ -331,7 +331,7 @@ decide_depth() {
 # that morning.
 #
 # So an issue declares what it deserves, through two label namespaces -- `model:opus|sonnet|haiku`
-# and `effort:max|high|medium|low`. Labels rather than a field in the issue body because pickpic is
+# and `effort:max|xhigh|high|medium|low`. Labels rather than a field in the issue body because pickpic is
 # a PUBLIC repo: anyone can open an issue and write anything in its body, but only collaborators can
 # apply a label, and the label set is closed. Nothing attacker-controlled gets near a `--model`
 # flag. (Validated against the allowlists below regardless -- belt and braces, since the cost of
@@ -340,7 +340,12 @@ decide_depth() {
 # These are also the allowlist: the matcher below only ever considers these exact names, so a
 # typo'd or invented label reads as absent rather than being passed through to the CLI.
 model_rank() { case "$1" in haiku) echo 1 ;; sonnet) echo 2 ;; opus) echo 3 ;; *) echo 0 ;; esac; }
-effort_rank() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; max) echo 4 ;; *) echo 0 ;; esac; }
+effort_rank() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; xhigh) echo 4 ;; max) echo 5 ;; *) echo 0 ;; esac; }
+# Ordering and cost are separate scales. `xhigh` (added to the CLI alongside Opus 5.5) sits between
+# `high` and `max` for the ceiling comparison, but it weighs the same as `max` against the run
+# budget: both buy a large PR, and giving `max` a weight of 5 would silently stop a weekday run
+# (budget 4) from ever taking on a `max` issue at all.
+effort_weight() { case "$1" in low) echo 1 ;; medium) echo 2 ;; high) echo 3 ;; xhigh | max) echo 4 ;; *) echo 0 ;; esac; }
 
 # Resolves one issue's labels against the run's ladder, setting ISSUE_MODEL / ISSUE_EFFORT /
 # ISSUE_DEFER / ISSUE_WEIGHT / ISSUE_DEPTH_NOTE. Pure -- no I/O, no globals mutated beyond those --
@@ -373,7 +378,7 @@ resolve_issue_depth() {
       want_model="$m"
     fi
   done
-  for e in max high medium low; do
+  for e in max xhigh high medium low; do
     if [[ "$labels" == *",effort:$e,"* ]]; then
       [[ -n "$want_effort" ]] && { want_effort=""; note="contradictory effort: labels"; break; }
       want_effort="$e"
@@ -401,10 +406,10 @@ resolve_issue_depth() {
 
   ISSUE_MODEL="$want_model"
   ISSUE_EFFORT="$want_effort"
-  # What the issue costs against a run's weight budget. Effort rank alone: it tracks the size of the
+  # What the issue costs against a run's weight budget. Effort weight alone: it tracks the size of the
   # resulting PR, which is what the budget is really rationing -- review capacity, not tokens. A
   # flat per-run issue count would treat four one-line fixes the same as four cross-file rewrites.
-  ISSUE_WEIGHT="$we"
+  ISSUE_WEIGHT="$(effort_weight "$want_effort")"
 }
 
 # The daily pass rotates so each run goes deep on one surface instead of skimming everything and
@@ -594,7 +599,7 @@ fi
 # draining -- and once the backlog passed the ceiling below, the weekday run stood down entirely.
 # The backlog was switching off the one job able to reduce it.
 #
-# WEIGHT BUDGET. How much a run may take on is measured in resolved effort rank, not issue count: a
+# WEIGHT BUDGET. How much a run may take on is measured in resolved effort weight, not issue count: a
 # weekday run spends 4, a surplus run 10. So a weekday morning buys four trivial fixes, or two
 # mediums, or one large plus one small, or a single `max` -- but never two `high`-or-above PRs at
 # once, which is the property worth having. Draining is surplus's whole purpose, hence its larger
