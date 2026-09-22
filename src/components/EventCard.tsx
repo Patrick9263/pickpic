@@ -120,6 +120,7 @@ type EventCardProps = {
   updatingEventRawRequestsId: string | null;
   releasingEventRawsId: string | null;
   rawReleaseSummary: string | null;
+  stoppingOfferingRawsId: string | null;
   cancelingRawDeliveryPhotoId: string | null;
   updatingEventTitleId: string | null;
   deletingEventId: string | null;
@@ -137,6 +138,7 @@ type EventCardProps = {
     enabled: boolean,
   ): Promise<void>;
   handleReleaseCollectedRaws(eventRecord: EventRecord): Promise<void>;
+  handleStopOfferingRawRequests(eventRecord: EventRecord): Promise<void>;
   handleCancelRawDelivery(eventId: string, photo: PhotoRecord): Promise<void>;
   handleRepairPhotoVariants(eventId: string, photo: PhotoRecord): Promise<void>;
   handleFinalPhotoSelection(
@@ -179,6 +181,8 @@ function EventCard(props: EventCardProps) {
     releasingEventRawsId,
     rawReleaseSummary,
     handleReleaseCollectedRaws,
+    stoppingOfferingRawsId,
+    handleStopOfferingRawRequests,
     cancelingRawDeliveryPhotoId,
     handleCancelRawDelivery,
     handleSetPhotoWorkflowStatus,
@@ -407,23 +411,55 @@ function EventCard(props: EventCardProps) {
             had a RAW request has nothing this control could ever release.
           */}
           {eventRecord.hasRawRequests && (
-            <div className="event-raw-release-control">
-              <button
-                className="secondary-button"
-                type="button"
-                disabled={releasingEventRawsId === eventRecord.id}
-                onClick={() => void handleReleaseCollectedRaws(eventRecord)}
-              >
-                {releasingEventRawsId === eventRecord.id
-                  ? "Releasing…"
-                  : "Release collected RAW files"}
-              </button>
+            <>
+              <div className="event-raw-release-control">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={releasingEventRawsId === eventRecord.id}
+                  onClick={() => void handleReleaseCollectedRaws(eventRecord)}
+                >
+                  {releasingEventRawsId === eventRecord.id
+                    ? "Releasing…"
+                    : "Release collected RAW files"}
+                </button>
 
-              <p className="event-raw-release-hint">
-                {rawReleaseSummary ??
-                  "Frees the storage for every RAW in this event that all of its requesters have already downloaded, instead of waiting out the 24-hour grace period."}
-              </p>
-            </div>
+                <p className="event-raw-release-hint">
+                  {rawReleaseSummary ??
+                    "Frees the storage for every RAW in this event that all of its requesters have already downloaded, instead of waiting out the 24-hour grace period."}
+                </p>
+              </div>
+
+              {/*
+                Beside the release button above rather than replacing it
+                (#282): that one only ever frees a RAW every requester has
+                already downloaded. This forces every RAW in the event free
+                regardless of collection status, by cancelling every request
+                nobody has downloaded yet and turning requests off so the
+                gallery can't immediately re-arm the pipeline.
+              */}
+              <div className="event-raw-release-control">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={stoppingOfferingRawsId === eventRecord.id}
+                  onClick={() =>
+                    void handleStopOfferingRawRequests(eventRecord)
+                  }
+                >
+                  {stoppingOfferingRawsId === eventRecord.id
+                    ? "Stopping…"
+                    : "Stop offering originals for this event"}
+                </button>
+
+                <p className="event-raw-release-hint">
+                  Turns off RAW requests, cancels every pending delivery, and
+                  frees all storage for this event now -- regardless of
+                  collection status. Reversible: turn requests back on and the
+                  iPad re-uploads on the next request.
+                </p>
+              </div>
+            </>
           )}
         </div>
 
