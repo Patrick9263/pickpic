@@ -1,6 +1,48 @@
-import type { OperatorAccountRecord } from "../types";
+import type { OperatorAccountRecord, StorageOrphanScan } from "../types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/* Matches ORPHAN_SAMPLE_LIMIT in worker/operator.ts, applied across slices. */
+export const ORPHAN_SAMPLE_LIMIT = 20;
+
+export const EMPTY_ORPHAN_SCAN: StorageOrphanScan = {
+  scannedObjects: 0,
+  scannedBytes: 0,
+  orphanCount: 0,
+  orphanBytes: 0,
+  staleOrphanCount: 0,
+  staleOrphanBytes: 0,
+  missingEventOrphanCount: 0,
+  missingEventOrphanBytes: 0,
+  sample: [],
+  cursor: null,
+};
+
+/*
+ * Folds one slice of the paginated scan into the running total. The cursor is
+ * taken from the newer slice, since it is the only one that says where to
+ * resume; the sample keeps the earliest keys found so it stops growing once
+ * full rather than churning as the scan goes on.
+ */
+export function mergeOrphanScans(
+  running: StorageOrphanScan,
+  slice: StorageOrphanScan,
+): StorageOrphanScan {
+  return {
+    scannedObjects: running.scannedObjects + slice.scannedObjects,
+    scannedBytes: running.scannedBytes + slice.scannedBytes,
+    orphanCount: running.orphanCount + slice.orphanCount,
+    orphanBytes: running.orphanBytes + slice.orphanBytes,
+    staleOrphanCount: running.staleOrphanCount + slice.staleOrphanCount,
+    staleOrphanBytes: running.staleOrphanBytes + slice.staleOrphanBytes,
+    missingEventOrphanCount:
+      running.missingEventOrphanCount + slice.missingEventOrphanCount,
+    missingEventOrphanBytes:
+      running.missingEventOrphanBytes + slice.missingEventOrphanBytes,
+    sample: [...running.sample, ...slice.sample].slice(0, ORPHAN_SAMPLE_LIMIT),
+    cursor: slice.cursor,
+  };
+}
 
 export interface OperatorTotals {
   accountCount: number;

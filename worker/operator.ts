@@ -137,6 +137,16 @@ export async function handleOperatorRequest(
     return listOperatorAccounts(env);
   }
 
+  if (url.pathname === "/api/operator/storage-orphans") {
+    if (request.method !== "GET") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const cursor = url.searchParams.get("cursor") || undefined;
+
+    return jsonResponse(await scanStorageOrphans(env, { cursor }));
+  }
+
   return null;
 }
 
@@ -323,4 +333,283 @@ async function loadAccountActivity(
   }
 
   return activity;
+}
+
+/*
+ * Read-only R2 reconciliation (#249): which objects under events/ does no
+ * photos or photo_variants row point at?
+ *
+ * Every upload path writes to R2 before its D1 row lands, so a request
+ * cancelled between the two -- or two variant uploads racing for one photo
+ * where only one row survives -- leaves bytes that getStorageUsage can never
+ * see, because it sums the database. This is the measurement that decides
+ * whether a cleanup is worth building at all, so there is deliberately no
+ * delete path here.
+ *
+ * The bucket is scanned a slice at a time: one request covers at most
+ * ORPHAN_SCAN_MAX_PAGES list pages and hands back R2's cursor, and the console
+ * loops until it comes back null. A single request walking the whole bucket
+ * would put its subrequest count and CPU time at the mercy of how many objects
+ * exist, which is exactly the number nobody knows yet.
+ */
+const ORPHAN_SCAN_MAX_PAGES = 5;
+
+/*
+ * An object younger than this may simply be an upload whose INSERT has not
+ * landed yet, so it is reported apart from the ones that can only be orphans.
+ * It is also the age gate a future cleanup would need, so reporting against it
+ * now shows how much of the total that gate would leave behind.
+ */
+export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
+
+const ORPHAN_SAMPLE_LIMIT = 20;
+
+/*
+ * D1 caps a statement at 100 bound parameters and each lookup below binds one
+ * per event id -- the same bound PREFLIGHT_CHUNK_SIZE works to in index.ts.
+ */
+const ORPHAN_EVENT_CHUNK_SIZE = 90;
+
+const EVENT_KEY_PATTERN = /^events\/([^/]+)\//;
+
+export interface StorageOrphanSample {
+  key: string;
+  size: number;
+  uploaded: string;
+
+  /*
+   * False when the key names an event no database holds any more -- the
+   * delete-time sweep's territory (#230) rather than a live-event race, and
+   * worth telling apart before deciding what a cleanup should target.
+   */
+  eventExists: boolean;
+}
+
+export interface StorageOrphanScan {
+  scannedObjects: number;
+  scannedBytes: number;
+  orphanCount: number;
+  orphanBytes: number;
+
+  /* Orphans older than ORPHAN_GRACE_MS -- the ones no in-flight upload explains. */
+  staleOrphanCount: number;
+  staleOrphanBytes: number;
+
+  /* Orphans whose event row is gone entirely; a subset of orphanCount. */
+  missingEventOrphanCount: number;
+  missingEventOrphanBytes: number;
+
+  sample: StorageOrphanSample[];
+
+  /* R2's list cursor for the next slice; null once the bucket is exhausted. */
+  cursor: string | null;
+}
+
+interface ReferencedKeys {
+  liveEventIds: Set<string>;
+  keys: Set<string>;
+}
+
+export async function scanStorageOrphans(
+  env: Env,
+  options: { cursor?: string; now?: number; listLimit?: number } = {},
+): Promise<StorageOrphanScan> {
+  const now = options.now ?? Date.now();
+  const databases = await loadAllAccountDatabases(env);
+
+  const scan: StorageOrphanScan = {
+    scannedObjects: 0,
+    scannedBytes: 0,
+    orphanCount: 0,
+    orphanBytes: 0,
+    staleOrphanCount: 0,
+    staleOrphanBytes: 0,
+    missingEventOrphanCount: 0,
+    missingEventOrphanBytes: 0,
+    sample: [],
+    cursor: null,
+  };
+
+  let cursor = options.cursor;
+
+  for (let page = 0; page < ORPHAN_SCAN_MAX_PAGES; page += 1) {
+    const listing = await env.pickpic_photos.list({
+      prefix: "events/",
+      cursor,
+      limit: options.listLimit,
+    });
+
+    /*
+     * Looked up per page rather than once for the whole bucket, so memory stays
+     * bounded by one page of keys however large the data grows. An event whose
+     * objects straddle two pages is simply queried twice.
+     */
+    const eventIds = new Set<string>();
+
+    for (const object of listing.objects) {
+      const eventId = EVENT_KEY_PATTERN.exec(object.key)?.[1];
+
+      if (eventId !== undefined) {
+        eventIds.add(eventId);
+      }
+    }
+
+    const referenced = await loadReferencedKeys(databases, [...eventIds]);
+
+    for (const object of listing.objects) {
+      scan.scannedObjects += 1;
+      scan.scannedBytes += object.size;
+
+      if (referenced.keys.has(object.key)) {
+        continue;
+      }
+
+      const eventId = EVENT_KEY_PATTERN.exec(object.key)?.[1];
+      const eventExists =
+        eventId !== undefined && referenced.liveEventIds.has(eventId);
+
+      scan.orphanCount += 1;
+      scan.orphanBytes += object.size;
+
+      if (now - object.uploaded.getTime() >= ORPHAN_GRACE_MS) {
+        scan.staleOrphanCount += 1;
+        scan.staleOrphanBytes += object.size;
+      }
+
+      if (!eventExists) {
+        scan.missingEventOrphanCount += 1;
+        scan.missingEventOrphanBytes += object.size;
+      }
+
+      if (scan.sample.length < ORPHAN_SAMPLE_LIMIT) {
+        scan.sample.push({
+          key: object.key,
+          size: object.size,
+          uploaded: object.uploaded.toISOString(),
+          eventExists,
+        });
+      }
+    }
+
+    cursor = listing.truncated ? listing.cursor : undefined;
+
+    if (cursor === undefined) {
+      break;
+    }
+  }
+
+  scan.cursor = cursor ?? null;
+
+  return scan;
+}
+
+/*
+ * Every database any account resolves to. An R2 key carries an event id but
+ * not an account id, so an object cannot be routed to the one database that
+ * should hold its row; asking all of them is what stays correct after a shard
+ * split. Today that is a single handle. As in loadAccountActivity, an account
+ * assigned to a database this worker cannot reach throws rather than being
+ * skipped -- a skipped shard would report every one of its objects as orphaned.
+ */
+async function loadAllAccountDatabases(env: Env): Promise<D1Database[]> {
+  const result = await env.DB.prepare(
+    `
+      SELECT
+        id,
+        name,
+        status,
+        plan,
+        storage_cap_bytes AS storageCapBytes,
+        storage_bytes AS storageBytes,
+        raw_delivery_ttl_ms AS rawDeliveryTtlMs,
+        database_id AS databaseId
+      FROM accounts
+    `,
+  ).all<AccountRecord>();
+
+  const databases = new Set<D1Database>();
+
+  for (const account of result.results) {
+    databases.add(resolveAccountDatabase(env, account));
+  }
+
+  return [...databases];
+}
+
+/*
+ * With photo_variants.storage_key, these are every column that can name an R2
+ * object. A column added later has to be added here too, or every object it
+ * names will read as orphaned -- loudly wrong rather than silently, which is
+ * the safer direction for a report that comes before any delete path.
+ */
+const REFERENCE_COLUMNS = [
+  "storage_key",
+  "final_storage_key",
+  "raw_storage_key",
+] as const;
+
+async function loadReferencedKeys(
+  databases: D1Database[],
+  eventIds: string[],
+): Promise<ReferencedKeys> {
+  const referenced: ReferencedKeys = {
+    liveEventIds: new Set(),
+    keys: new Set(),
+  };
+
+  for (
+    let offset = 0;
+    offset < eventIds.length;
+    offset += ORPHAN_EVENT_CHUNK_SIZE
+  ) {
+    const chunk = eventIds.slice(offset, offset + ORPHAN_EVENT_CHUNK_SIZE);
+    const placeholders = chunk.map(() => "?").join(", ");
+
+    for (const database of databases) {
+      const [events, photos, variants] = await database.batch<
+        Record<string, string | null>
+      >([
+        database
+          .prepare(`SELECT id FROM events WHERE id IN (${placeholders})`)
+          .bind(...chunk),
+        database
+          .prepare(
+            `
+              SELECT storage_key, final_storage_key, raw_storage_key
+              FROM photos
+              WHERE event_id IN (${placeholders})
+            `,
+          )
+          .bind(...chunk),
+        database
+          .prepare(
+            `
+              SELECT v.storage_key
+              FROM photo_variants v
+              JOIN photos p ON p.id = v.photo_id
+              WHERE p.event_id IN (${placeholders})
+            `,
+          )
+          .bind(...chunk),
+      ]);
+
+      for (const row of events.results) {
+        if (row.id) {
+          referenced.liveEventIds.add(row.id);
+        }
+      }
+
+      for (const row of [...photos.results, ...variants.results]) {
+        for (const column of REFERENCE_COLUMNS) {
+          const key = row[column];
+
+          if (key) {
+            referenced.keys.add(key);
+          }
+        }
+      }
+    }
+  }
+
+  return referenced;
 }

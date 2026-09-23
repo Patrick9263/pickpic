@@ -164,3 +164,16 @@
 .operator-notice {
   margin: 16px 0 0;
 }
+
+/*
+ * The orphan report reuses the account card's metric grid and user list, which
+ * both sit inside a card's own gap there; loose in a panel they need the same
+ * separation from the heading that .operator-accounts gives itself.
+ */
+.operator-orphan-metrics {
+  margin: 20px 0 0;
+}
+
+.operator-orphan-samples {
+  margin: 16px 0 0;
+}

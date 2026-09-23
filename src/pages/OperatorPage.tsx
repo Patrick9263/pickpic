@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getErrorMessage } from "../api";
 import { formatStorageSize } from "../storageFormat";
-import type { OperatorAccountRecord, OperatorAccountsResponse } from "../types";
-import { formatDaysAgo, summarizeOperatorAccounts } from "./operatorHelpers";
+import type {
+  OperatorAccountRecord,
+  OperatorAccountsResponse,
+  StorageOrphanScan,
+} from "../types";
+import {
+  EMPTY_ORPHAN_SCAN,
+  formatDaysAgo,
+  mergeOrphanScans,
+  summarizeOperatorAccounts,
+} from "./operatorHelpers";
 import "../styles/OperatorPage.css";
 
 type LoadState =
@@ -104,6 +113,191 @@ function AccountCard({
         {account.databaseId !== null && ` · database ${account.databaseId}`}
       </p>
     </li>
+  );
+}
+
+type OrphanScanState =
+  | { status: "idle" }
+  | { status: "scanning"; scan: StorageOrphanScan }
+  | { status: "done"; scan: StorageOrphanScan }
+  | { status: "error"; message: string; scan: StorageOrphanScan };
+
+/*
+ * The R2 reconciliation report (#249). Started by hand rather than on page
+ * load: a full scan lists the whole bucket, which is billed per call and grows
+ * with every upload, and the question it answers ("is orphaned storage worth
+ * cleaning up?") is not one that needs asking on every visit.
+ *
+ * The worker answers one bounded slice per request, so the loop lives here and
+ * the running totals are shown as they grow -- a large bucket reads as
+ * progress rather than as a request that seems to hang.
+ */
+function StorageOrphanPanel() {
+  const [state, setState] = useState<OrphanScanState>({ status: "idle" });
+  const [scannedAt, setScannedAt] = useState(() => Date.now());
+
+  /* Bumped per run, so a scan restarted mid-flight cannot interleave slices. */
+  const runRef = useRef(0);
+
+  useEffect(
+    () => () => {
+      runRef.current += 1;
+    },
+    [],
+  );
+
+  const scan = useCallback(async () => {
+    const run = ++runRef.current;
+    let running = EMPTY_ORPHAN_SCAN;
+    let cursor: string | null = null;
+
+    setScannedAt(Date.now());
+    setState({ status: "scanning", scan: running });
+
+    try {
+      do {
+        const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+        const response = await fetch(`/api/operator/storage-orphans${query}`);
+
+        if (run !== runRef.current) {
+          return;
+        }
+
+        if (!response.ok) {
+          setState({
+            status: "error",
+            message: await getErrorMessage(response),
+            scan: running,
+          });
+          return;
+        }
+
+        const slice = (await response.json()) as StorageOrphanScan;
+
+        if (run !== runRef.current) {
+          return;
+        }
+
+        running = mergeOrphanScans(running, slice);
+        cursor = slice.cursor;
+
+        setState({ status: cursor ? "scanning" : "done", scan: running });
+      } while (cursor);
+    } catch (caughtError) {
+      if (run !== runRef.current) {
+        return;
+      }
+
+      setState({
+        status: "error",
+        message:
+          caughtError instanceof Error
+            ? caughtError.message
+            : "Unable to scan storage.",
+        scan: running,
+      });
+    }
+  }, []);
+
+  const result = state.status === "idle" ? null : state.scan;
+
+  return (
+    <section className="panel">
+      <div className="section-heading">
+        <div>
+          <p className="section-label">Storage</p>
+          <h2>Orphaned objects</h2>
+          <p className="section-description">
+            R2 objects under events/ that no photo or variant row points at.
+            They never count toward any account&rsquo;s storage, so the bill is
+            the only other place they show up. Read-only.
+          </p>
+        </div>
+
+        <div className="section-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={state.status === "scanning"}
+            onClick={() => void scan()}
+          >
+            {state.status === "scanning"
+              ? "Scanning…"
+              : state.status === "idle"
+                ? "Scan"
+                : "Scan again"}
+          </button>
+        </div>
+      </div>
+
+      {state.status === "error" && (
+        <div className="error-message operator-notice" role="alert">
+          <span>{state.message} Totals below cover only what was scanned.</span>
+        </div>
+      )}
+
+      {result && (
+        <>
+          <dl className="operator-metrics operator-orphan-metrics">
+            <div>
+              <dt>Scanned</dt>
+              <dd>
+                {formatCount(result.scannedObjects, "object")}
+                <span className="operator-metric-note">
+                  {formatStorageSize(result.scannedBytes)}
+                </span>
+              </dd>
+            </div>
+
+            <div>
+              <dt>Orphaned</dt>
+              <dd>
+                {formatCount(result.orphanCount, "object")}
+                <span className="operator-metric-note">
+                  {formatStorageSize(result.orphanBytes)}
+                </span>
+              </dd>
+            </div>
+
+            <div>
+              <dt>Older than 24h</dt>
+              <dd>
+                {formatCount(result.staleOrphanCount, "object")}
+                <span className="operator-metric-note">
+                  {formatStorageSize(result.staleOrphanBytes)} · not an
+                  in-flight upload
+                </span>
+              </dd>
+            </div>
+
+            <div>
+              <dt>Event deleted</dt>
+              <dd>
+                {formatCount(result.missingEventOrphanCount, "object")}
+                <span className="operator-metric-note">
+                  {formatStorageSize(result.missingEventOrphanBytes)}
+                </span>
+              </dd>
+            </div>
+          </dl>
+
+          {result.sample.length > 0 && (
+            <ul className="operator-users operator-orphan-samples">
+              {result.sample.map((orphan) => (
+                <li className="operator-user" key={orphan.key}>
+                  <span className="operator-user-email">{orphan.key}</span>
+                  <span className="operator-user-meta">
+                    {formatStorageSize(orphan.size)} · uploaded{" "}
+                    {formatDaysAgo(orphan.uploaded, scannedAt)}
+                    {!orphan.eventExists && " · event deleted"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -262,6 +456,9 @@ function OperatorPage() {
             </ul>
           </section>
         )}
+
+        {/* Behind "ready" so a non-operator never sees a scan button that can only 403. */}
+        {state.status === "ready" && <StorageOrphanPanel />}
       </main>
     </div>
   );
