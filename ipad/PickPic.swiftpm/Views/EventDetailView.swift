@@ -613,36 +613,7 @@ struct EventDetailView: View {
                 }
             }
             
-            Section {
-                Toggle(
-                    "Allow Viewers to Request Originals",
-                    isOn: rawRequestsEnabledBinding
-                )
-                .disabled(isUpdatingRawRequestsEnabled)
-
-                Button {
-                    showingStopOfferingRawsConfirmation = true
-                } label: {
-                    Label(
-                        "Stop Offering Originals",
-                        systemImage: "stop.circle"
-                    )
-                }
-                .disabled(isStoppingOfferingRaws)
-            } header: {
-                Text("RAW Requests")
-            } footer: {
-                Text(
-                    """
-                    Turning requests off does not take back a RAW already \
-                    delivered to a viewer -- use Stop Offering Originals \
-                    below to also cancel every pending delivery and free \
-                    all storage for this event now, regardless of \
-                    collection status. Both are reversible: turn requests \
-                    back on and the next request re-uploads.
-                    """
-                )
-            }
+            rawRequestsSection
 
             Section {
                 Button {
@@ -1465,6 +1436,48 @@ struct EventDetailView: View {
             error.localizedDescription
 
             showingDeleteError = true
+        }
+    }
+
+    /*
+     * Pulled out of `body` as its own Section, not inlined: SwiftUI's
+     * result-builder type checker times out on a List this long once
+     * another multi-part Section is added inline (hit in CI, not locally,
+     * since the compiler's timeout is load-dependent) -- splitting a
+     * Section into its own `some View` property gives the type checker a
+     * much smaller expression to solve per piece.
+     */
+    @ViewBuilder
+    private var rawRequestsSection: some View {
+        Section {
+            Toggle(
+                "Allow Viewers to Request Originals",
+                isOn: rawRequestsEnabledBinding
+            )
+            .disabled(isUpdatingRawRequestsEnabled)
+
+            Button {
+                showingStopOfferingRawsConfirmation = true
+            } label: {
+                Label(
+                    "Stop Offering Originals",
+                    systemImage: "stop.circle"
+                )
+            }
+            .disabled(isStoppingOfferingRaws)
+        } header: {
+            Text("RAW Requests")
+        } footer: {
+            Text(
+                """
+                Turning requests off does not take back a RAW already \
+                delivered to a viewer -- use Stop Offering Originals \
+                below to also cancel every pending delivery and free \
+                all storage for this event now, regardless of \
+                collection status. Both are reversible: turn requests \
+                back on and the next request re-uploads.
+                """
+            )
         }
     }
 
