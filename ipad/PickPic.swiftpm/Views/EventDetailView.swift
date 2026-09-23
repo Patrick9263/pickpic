@@ -1059,6 +1059,34 @@ struct EventDetailView: View {
             let client =
             try configuration.makeClient()
 
+            /*
+             * There is no single-event GET route, only the list one
+             * fetchEvents() already calls elsewhere -- refetching it here
+             * is what picks up fields set from outside this screen (the
+             * RAW-requests toggle changed on the web dashboard, a rename,
+             * a status change) since `event` is seeded once from the
+             * value this view was pushed with and nothing otherwise
+             * refreshes it while the screen stays open. Best-effort: a
+             * failure here still lets the photo-derived statistics below
+             * load normally.
+             */
+            do {
+                let refreshedEvents =
+                try await client.fetchEvents()
+
+                if let refreshedEvent = refreshedEvents.first(
+                    where: { $0.id == event.id }
+                ) {
+                    event = refreshedEvent
+                    onEventUpdated(refreshedEvent)
+                }
+            } catch {
+                print(
+                    "Event refresh failed, dashboard statistics will still be attempted:",
+                    error
+                )
+            }
+
             let photos =
             try await client.fetchEventPhotos(
                 eventID: event.id
