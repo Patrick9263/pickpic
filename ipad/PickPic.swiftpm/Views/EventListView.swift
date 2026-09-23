@@ -72,6 +72,12 @@ struct EventListView: View {
     let onRefresh: () async -> Void
     let onCreateEvent:
     (String) async throws -> Void
+    /*
+     * The settings sheet and its state stay with ContentView, which also
+     * opens it unprompted when the app isn't configured. Only the button
+     * lives here, so this view owns the sidebar's whole toolbar layout.
+     */
+    let onShowSettings: () -> Void
 
     @EnvironmentObject private var uploadQueue:
     UploadQueueStore
@@ -261,9 +267,16 @@ struct EventListView: View {
         }
         .navigationTitle("Events")
         /*
-         * A large title sits on its own line instead of competing with
-         * the filter, settings, add and sidebar controls, which in a
-         * narrow sidebar left room for only "Ev…".
+         * A large title sits on its own line at rest, but it still has to
+         * fit between the top-row buttons once scrolling collapses it
+         * inline. iOS 26's glass button platters are wide. With the sidebar
+         * toggle, filter, settings and add all up there, the collapsed
+         * title was crushed to a character or two (#353). Neither .inline,
+         * a .principal title nor a visible bar background helped. A wider
+         * column did, but it left the row visibly empty. So the top row is
+         * held to the sidebar toggle and the filter, and Account and New
+         * Event live in the bottom bar. Keep it that way: a third top-row
+         * button brings the bug back.
          */
         .navigationBarTitleDisplayMode(.large)
         .searchable(
@@ -339,7 +352,26 @@ struct EventListView: View {
             }
 
             ToolbarItem(
-                placement: .topBarTrailing
+                placement: .bottomBar
+            ) {
+                Button {
+                    onShowSettings()
+                } label: {
+                    Label(
+                        "PickPic Account",
+                        systemImage:
+                            "gearshape"
+                    )
+                }
+            }
+
+            ToolbarSpacer(
+                .flexible,
+                placement: .bottomBar
+            )
+
+            ToolbarItem(
+                placement: .bottomBar
             ) {
                 Button {
                     showingCreateEvent = true

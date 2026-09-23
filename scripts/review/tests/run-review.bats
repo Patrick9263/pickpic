@@ -377,7 +377,7 @@ setup() {
 # ---------------------------------------------------------------------------
 # The weight budget: how much a single run may take on
 #
-# Measured in resolved effort rank (low 1, medium 2, high 3, max 4) rather than issue count, so that
+# Measured in resolved effort weight (low 1, medium 2, high 3, xhigh/max 4) rather than issue count, so that
 # four one-line fixes and four cross-file rewrites are not treated as the same morning's work.
 # ---------------------------------------------------------------------------
 
@@ -410,6 +410,29 @@ setup() {
   [[ "$output" == *"issue #43 does not fit this run's remaining weight"* ]]
   [[ "$output" == *"kind=implement queue=42 44"* ]]
   [[ "$output" == *"weight=4/4"* ]]
+}
+
+# xhigh ranks below max for the ceiling but weighs the same as max, so a weekday run still has room
+# for exactly one -- a weight of 5 would have made it (and max) unrunnable on a weekday.
+@test "weight budget: an xhigh issue fits a weekday run on its own and fills it" {
+  FAKE_WEEK_PCT=30 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES="42 43" \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:opus,effort:xhigh;43=ready,effort:low" \
+    run bash "$REVIEW_SCRIPT" daily --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"kind=implement queue=42"* ]]
+  [[ "$output" == *"depths=opus/xhigh"* ]]
+  [[ "$output" == *"weight=4/4"* ]]
+  [[ "$output" == *"issue #43 does not fit this run's remaining weight"* ]]
+}
+
+# The ladder's standard tier is opus/high, which is below xhigh -- so an xhigh issue defers there
+# rather than being downgraded, exactly as max does.
+@test "an xhigh declaration defers on a standard (opus/high) morning" {
+  FAKE_WEEK_PCT=50 FAKE_UNREAD_FINDINGS=0 FAKE_GH_READY_ISSUES=42 \
+    FAKE_GH_ISSUE_LABELS="42=ready,model:opus,effort:xhigh" \
+    run bash "$REVIEW_SCRIPT" surplus --dry-run
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"deferring ready issue #42"* ]]
 }
 
 # Draining is surplus's whole purpose, so it carries a larger budget than a weekday run.
