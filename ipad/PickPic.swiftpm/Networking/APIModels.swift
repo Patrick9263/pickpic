@@ -406,6 +406,10 @@ struct SetEventStatusRequest: Encodable {
     let status: String
 }
 
+struct SetEventRawRequestsEnabledRequest: Encodable {
+    let enabled: Bool
+}
+
 struct APIErrorResponse: Decodable {
     let error: String
 }

@@ -375,6 +375,55 @@ struct APIClient {
         }
     }
     
+    func setRawRequestsEnabled(
+        _ enabled: Bool,
+        for eventID: String
+    ) async throws -> PickPicEvent {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+            .appending(path: "raw-requests")
+
+        var request = makeAdminJSONRequest(
+            url: url
+        )
+
+        request.httpMethod = "PUT"
+        request.httpBody = try JSONEncoder().encode(
+            SetEventRawRequestsEnabledRequest(
+                enabled: enabled
+            )
+        )
+
+        return try await performEventMutation(
+            request
+        )
+    }
+
+    func stopOfferingRawRequests(
+        eventID: String
+    ) async throws -> PickPicEvent {
+        let url = baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "events")
+            .appending(path: eventID)
+            .appending(path: "raw-requests")
+            .appending(path: "stop")
+
+        var request = makeAdminJSONRequest(
+            url: url
+        )
+
+        request.httpMethod = "POST"
+
+        return try await performEventMutation(
+            request
+        )
+    }
+
     func uploadPreparedPhoto(
         _ preparedPhoto: PreparedPhoto,
         from fileURL: URL,

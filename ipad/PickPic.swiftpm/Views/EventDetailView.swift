@@ -65,6 +65,15 @@ struct EventDetailView: View {
     
     @State private var showingDeleteError = false
     @State private var deleteErrorMessage = ""
+
+    @State private var showingStopOfferingRawsConfirmation = false
+    @State private var isStoppingOfferingRaws = false
+    @State private var showingStopOfferingRawsError = false
+    @State private var stopOfferingRawsErrorMessage = ""
+
+    @State private var isUpdatingRawRequestsEnabled = false
+    @State private var showingRawRequestsEnabledError = false
+    @State private var rawRequestsEnabledErrorMessage = ""
     
     @State private var isUpdatingStatus = false
     @State private var showingArchiveConfirmation = false
@@ -379,7 +388,313 @@ struct EventDetailView: View {
         }
     }
 
+    /*
+     * body is split into staged `let` bindings below, each its own
+     * statement rather than one continuous modifier chain: CI's swiftc
+     * (slower than this machine's, so the timeout is hit there and not
+     * always reproducible locally) kept timing out type-checking this
+     * expression as more `.alert`s were added for the RAW-requests
+     * feature, each time blaming an arbitrary unrelated line since the
+     * timeout is a whole-chain budget. A modifier chain is itself one
+     * expression the type checker solves as a unit; splitting it into
+     * named stages gives it several much smaller ones instead.
+     */
     var body: some View {
+        let eventList = eventListContent
+            .refreshable {
+                await loadDashboard()
+            }
+            .onAppear {
+                Task {
+                    await loadDashboard()
+                }
+            }
+            .onReceive(uploadQueue.$jobs) { jobs in
+                eventJobsState = jobs.filter { job in
+                    job.eventID == event.id
+                }
+            }
+            /*
+             * The photo/liked/final counts in dashboardStatistics (and the
+             * copy of them the sidebar shows) come from the server, not from
+             * uploadQueue -- fetched only by loadDashboard(), which otherwise
+             * only runs on .onAppear and pull-to-refresh. Nothing was
+             * re-fetching it as proofs actually landed, so those counts sat
+             * frozen at whatever they were when the screen was last opened
+             * until the user navigated away and back (#315). Poll while this
+             * event has unfinished jobs so they move on their own during a
+             * run; restarting the task on the boolean's id means it stops
+             * cleanly the moment there is nothing left to upload. The fetch
+             * happens *before* each sleep (not after) because a small batch
+             * can finish uploading in well under the interval -- sleeping
+             * first would let the task get cancelled on completion without
+             * ever having fetched once.
+             */
+            .task(id: unfinishedEventJobCount > 0) {
+                guard unfinishedEventJobCount > 0 else {
+                    return
+                }
+
+                while !Task.isCancelled {
+                    await loadDashboard()
+
+                    try? await Task.sleep(
+                        for: .seconds(5)
+                    )
+                }
+            }
+            /*
+             * Catches the same fast-batch case from the other side: if the
+             * run finished between two polls above (or entirely within one
+             * interval), this fires the moment unfinishedEventJobCount drops
+             * to zero so completion is reflected immediately rather than on
+             * whatever the next poll or screen visit would have been.
+             */
+            .onChange(of: unfinishedEventJobCount) { oldCount, newCount in
+                guard oldCount > 0, newCount == 0 else {
+                    return
+                }
+
+                Task {
+                    await loadDashboard()
+                }
+            }
+            .navigationTitle(event.title)
+            .navigationBarTitleDisplayMode(.inline)
+            /*
+             * Renaming is a normal thing to do right after creating an event,
+             * but the only other way in is at the bottom of this screen in
+             * Manage Event, which means scrolling past everything else to
+             * reach a button sitting next to Delete. Delete stays down there.
+             */
+            .toolbar {
+                ToolbarItem(
+                    placement: .topBarTrailing
+                ) {
+                    Button {
+                        showingRenameEvent = true
+                    } label: {
+                        Label(
+                            "Rename Event",
+                            systemImage: "pencil"
+                        )
+                    }
+                    .disabled(
+                        isDeleting
+                        || isUpdatingStatus
+                    )
+                }
+            }
+            .disabled(isDeleting)
+            .overlay {
+                if isDeleting {
+                    ProgressView(
+                        "Deleting event…"
+                    )
+                    .padding(24)
+                    .background(.regularMaterial)
+                    .clipShape(
+                        RoundedRectangle(
+                            cornerRadius: 16,
+                            style: .continuous
+                        )
+                    )
+                }
+            }
+            .fileImporter(
+                isPresented: $showingImportFolderPicker,
+                allowedContentTypes: [.folder]
+            ) { result in
+                handleImportFolderSelection(result)
+            }
+
+        let presentedEventList = eventList
+            .sheet(
+                isPresented: $showingImportConfirmation,
+                onDismiss: handleImportSheetDismiss
+            ) {
+                PhotoImportView(
+                    event: event,
+                    viewModel: importModel,
+                    queueErrorMessage:
+                        importQueueErrorMessage,
+                    onChooseAnotherFolder: {
+                        importDismissAction =
+                            .chooseAnotherFolder
+                        showingImportConfirmation = false
+                    },
+                    onStartUpload: startImportedUpload
+                )
+                .presentationDetents([.medium, .large])
+            }
+            .navigationDestination(
+                isPresented: $showingUploadQueue
+            ) {
+                UploadQueueView(event: event)
+            }
+            .sheet(
+                isPresented: $showingRenameEvent
+            ) {
+                EventTitleEditorView(
+                    navigationTitle: "Rename Event",
+                    saveButtonTitle: "Save",
+                    initialTitle: event.title,
+                    unchangedTitle: event.title
+                ) { title in
+                    /*
+                     * An event still only on this iPad has no record to
+                     * update, so renaming it is a local edit. The queued
+                     * jobs carry the title that will register the event on
+                     * its first upload and have to move with it.
+                     */
+                    guard !event.needsRemoteCreation else {
+                        let renamedEvent = PickPicEvent(
+                            id: event.id,
+                            title: title,
+                            shareToken: event.shareToken,
+                            status: event.status,
+                            createdAt: event.createdAt,
+                            updatedAt: Date(),
+                            isPendingCreation:
+                                event.isPendingCreation
+                        )
+
+                        uploadQueue.renameEvent(
+                            eventID: event.id,
+                            title: title
+                        )
+
+                        event = renamedEvent
+                        onEventUpdated(renamedEvent)
+
+                        return
+                    }
+
+                    let client =
+                    try configuration.makeClient()
+
+                    let updatedEvent =
+                    try await client.updateEvent(
+                        title: title,
+                        eventID: event.id
+                    )
+
+                    event = updatedEvent
+                    onEventUpdated(updatedEvent)
+                }
+            }
+
+        let coreAlertedEventList = presentedEventList
+            .alert(
+                "Archive \(event.title)?",
+                isPresented:
+                    $showingArchiveConfirmation
+            ) {
+                Button(
+                    "Archive Event",
+                    role: .destructive
+                ) {
+                    Task {
+                        await updateGalleryStatus(
+                            .archived
+                        )
+                    }
+                }
+
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    """
+                    Archiving makes the public gallery unavailable. You can \
+                    restore it later by changing the status to Open or Closed.
+                    """
+                )
+            }
+            .alert(
+                "Delete \(event.title)?",
+                isPresented:
+                    $showingDeleteConfirmation
+            ) {
+                Button(
+                    "Delete Event",
+                    role: .destructive
+                ) {
+                    Task {
+                        await deleteEvent()
+                    }
+                }
+
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    """
+                    This permanently deletes the online gallery, uploaded \
+                    photos, finals, comments, and likes. This cannot be undone.
+                    """
+                )
+            }
+            .alert(
+                "Unable to Change Status",
+                isPresented: $showingStatusError
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(statusErrorMessage)
+            }
+            .alert(
+                "Unable to Delete Event",
+                isPresented: $showingDeleteError
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(deleteErrorMessage)
+            }
+
+        return coreAlertedEventList
+            .alert(
+                "Stop Offering Originals for \(event.title)?",
+                isPresented:
+                    $showingStopOfferingRawsConfirmation
+            ) {
+                Button(
+                    "Stop Offering Originals",
+                    role: .destructive
+                ) {
+                    Task {
+                        await stopOfferingRawRequests()
+                    }
+                }
+
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(
+                    """
+                    This cancels every pending RAW delivery for this event and \
+                    frees the storage now, regardless of collection status. \
+                    Requests stay off until you turn them back on.
+                    """
+                )
+            }
+            .alert(
+                "Unable to Stop Offering Originals",
+                isPresented: $showingStopOfferingRawsError
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(stopOfferingRawsErrorMessage)
+            }
+            .alert(
+                "Unable to Update RAW Requests",
+                isPresented: $showingRawRequestsEnabledError
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(rawRequestsEnabledErrorMessage)
+            }
+    }
+
+    @ViewBuilder
+    private var eventListContent: some View {
         List {
             primaryActionSection
 
@@ -461,129 +776,8 @@ struct EventDetailView: View {
                 )
             }
 
-            Section("Photos") {
-                Button {
-                    beginImport()
-                } label: {
-                    Label(
-                        eventJobs.isEmpty
-                        ? "Import Photos"
-                        : "Add More Photos",
-                        systemImage:
-                            "photo.badge.plus"
-                    )
-                    .frame(
-                        maxWidth: .infinity,
-                        alignment: .leading
-                    )
-                }
-                // Borderless so the button takes the tap without the row's
-                // gesture recognizer swallowing the first one (see #122).
-                .buttonStyle(.borderless)
-                .contentShape(Rectangle())
+            photosSection
 
-                NavigationLink {
-                    UploadQueueView(
-                        event: event
-                    )
-                } label: {
-                    HStack {
-                        Label(
-                            unfinishedEventJobCount > 0
-                            ? "Continue Upload"
-                            : "Upload Queue",
-                            systemImage:
-                                unfinishedEventJobCount > 0
-                            ? "clock.arrow.circlepath"
-                            : "arrow.up.circle"
-                        )
-                        
-                        Spacer()
-                        
-                        if unfinishedEventJobCount > 0 {
-                            Text(
-                                "\(unfinishedEventJobCount)"
-                            )
-                            .font(.caption.bold())
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                
-                NavigationLink {
-                    LikedPhotosView(event: event)
-                } label: {
-                    HStack {
-                        Label(
-                            "Liked Photos",
-                            systemImage: "heart.fill"
-                        )
-
-                        Spacer()
-
-                        if let likedCount =
-                            dashboardStatistics?
-                            .likedPhotoCount,
-                            likedCount > 0 {
-                            Text("\(likedCount)")
-                                .font(.caption.bold())
-                                .foregroundStyle(
-                                    .secondary
-                                )
-                        }
-                    }
-                }
-                
-                NavigationLink {
-                    FinalUploadsView(
-                        event: event,
-                        automaticallyUploadReadyFinals: true
-                    )
-                } label: {
-                    VStack(
-                        alignment: .leading,
-                        spacing: 3
-                    ) {
-                        Label(
-                            "Upload Ready Finals",
-                            systemImage:
-                                "bolt.circle.fill"
-                        )
-
-                        Text(
-                            "Scans Edited and starts uploading matches."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                NavigationLink {
-                    FinalUploadsView(event: event)
-                } label: {
-                    HStack {
-                        Label(
-                            "Review Finals",
-                            systemImage:
-                                "photo.stack"
-                        )
-
-                        Spacer()
-
-                        if let finalCount =
-                            dashboardStatistics?
-                            .uploadedFinalCount,
-                            finalCount > 0 {
-                            Text("\(finalCount)")
-                                .font(.caption.bold())
-                                .foregroundStyle(
-                                    .secondary
-                                )
-                        }
-                    }
-                }
-            }
-            
             Section("Gallery") {
                 NavigationLink {
                     PublishGalleryView(
@@ -604,304 +798,12 @@ struct EventDetailView: View {
                 }
             }
             
-            Section {
-                Button {
-                    showingRenameEvent = true
-                } label: {
-                    Label(
-                        "Rename Event",
-                        systemImage: "pencil"
-                    )
-                }
-                .disabled(
-                    isDeleting
-                    || isUpdatingStatus
-                )
-                
-                Button(
-                    role: .destructive
-                ) {
-                    showingDeleteConfirmation = true
-                } label: {
-                    Label(
-                        "Delete Event",
-                        systemImage: "trash"
-                    )
-                }
-                .disabled(
-                    isDeleting
-                    || isUpdatingStatus
-                    || eventHasActiveProcessing
-                )
-                
-                if eventHasActiveProcessing {
-                    Text(
-                        """
-                        Finish the current preparation, conversion, \
-                        or upload before deleting this event.
-                        """
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Manage Event")
-            } footer: {
-                Text(
-                    """
-                    Deleting an event permanently removes its online \
-                    gallery and uploaded images. Your original event \
-                    folder, To Edit, and Edited folders are not changed.
-                    """
-                )
-            }
-        }
-        .refreshable {
-            await loadDashboard()
-        }
-        .onAppear {
-            Task {
-                await loadDashboard()
-            }
-        }
-        .onReceive(uploadQueue.$jobs) { jobs in
-            eventJobsState = jobs.filter { job in
-                job.eventID == event.id
-            }
-        }
-        /*
-         * The photo/liked/final counts in dashboardStatistics (and the
-         * copy of them the sidebar shows) come from the server, not from
-         * uploadQueue -- fetched only by loadDashboard(), which otherwise
-         * only runs on .onAppear and pull-to-refresh. Nothing was
-         * re-fetching it as proofs actually landed, so those counts sat
-         * frozen at whatever they were when the screen was last opened
-         * until the user navigated away and back (#315). Poll while this
-         * event has unfinished jobs so they move on their own during a
-         * run; restarting the task on the boolean's id means it stops
-         * cleanly the moment there is nothing left to upload. The fetch
-         * happens *before* each sleep (not after) because a small batch
-         * can finish uploading in well under the interval -- sleeping
-         * first would let the task get cancelled on completion without
-         * ever having fetched once.
-         */
-        .task(id: unfinishedEventJobCount > 0) {
-            guard unfinishedEventJobCount > 0 else {
-                return
-            }
+            rawRequestsSection
 
-            while !Task.isCancelled {
-                await loadDashboard()
-
-                try? await Task.sleep(
-                    for: .seconds(5)
-                )
-            }
-        }
-        /*
-         * Catches the same fast-batch case from the other side: if the
-         * run finished between two polls above (or entirely within one
-         * interval), this fires the moment unfinishedEventJobCount drops
-         * to zero so completion is reflected immediately rather than on
-         * whatever the next poll or screen visit would have been.
-         */
-        .onChange(of: unfinishedEventJobCount) { oldCount, newCount in
-            guard oldCount > 0, newCount == 0 else {
-                return
-            }
-
-            Task {
-                await loadDashboard()
-            }
-        }
-        .navigationTitle(event.title)
-        .navigationBarTitleDisplayMode(.inline)
-        /*
-         * Renaming is a normal thing to do right after creating an event,
-         * but the only other way in is at the bottom of this screen in
-         * Manage Event, which means scrolling past everything else to
-         * reach a button sitting next to Delete. Delete stays down there.
-         */
-        .toolbar {
-            ToolbarItem(
-                placement: .topBarTrailing
-            ) {
-                Button {
-                    showingRenameEvent = true
-                } label: {
-                    Label(
-                        "Rename Event",
-                        systemImage: "pencil"
-                    )
-                }
-                .disabled(
-                    isDeleting
-                    || isUpdatingStatus
-                )
-            }
-        }
-        .disabled(isDeleting)
-        .overlay {
-            if isDeleting {
-                ProgressView(
-                    "Deleting event…"
-                )
-                .padding(24)
-                .background(.regularMaterial)
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: 16,
-                        style: .continuous
-                    )
-                )
-            }
-        }
-        .fileImporter(
-            isPresented: $showingImportFolderPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            handleImportFolderSelection(result)
-        }
-        .sheet(
-            isPresented: $showingImportConfirmation,
-            onDismiss: handleImportSheetDismiss
-        ) {
-            PhotoImportView(
-                event: event,
-                viewModel: importModel,
-                queueErrorMessage:
-                    importQueueErrorMessage,
-                onChooseAnotherFolder: {
-                    importDismissAction =
-                        .chooseAnotherFolder
-                    showingImportConfirmation = false
-                },
-                onStartUpload: startImportedUpload
-            )
-            .presentationDetents([.medium, .large])
-        }
-        .navigationDestination(
-            isPresented: $showingUploadQueue
-        ) {
-            UploadQueueView(event: event)
-        }
-        .sheet(
-            isPresented: $showingRenameEvent
-        ) {
-            EventTitleEditorView(
-                navigationTitle: "Rename Event",
-                saveButtonTitle: "Save",
-                initialTitle: event.title,
-                unchangedTitle: event.title
-            ) { title in
-                /*
-                 * An event still only on this iPad has no record to
-                 * update, so renaming it is a local edit. The queued
-                 * jobs carry the title that will register the event on
-                 * its first upload and have to move with it.
-                 */
-                guard !event.needsRemoteCreation else {
-                    let renamedEvent = PickPicEvent(
-                        id: event.id,
-                        title: title,
-                        shareToken: event.shareToken,
-                        status: event.status,
-                        createdAt: event.createdAt,
-                        updatedAt: Date(),
-                        isPendingCreation:
-                            event.isPendingCreation
-                    )
-
-                    uploadQueue.renameEvent(
-                        eventID: event.id,
-                        title: title
-                    )
-
-                    event = renamedEvent
-                    onEventUpdated(renamedEvent)
-
-                    return
-                }
-
-                let client =
-                try configuration.makeClient()
-                
-                let updatedEvent =
-                try await client.updateEvent(
-                    title: title,
-                    eventID: event.id
-                )
-                
-                event = updatedEvent
-                onEventUpdated(updatedEvent)
-            }
-        }
-        .alert(
-            "Archive \(event.title)?",
-            isPresented:
-                $showingArchiveConfirmation
-        ) {
-            Button(
-                "Archive Event",
-                role: .destructive
-            ) {
-                Task {
-                    await updateGalleryStatus(
-                        .archived
-                    )
-                }
-            }
-            
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                """
-                Archiving makes the public gallery unavailable. You can \
-                restore it later by changing the status to Open or Closed.
-                """
-            )
-        }
-        .alert(
-            "Delete \(event.title)?",
-            isPresented:
-                $showingDeleteConfirmation
-        ) {
-            Button(
-                "Delete Event",
-                role: .destructive
-            ) {
-                Task {
-                    await deleteEvent()
-                }
-            }
-            
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                """
-                This permanently deletes the online gallery, uploaded \
-                photos, finals, comments, and likes. This cannot be undone.
-                """
-            )
-        }
-        .alert(
-            "Unable to Change Status",
-            isPresented: $showingStatusError
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(statusErrorMessage)
-        }
-        .alert(
-            "Unable to Delete Event",
-            isPresented: $showingDeleteError
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(deleteErrorMessage)
+            manageEventSection
         }
     }
-    
+
     private func beginImport() {
         importQueueErrorMessage = nil
         importModel.clearError()
@@ -1007,6 +909,34 @@ struct EventDetailView: View {
         do {
             let client =
             try configuration.makeClient()
+
+            /*
+             * There is no single-event GET route, only the list one
+             * fetchEvents() already calls elsewhere -- refetching it here
+             * is what picks up fields set from outside this screen (the
+             * RAW-requests toggle changed on the web dashboard, a rename,
+             * a status change) since `event` is seeded once from the
+             * value this view was pushed with and nothing otherwise
+             * refreshes it while the screen stays open. Best-effort: a
+             * failure here still lets the photo-derived statistics below
+             * load normally.
+             */
+            do {
+                let refreshedEvents =
+                try await client.fetchEvents()
+
+                if let refreshedEvent = refreshedEvents.first(
+                    where: { $0.id == event.id }
+                ) {
+                    event = refreshedEvent
+                    onEventUpdated(refreshedEvent)
+                }
+            } catch {
+                print(
+                    "Event refresh failed, dashboard statistics will still be attempted:",
+                    error
+                )
+            }
 
             let photos =
             try await client.fetchEventPhotos(
@@ -1383,8 +1313,314 @@ struct EventDetailView: View {
         } catch {
             deleteErrorMessage =
             error.localizedDescription
-            
+
             showingDeleteError = true
+        }
+    }
+
+    /*
+     * Pulled out of `body` as its own Section, not inlined: SwiftUI's
+     * result-builder type checker times out on a List this long once
+     * another multi-part Section is added inline (hit in CI, not locally,
+     * since the compiler's timeout is load-dependent) -- splitting a
+     * Section into its own `some View` property gives the type checker a
+     * much smaller expression to solve per piece.
+     */
+    @ViewBuilder
+    private var photosSection: some View {
+        Section("Photos") {
+            Button {
+                beginImport()
+            } label: {
+                Label(
+                    eventJobs.isEmpty
+                    ? "Import Photos"
+                    : "Add More Photos",
+                    systemImage:
+                        "photo.badge.plus"
+                )
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
+            }
+            // Borderless so the button takes the tap without the row's
+            // gesture recognizer swallowing the first one (see #122).
+            .buttonStyle(.borderless)
+            .contentShape(Rectangle())
+
+            NavigationLink {
+                UploadQueueView(
+                    event: event
+                )
+            } label: {
+                HStack {
+                    Label(
+                        unfinishedEventJobCount > 0
+                        ? "Continue Upload"
+                        : "Upload Queue",
+                        systemImage:
+                            unfinishedEventJobCount > 0
+                        ? "clock.arrow.circlepath"
+                        : "arrow.up.circle"
+                    )
+
+                    Spacer()
+
+                    if unfinishedEventJobCount > 0 {
+                        Text(
+                            "\(unfinishedEventJobCount)"
+                        )
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            NavigationLink {
+                LikedPhotosView(event: event)
+            } label: {
+                HStack {
+                    Label(
+                        "Liked Photos",
+                        systemImage: "heart.fill"
+                    )
+
+                    Spacer()
+
+                    if let likedCount =
+                        dashboardStatistics?
+                        .likedPhotoCount,
+                        likedCount > 0 {
+                        Text("\(likedCount)")
+                            .font(.caption.bold())
+                            .foregroundStyle(
+                                .secondary
+                            )
+                    }
+                }
+            }
+
+            NavigationLink {
+                FinalUploadsView(
+                    event: event,
+                    automaticallyUploadReadyFinals: true
+                )
+            } label: {
+                VStack(
+                    alignment: .leading,
+                    spacing: 3
+                ) {
+                    Label(
+                        "Upload Ready Finals",
+                        systemImage:
+                            "bolt.circle.fill"
+                    )
+
+                    Text(
+                        "Scans Edited and starts uploading matches."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            NavigationLink {
+                FinalUploadsView(event: event)
+            } label: {
+                HStack {
+                    Label(
+                        "Review Finals",
+                        systemImage:
+                            "photo.stack"
+                    )
+
+                    Spacer()
+
+                    if let finalCount =
+                        dashboardStatistics?
+                        .uploadedFinalCount,
+                        finalCount > 0 {
+                        Text("\(finalCount)")
+                            .font(.caption.bold())
+                            .foregroundStyle(
+                                .secondary
+                            )
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var manageEventSection: some View {
+        Section {
+            Button {
+                showingRenameEvent = true
+            } label: {
+                Label(
+                    "Rename Event",
+                    systemImage: "pencil"
+                )
+            }
+            .disabled(
+                isDeleting
+                || isUpdatingStatus
+            )
+
+            Button(
+                role: .destructive
+            ) {
+                showingDeleteConfirmation = true
+            } label: {
+                Label(
+                    "Delete Event",
+                    systemImage: "trash"
+                )
+            }
+            .disabled(
+                isDeleting
+                || isUpdatingStatus
+                || eventHasActiveProcessing
+            )
+
+            if eventHasActiveProcessing {
+                Text(
+                    """
+                    Finish the current preparation, conversion, \
+                    or upload before deleting this event.
+                    """
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Manage Event")
+        } footer: {
+            Text(
+                """
+                Deleting an event permanently removes its online \
+                gallery and uploaded images. Your original event \
+                folder, To Edit, and Edited folders are not changed.
+                """
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var rawRequestsSection: some View {
+        Section {
+            Toggle(
+                "Allow Viewers to Request Originals",
+                isOn: rawRequestsEnabledBinding
+            )
+            .disabled(isUpdatingRawRequestsEnabled)
+
+            Button {
+                showingStopOfferingRawsConfirmation = true
+            } label: {
+                Label(
+                    "Stop Offering Originals",
+                    systemImage: "stop.circle"
+                )
+            }
+            .disabled(isStoppingOfferingRaws)
+        } header: {
+            Text("RAW Requests")
+        } footer: {
+            Text(
+                """
+                Turning requests off does not take back a RAW already \
+                delivered to a viewer -- use Stop Offering Originals \
+                below to also cancel every pending delivery and free \
+                all storage for this event now, regardless of \
+                collection status. Both are reversible: turn requests \
+                back on and the next request re-uploads.
+                """
+            )
+        }
+    }
+
+    /*
+     * event.rawRequestsEnabled is optional (nil until the server has been
+     * asked at least once, see PickPicEvent), so this reads nil as "on" --
+     * the same default the model documents -- rather than exposing the
+     * optionality to the Toggle, and writes go through
+     * setRawRequestsEnabled(_:) so a failed request reverts the switch.
+     */
+    private var rawRequestsEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { event.rawRequestsEnabled ?? true },
+            set: { newValue in
+                Task {
+                    await setRawRequestsEnabled(newValue)
+                }
+            }
+        )
+    }
+
+    private func setRawRequestsEnabled(
+        _ enabled: Bool
+    ) async {
+        guard !isUpdatingRawRequestsEnabled else {
+            return
+        }
+
+        isUpdatingRawRequestsEnabled = true
+
+        defer {
+            isUpdatingRawRequestsEnabled = false
+        }
+
+        do {
+            let client =
+            try configuration.makeClient()
+
+            let updatedEvent =
+            try await client.setRawRequestsEnabled(
+                enabled,
+                for: event.id
+            )
+
+            event = updatedEvent
+            onEventUpdated(updatedEvent)
+        } catch {
+            rawRequestsEnabledErrorMessage =
+            error.localizedDescription
+
+            showingRawRequestsEnabledError = true
+        }
+    }
+
+    private func stopOfferingRawRequests() async {
+        guard !isStoppingOfferingRaws else {
+            return
+        }
+
+        isStoppingOfferingRaws = true
+
+        defer {
+            isStoppingOfferingRaws = false
+        }
+
+        do {
+            let client =
+            try configuration.makeClient()
+
+            let updatedEvent =
+            try await client.stopOfferingRawRequests(
+                eventID: event.id
+            )
+
+            event = updatedEvent
+            onEventUpdated(updatedEvent)
+
+            await loadDashboard()
+        } catch {
+            stopOfferingRawsErrorMessage =
+            error.localizedDescription
+
+            showingStopOfferingRawsError = true
         }
     }
 }
