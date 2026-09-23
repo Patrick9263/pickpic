@@ -73,8 +73,36 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build iPad app
+      # The app's deployment target can run ahead of the Xcode GitHub installs
+      # on its hosted images -- iOS 27 shipped weeks before any runner carried
+      # Xcode 27, and the default Xcode then fails on APIs its older SDK lacks.
+      # So select the newest installed Xcode whose simulator SDK meets the
+      # project's own deployment target (read from project.pbxproj rather than
+      # hardcoded, so the next bump needs no edit here). If none does, skip
+      # the build and tests with a visible warning instead of failing: the
+      # red job would only be runner lag, and it clears itself once the image
+      # catches up. Locally, CLAUDE.md's xcodebuild gate still applies.
+      - name: Select an Xcode that supports the deployment target
+        id: xcode
         if: steps.filter.outputs.changed == 'true'
+        run: |
+          TARGET=$(grep -m1 -oE 'IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+' ipad/PickPic.xcodeproj/project.pbxproj | grep -oE '[0-9.]+$')
+
+          for XCODE in $(ls -d /Applications/Xcode*.app | sort -rV); do
+            SDK=$(DEVELOPER_DIR="$XCODE/Contents/Developer" xcrun --sdk iphonesimulator --show-sdk-version 2>/dev/null) || continue
+            if [ "$(printf '%s\n%s\n' "$TARGET" "$SDK" | sort -V | head -1)" = "$TARGET" ]; then
+              sudo xcode-select -s "$XCODE/Contents/Developer"
+              echo "Using $XCODE (iOS Simulator SDK $SDK) for deployment target $TARGET"
+              echo "ready=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          echo "::warning::No Xcode on this runner has an iOS SDK for deployment target $TARGET; skipping the iPad build and tests. Run the xcodebuild gate locally."
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+
+      - name: Build iPad app
+        if: steps.xcode.outputs.ready == 'true'
         run: |
           set -o pipefail
           xcodebuild -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
@@ -89,7 +117,7 @@ jobs:
       # could disappear from a future runner image and silently break CI.
       - name: Find an available iPad simulator
         id: simulator
-        if: steps.filter.outputs.changed == 'true'
+        if: steps.xcode.outputs.ready == 'true'
         run: |
           UDID=$(xcrun simctl list devices available -j \
             | jq -r '[.devices[][] | select(.name | test("^iPad"))][0].udid')
@@ -102,7 +130,7 @@ jobs:
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
 
       - name: Run PickPicTests
-        if: steps.filter.outputs.changed == 'true'
+        if: steps.xcode.outputs.ready == 'true'
         run: |
           set -o pipefail
           xcodebuild test -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
