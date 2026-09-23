@@ -318,7 +318,12 @@ function OperatorPage() {
       const response = await fetch("/api/operator/accounts");
 
       if (response.status === 403) {
-        setState({ status: "forbidden" });
+        const message = await getErrorMessage(response);
+        if (message === "Operator access is required.") {
+          setState({ status: "forbidden" });
+        } else {
+          setState({ status: "error", message });
+        }
         return;
       }
 
