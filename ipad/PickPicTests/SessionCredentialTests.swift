@@ -266,4 +266,89 @@ struct SessionCredentialTests {
             )
         )
     }
+
+    /*
+     * GET /api/auth/session re-issues Set-Cookie unconditionally, with
+     * however far the row has slid -- unlike the throttled admin routes,
+     * where it appears only when the expiry actually moved. This is the
+     * pure piece AuthClient.describe(_:) spends on every call: does a
+     * response's Set-Cookie move this credential's stored expiry.
+     */
+    @Test
+    func refreshesExpiryFromAMatchingSetCookie() throws {
+        let credential = SessionCredential(
+            token: Self.token,
+            expiresAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let response = try makeResponse(
+            setCookie:
+                "__Host-pickpic_session=\(Self.token); Path=/; HttpOnly; "
+                + "Secure; SameSite=Lax; Max-Age=2592000"
+        )
+
+        let refreshed = AuthClient.refreshedExpiry(
+            of: credential,
+            from: response
+        )
+
+        #expect(refreshed.token == credential.token)
+        #expect(refreshed.expiresAt != credential.expiresAt)
+    }
+
+    /*
+     * The token never changes on a slide, so a Set-Cookie naming a
+     * different one is not this credential's refresh -- keep the expiry
+     * that is already trusted rather than adopt an unrelated one.
+     */
+    @Test
+    func keepsTheOriginalExpiryWhenTheCookieNamesADifferentToken() throws {
+        let credential = SessionCredential(
+            token: Self.token,
+            expiresAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let response = try makeResponse(
+            setCookie:
+                "__Host-pickpic_session=someOtherToken; Path=/; "
+                + "Max-Age=2592000"
+        )
+
+        let refreshed = AuthClient.refreshedExpiry(
+            of: credential,
+            from: response
+        )
+
+        #expect(refreshed == credential)
+    }
+
+    @Test
+    func keepsTheOriginalExpiryWithNoSetCookieHeader() throws {
+        let credential = SessionCredential(
+            token: Self.token,
+            expiresAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let response = try makeResponse(setCookie: nil)
+
+        let refreshed = AuthClient.refreshedExpiry(
+            of: credential,
+            from: response
+        )
+
+        #expect(refreshed == credential)
+    }
+
+    private func makeResponse(
+        setCookie: String?
+    ) throws -> HTTPURLResponse {
+        try #require(
+            HTTPURLResponse(
+                url: URL(string: "https://app.pickpic.photos/api/auth/session")!,
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: setCookie.map { ["Set-Cookie": $0] } ?? [:]
+            )
+        )
+    }
 }

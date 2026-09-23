@@ -130,10 +130,15 @@ struct ConnectionSettingsView: View {
                 .font(.footnote)
 
                 /*
-                 * A session lasts thirty days from the moment it was created
-                 * and cannot be extended in place, so the only remedy is to
-                 * sign in again -- better done now, with the queue idle, than
-                 * discovered as a 401 partway through a shoot's uploads.
+                 * A session slides forward on use -- 30 days of idle time,
+                 * capped at a year from when it was created -- so this date
+                 * keeps moving out on its own as long as the app is opened at
+                 * least monthly (APIConfigurationStore.refreshSession()).
+                 * This warning firing at all means either the app has not
+                 * been opened in a while, or the year cap itself is close,
+                 * which no amount of use can extend -- either way the only
+                 * remedy is to sign in again, better done now with the queue
+                 * idle than discovered as a 401 partway through a shoot.
                  */
                 if configuration.isExpiringSoon {
                     Label(

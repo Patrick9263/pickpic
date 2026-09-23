@@ -234,6 +234,8 @@ struct PickPicApp: App {
                     }
                 }
                 .task {
+                    await configuration.refreshSession()
+
                     BackgroundUploadSession.shared
                         .setRestoredCompletionHandler { completion in
                             Task { @MainActor in
@@ -324,6 +326,10 @@ struct PickPicApp: App {
                             for: uploadQueue.jobs
                         )
                         retryWaitingUploadsIfPossible()
+
+                        Task {
+                            await configuration.refreshSession()
+                        }
 
                         /*
                          * The watcher's interval does not advance while

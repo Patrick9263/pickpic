@@ -115,6 +115,32 @@ final class APIConfigurationStore: ObservableObject {
         )
     }
 
+    /*
+     * Mirrors what the web app's useSession hook gets for free from the
+     * browser's own cookie handling: a GET /api/auth/session that re-aligns
+     * the stored expiry with however far the row has slid. This app turns
+     * off automatic cookie handling everywhere (see AuthClient), so nothing
+     * refreshes the Keychain value unless something calls this -- App.swift
+     * does, at launch and on every foreground. Best effort: a failure here
+     * (offline, a dead session) just leaves the existing credential in
+     * place, and a genuinely dead session still surfaces the normal way, as
+     * a 401 from the next admin request.
+     */
+    func refreshSession() async {
+        guard let credential, !credential.isExpired() else {
+            return
+        }
+
+        guard
+            let refreshed = try? await makeAuthClient()
+                .describe(credential)
+        else {
+            return
+        }
+
+        try? save(refreshed)
+    }
+
     func save(_ credential: SessionCredential) throws {
         try KeychainStore.set(
             String(
