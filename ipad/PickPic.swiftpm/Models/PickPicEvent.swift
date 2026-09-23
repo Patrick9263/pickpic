@@ -77,6 +77,17 @@ struct PickPicEvent: Identifiable, Hashable, Codable {
     }
 
     /*
+     * Both optional for the same reason as isPendingCreation above: an
+     * event still only on this device, or cached from before this field
+     * existed, decodes with neither present rather than failing outright.
+     * A server response always sends both, so nil only ever means "not
+     * yet known" -- treated as enabled/no-requests so a brand-new local
+     * event doesn't show a stale "off" toggle before its first sync.
+     */
+    var rawRequestsEnabled: Bool? = nil
+    var hasRawRequests: Bool? = nil
+
+    /*
      * A pending event has no share token until the server assigns one.
      */
     var isPublishable: Bool {

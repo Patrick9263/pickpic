@@ -70,6 +70,10 @@ struct EventDetailView: View {
     @State private var isStoppingOfferingRaws = false
     @State private var showingStopOfferingRawsError = false
     @State private var stopOfferingRawsErrorMessage = ""
+
+    @State private var isUpdatingRawRequestsEnabled = false
+    @State private var showingRawRequestsEnabledError = false
+    @State private var rawRequestsEnabledErrorMessage = ""
     
     @State private var isUpdatingStatus = false
     @State private var showingArchiveConfirmation = false
@@ -610,6 +614,12 @@ struct EventDetailView: View {
             }
             
             Section {
+                Toggle(
+                    "Allow Viewers to Request Originals",
+                    isOn: rawRequestsEnabledBinding
+                )
+                .disabled(isUpdatingRawRequestsEnabled)
+
                 Button {
                     showingStopOfferingRawsConfirmation = true
                 } label: {
@@ -619,13 +629,17 @@ struct EventDetailView: View {
                     )
                 }
                 .disabled(isStoppingOfferingRaws)
+            } header: {
+                Text("RAW Requests")
             } footer: {
                 Text(
                     """
-                    Turns off RAW requests, cancels every pending delivery, \
-                    and frees all storage for this event now, regardless of \
-                    collection status. Reversible: turn requests back on \
-                    and the next request re-uploads.
+                    Turning requests off does not take back a RAW already \
+                    delivered to a viewer -- use Stop Offering Originals \
+                    below to also cancel every pending delivery and free \
+                    all storage for this event now, regardless of \
+                    collection status. Both are reversible: turn requests \
+                    back on and the next request re-uploads.
                     """
                 )
             }
@@ -957,6 +971,14 @@ struct EventDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(stopOfferingRawsErrorMessage)
+        }
+        .alert(
+            "Unable to Update RAW Requests",
+            isPresented: $showingRawRequestsEnabledError
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(rawRequestsEnabledErrorMessage)
         }
     }
     
@@ -1443,6 +1465,57 @@ struct EventDetailView: View {
             error.localizedDescription
 
             showingDeleteError = true
+        }
+    }
+
+    /*
+     * event.rawRequestsEnabled is optional (nil until the server has been
+     * asked at least once, see PickPicEvent), so this reads nil as "on" --
+     * the same default the model documents -- rather than exposing the
+     * optionality to the Toggle, and writes go through
+     * setRawRequestsEnabled(_:) so a failed request reverts the switch.
+     */
+    private var rawRequestsEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { event.rawRequestsEnabled ?? true },
+            set: { newValue in
+                Task {
+                    await setRawRequestsEnabled(newValue)
+                }
+            }
+        )
+    }
+
+    private func setRawRequestsEnabled(
+        _ enabled: Bool
+    ) async {
+        guard !isUpdatingRawRequestsEnabled else {
+            return
+        }
+
+        isUpdatingRawRequestsEnabled = true
+
+        defer {
+            isUpdatingRawRequestsEnabled = false
+        }
+
+        do {
+            let client =
+            try configuration.makeClient()
+
+            let updatedEvent =
+            try await client.setRawRequestsEnabled(
+                enabled,
+                for: event.id
+            )
+
+            event = updatedEvent
+            onEventUpdated(updatedEvent)
+        } catch {
+            rawRequestsEnabledErrorMessage =
+            error.localizedDescription
+
+            showingRawRequestsEnabledError = true
         }
     }
 
