@@ -145,6 +145,9 @@ struct ContentView: View {
                         title: title,
                         using: configuration
                     )
+                },
+                onShowSettings: {
+                    showingSettings = true
                 }
             )
             .onReceive(uploadQueue.$jobs) { jobs in
@@ -163,21 +166,6 @@ struct ContentView: View {
                         }
                     )
                 )
-            }
-            .toolbar {
-                ToolbarItem(
-                    placement: .topBarTrailing
-                ) {
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Label(
-                            "PickPic Account",
-                            systemImage:
-                                "gearshape"
-                        )
-                    }
-                }
             }
         } detail: {
             /*

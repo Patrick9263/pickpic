@@ -178,7 +178,7 @@ file individual issues**, because triage is Patrick's decision.
 ### An issue declares the depth it deserves
 
 Two label namespaces size the work: **`model:opus|sonnet|haiku`** and
-**`effort:max|high|medium|low`**. They are a recommendation carrier, not permission — **`ready` is
+**`effort:max|xhigh|high|medium|low`**. They are a recommendation carrier, not permission — **`ready` is
 still the only thing that admits an issue to unattended work**, and depth labels alone make nothing
 runnable.
 
@@ -203,10 +203,12 @@ Asking for Opus is therefore not free: on a busy week it can mean the issue wait
 whose labels the budget never reaches will **starve silently**, so the Sunday trends run is told to
 name any issue that defers repeatedly and never runs.
 
-**How much one run may take on is measured in weight, not issue count** — resolved effort rank
-(`low` 1, `medium` 2, `high` 3, `max` 4) against a budget of **4 on a weekday and 10 on surplus**. So
-a weekday morning buys four trivial fixes, or two mediums, or one large plus one small, or a single
-`max` — but never two `high`-or-above PRs at once. An issue that does not fit is left in place for
+**How much one run may take on is measured in weight, not issue count** — resolved effort weight
+(`low` 1, `medium` 2, `high` 3, `xhigh` and `max` 4) against a budget of **4 on a weekday and 10 on
+surplus**. So a weekday morning buys four trivial fixes, or two mediums, or one large plus one small,
+or a single `xhigh`/`max` — but never two `high`-or-above PRs at once. `xhigh` still ranks below
+`max` for the ceiling comparison, but the ladder never grants `xhigh` itself, so in practice an
+`xhigh` issue runs only on a morning the ladder affords `max` (under 45% weekly). An issue that does not fit is left in place for
 the next run rather than dropped. A flat count would have treated four one-line fixes and four
 cross-file rewrites as the same morning's work.
 
