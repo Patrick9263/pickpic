@@ -470,129 +470,8 @@ struct EventDetailView: View {
                 )
             }
 
-            Section("Photos") {
-                Button {
-                    beginImport()
-                } label: {
-                    Label(
-                        eventJobs.isEmpty
-                        ? "Import Photos"
-                        : "Add More Photos",
-                        systemImage:
-                            "photo.badge.plus"
-                    )
-                    .frame(
-                        maxWidth: .infinity,
-                        alignment: .leading
-                    )
-                }
-                // Borderless so the button takes the tap without the row's
-                // gesture recognizer swallowing the first one (see #122).
-                .buttonStyle(.borderless)
-                .contentShape(Rectangle())
+            photosSection
 
-                NavigationLink {
-                    UploadQueueView(
-                        event: event
-                    )
-                } label: {
-                    HStack {
-                        Label(
-                            unfinishedEventJobCount > 0
-                            ? "Continue Upload"
-                            : "Upload Queue",
-                            systemImage:
-                                unfinishedEventJobCount > 0
-                            ? "clock.arrow.circlepath"
-                            : "arrow.up.circle"
-                        )
-                        
-                        Spacer()
-                        
-                        if unfinishedEventJobCount > 0 {
-                            Text(
-                                "\(unfinishedEventJobCount)"
-                            )
-                            .font(.caption.bold())
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                
-                NavigationLink {
-                    LikedPhotosView(event: event)
-                } label: {
-                    HStack {
-                        Label(
-                            "Liked Photos",
-                            systemImage: "heart.fill"
-                        )
-
-                        Spacer()
-
-                        if let likedCount =
-                            dashboardStatistics?
-                            .likedPhotoCount,
-                            likedCount > 0 {
-                            Text("\(likedCount)")
-                                .font(.caption.bold())
-                                .foregroundStyle(
-                                    .secondary
-                                )
-                        }
-                    }
-                }
-                
-                NavigationLink {
-                    FinalUploadsView(
-                        event: event,
-                        automaticallyUploadReadyFinals: true
-                    )
-                } label: {
-                    VStack(
-                        alignment: .leading,
-                        spacing: 3
-                    ) {
-                        Label(
-                            "Upload Ready Finals",
-                            systemImage:
-                                "bolt.circle.fill"
-                        )
-
-                        Text(
-                            "Scans Edited and starts uploading matches."
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                NavigationLink {
-                    FinalUploadsView(event: event)
-                } label: {
-                    HStack {
-                        Label(
-                            "Review Finals",
-                            systemImage:
-                                "photo.stack"
-                        )
-
-                        Spacer()
-
-                        if let finalCount =
-                            dashboardStatistics?
-                            .uploadedFinalCount,
-                            finalCount > 0 {
-                            Text("\(finalCount)")
-                                .font(.caption.bold())
-                                .foregroundStyle(
-                                    .secondary
-                                )
-                        }
-                    }
-                }
-            }
-            
             Section("Gallery") {
                 NavigationLink {
                     PublishGalleryView(
@@ -615,57 +494,7 @@ struct EventDetailView: View {
             
             rawRequestsSection
 
-            Section {
-                Button {
-                    showingRenameEvent = true
-                } label: {
-                    Label(
-                        "Rename Event",
-                        systemImage: "pencil"
-                    )
-                }
-                .disabled(
-                    isDeleting
-                    || isUpdatingStatus
-                )
-
-                Button(
-                    role: .destructive
-                ) {
-                    showingDeleteConfirmation = true
-                } label: {
-                    Label(
-                        "Delete Event",
-                        systemImage: "trash"
-                    )
-                }
-                .disabled(
-                    isDeleting
-                    || isUpdatingStatus
-                    || eventHasActiveProcessing
-                )
-                
-                if eventHasActiveProcessing {
-                    Text(
-                        """
-                        Finish the current preparation, conversion, \
-                        or upload before deleting this event.
-                        """
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Manage Event")
-            } footer: {
-                Text(
-                    """
-                    Deleting an event permanently removes its online \
-                    gallery and uploaded images. Your original event \
-                    folder, To Edit, and Edited folders are not changed.
-                    """
-                )
-            }
+            manageEventSection
         }
         .refreshable {
             await loadDashboard()
@@ -1475,6 +1304,187 @@ struct EventDetailView: View {
      * Section into its own `some View` property gives the type checker a
      * much smaller expression to solve per piece.
      */
+    @ViewBuilder
+    private var photosSection: some View {
+        Section("Photos") {
+            Button {
+                beginImport()
+            } label: {
+                Label(
+                    eventJobs.isEmpty
+                    ? "Import Photos"
+                    : "Add More Photos",
+                    systemImage:
+                        "photo.badge.plus"
+                )
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: .leading
+                )
+            }
+            // Borderless so the button takes the tap without the row's
+            // gesture recognizer swallowing the first one (see #122).
+            .buttonStyle(.borderless)
+            .contentShape(Rectangle())
+
+            NavigationLink {
+                UploadQueueView(
+                    event: event
+                )
+            } label: {
+                HStack {
+                    Label(
+                        unfinishedEventJobCount > 0
+                        ? "Continue Upload"
+                        : "Upload Queue",
+                        systemImage:
+                            unfinishedEventJobCount > 0
+                        ? "clock.arrow.circlepath"
+                        : "arrow.up.circle"
+                    )
+
+                    Spacer()
+
+                    if unfinishedEventJobCount > 0 {
+                        Text(
+                            "\(unfinishedEventJobCount)"
+                        )
+                        .font(.caption.bold())
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            NavigationLink {
+                LikedPhotosView(event: event)
+            } label: {
+                HStack {
+                    Label(
+                        "Liked Photos",
+                        systemImage: "heart.fill"
+                    )
+
+                    Spacer()
+
+                    if let likedCount =
+                        dashboardStatistics?
+                        .likedPhotoCount,
+                        likedCount > 0 {
+                        Text("\(likedCount)")
+                            .font(.caption.bold())
+                            .foregroundStyle(
+                                .secondary
+                            )
+                    }
+                }
+            }
+
+            NavigationLink {
+                FinalUploadsView(
+                    event: event,
+                    automaticallyUploadReadyFinals: true
+                )
+            } label: {
+                VStack(
+                    alignment: .leading,
+                    spacing: 3
+                ) {
+                    Label(
+                        "Upload Ready Finals",
+                        systemImage:
+                            "bolt.circle.fill"
+                    )
+
+                    Text(
+                        "Scans Edited and starts uploading matches."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            NavigationLink {
+                FinalUploadsView(event: event)
+            } label: {
+                HStack {
+                    Label(
+                        "Review Finals",
+                        systemImage:
+                            "photo.stack"
+                    )
+
+                    Spacer()
+
+                    if let finalCount =
+                        dashboardStatistics?
+                        .uploadedFinalCount,
+                        finalCount > 0 {
+                        Text("\(finalCount)")
+                            .font(.caption.bold())
+                            .foregroundStyle(
+                                .secondary
+                            )
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var manageEventSection: some View {
+        Section {
+            Button {
+                showingRenameEvent = true
+            } label: {
+                Label(
+                    "Rename Event",
+                    systemImage: "pencil"
+                )
+            }
+            .disabled(
+                isDeleting
+                || isUpdatingStatus
+            )
+
+            Button(
+                role: .destructive
+            ) {
+                showingDeleteConfirmation = true
+            } label: {
+                Label(
+                    "Delete Event",
+                    systemImage: "trash"
+                )
+            }
+            .disabled(
+                isDeleting
+                || isUpdatingStatus
+                || eventHasActiveProcessing
+            )
+
+            if eventHasActiveProcessing {
+                Text(
+                    """
+                    Finish the current preparation, conversion, \
+                    or upload before deleting this event.
+                    """
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Manage Event")
+        } footer: {
+            Text(
+                """
+                Deleting an event permanently removes its online \
+                gallery and uploaded images. Your original event \
+                folder, To Edit, and Edited folders are not changed.
+                """
+            )
+        }
+    }
+
     @ViewBuilder
     private var rawRequestsSection: some View {
         Section {
