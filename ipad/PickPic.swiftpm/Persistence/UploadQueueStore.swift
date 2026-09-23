@@ -552,16 +552,16 @@ final class UploadQueueStore: ObservableObject {
             return
         }
 
+        let jobID = job.id
+
         do {
-            try coordinator.submit(
-                jobID: job.id,
-                eventTitle: job.eventTitle,
-                operation: operation
+            try coordinator.registerLaunchHandler(
+                jobID: jobID
             ) { [weak self, weak configuration] task in
                 Task { @MainActor [weak self, weak configuration] in
                     self?.handleContinuedProcessingTask(
                         task,
-                        jobID: job.id,
+                        jobID: jobID,
                         operation: operation,
                         configuration: configuration
                     )
@@ -569,60 +569,76 @@ final class UploadQueueStore: ObservableObject {
             }
         } catch {
             runForegroundFallback(
-                jobID: job.id,
+                jobID: jobID,
                 identifier: identifier,
                 operation: operation,
                 configuration: configuration,
                 message:
-                    "iPadOS background processing was unavailable, so PickPic will continue while the app remains open. \(error.localizedDescription)"
+                    ContinuedProcessingTaskCoordinator
+                        .foregroundFallbackMessage(for: error)
             )
             return
         }
 
         /*
-         * BGTaskScheduler.submit(_:) can report success while the daemon
-         * silently never invokes the launch handler (a known iOS 26
-         * BGContinuedProcessingTask issue: submission and dispatch are two
-         * separate steps, and only the first one's failures surface here).
-         * When that happens nothing ever promotes this job past .scheduled,
-         * so fall back to foreground processing if the real handler hasn't
-         * fired within a few seconds -- the pipeline must not silently
-         * stall just because iPadOS dropped the handoff.
+         * On iOS 26 the synchronous submit(_:) with the .queue strategy
+         * could succeed while iPadOS never dispatched the launch handler,
+         * so a 3 s timer used to force the foreground fallback whenever
+         * the job was still .scheduled. That timer was a guess racing a
+         * real dispatch, and its cancel() could not dismiss the system
+         * item the queued request had already produced.
          *
-         * The cancel() below is best-effort only. Once the daemon has
-         * already failed to dispatch, Apple's own guidance is that there
-         * is no API to query or force-dismiss the resulting system
-         * notification -- see the "Known limitation" note in CLAUDE.md.
-         * This does not fix that cosmetic notification; it only makes
-         * sure the actual import/upload work keeps moving.
+         * The deployment floor is now iOS 27, whose async
+         * submitTaskRequest(_:) reports every outcome and, under .fail,
+         * refuses a request it cannot start immediately
+         * (ImmediateRunIneligible) instead of queueing it. That result is
+         * the signal: an error falls back to the foreground; success
+         * means the launch handler is on its way and promotes the job to
+         * .active. The job keeps showing "Waiting for iPadOS..." until one
+         * of those happens.
+         *
+         * The header warns the completion "may be invoked ... after an
+         * arbitrary amount of delay", so the launch deadline below is the
+         * backstop that keeps a job from sitting in .scheduled for the
+         * rest of the session if neither the completion nor a launch ever
+         * arrives. It is deliberately long -- a dispatch under .fail is
+         * immediate or not at all, so it should never fire in practice --
+         * and it cannot cause a double run: every path out of .scheduled
+         * goes through isAwaitingLaunch, and cancel() drops the launch
+         * handler so a late dispatch is completed as stale. (A relaunch
+         * is covered separately: UploadQueueRecovery defers any
+         * .scheduled job it finds.)
          */
-        let jobID = job.id
+        Task { @MainActor [weak self, weak configuration] in
+            do {
+                try await coordinator.submitRequest(
+                    jobID: jobID,
+                    eventTitle: job.eventTitle,
+                    operation: operation
+                )
+            } catch {
+                self?.fallBackIfStillAwaitingLaunch(
+                    jobID: jobID,
+                    identifier: identifier,
+                    operation: operation,
+                    configuration: configuration,
+                    message:
+                        ContinuedProcessingTaskCoordinator
+                            .foregroundFallbackMessage(for: error)
+                )
+            }
+        }
 
         Task { @MainActor [weak self, weak configuration] in
             do {
                 try await Task<Never, Never>.sleep(
-                    for: .seconds(3)
+                    for: Self.continuedProcessingLaunchDeadline
                 )
             } catch {
                 return
             }
 
-            guard
-                let self,
-                let currentJob = self.jobs.first(where: { candidate in
-                    candidate.id == jobID
-                }),
-                currentJob.continuedProcessing?.identifier
-                    == identifier,
-                currentJob.continuedProcessing?.status
-                    == .scheduled
-            else {
-                return
-            }
-
-            coordinator.cancel(jobID: jobID)
-
-            self.runForegroundFallback(
+            self?.fallBackIfStillAwaitingLaunch(
                 jobID: jobID,
                 identifier: identifier,
                 operation: operation,
@@ -631,6 +647,41 @@ final class UploadQueueStore: ObservableObject {
                     "iPadOS did not start background processing in time, so PickPic will continue while the app remains open."
             )
         }
+    }
+
+    private static let continuedProcessingLaunchDeadline:
+        Duration = .seconds(30)
+
+    private func fallBackIfStillAwaitingLaunch(
+        jobID: UUID,
+        identifier: String,
+        operation: ContinuedProcessingOperation,
+        configuration: APIConfigurationStore?,
+        message: String
+    ) {
+        guard
+            let currentJob = jobs.first(where: { candidate in
+                candidate.id == jobID
+            }),
+            currentJob.continuedProcessing?.isAwaitingLaunch(
+                identifier: identifier,
+                operation: operation
+            ) == true
+        else {
+            return
+        }
+
+        ContinuedProcessingTaskCoordinator
+            .shared
+            .cancel(jobID: jobID)
+
+        runForegroundFallback(
+            jobID: jobID,
+            identifier: identifier,
+            operation: operation,
+            configuration: configuration,
+            message: message
+        )
     }
 
     private func runForegroundFallback(
@@ -717,14 +768,16 @@ final class UploadQueueStore: ObservableObject {
                     job.id == jobID
                 }
             ),
-            currentJob.continuedProcessing?
-                .identifier == expectedIdentifier,
-            currentJob.continuedProcessing?
-                .operation == operation
+            currentJob.continuedProcessing?.isAwaitingLaunch(
+                identifier: expectedIdentifier,
+                operation: operation
+            ) == true
         else {
-            // The persisted job was already removed or reconciled. There is
-            // no remaining system work, so finish without leaving a stale
-            // failed item in iPadOS.
+            // The persisted job was already removed or reconciled, or the
+            // foreground fallback has already claimed it. There is no
+            // remaining system work, so finish without leaving a stale
+            // failed item in iPadOS -- and never run the job a second time
+            // beside a foreground pass.
             backgroundTask.setTaskCompleted(
                 success: true
             )
