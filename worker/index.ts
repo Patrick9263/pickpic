@@ -4,7 +4,7 @@ import {
   requireAdminPrincipal,
   type AuthEnvironment,
 } from "./auth.ts";
-import { generateAuthToken, hashAuthToken } from "./session.ts";
+import { generateAuthToken, hashAuthToken, withSetCookie } from "./session.ts";
 import {
   escapeHtml,
   sendGalleryEmail,
@@ -7516,7 +7516,7 @@ async function routeRequest(
     const operatorResponse = await handleOperatorRequest(request, url, env);
 
     if (operatorResponse) {
-      return operatorResponse;
+      return withSetCookie(operatorResponse, access.setCookie);
     }
   }
 
@@ -7547,8 +7547,14 @@ async function routeRequest(
       access.principal,
     );
 
+    /*
+     * A slid session's refreshed cookie rides on whatever the handler
+     * returned. Only a matched route carries it; an unmatched /api/admin/ path
+     * falls through to the generic 404, which is harmless to miss -- the row
+     * has already been extended and the next matched request re-issues it.
+     */
     if (adminResponse) {
-      return adminResponse;
+      return withSetCookie(adminResponse, access.setCookie);
     }
   }
 

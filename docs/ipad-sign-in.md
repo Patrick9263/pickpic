@@ -91,9 +91,11 @@ iPad.
 
 ## Each sign-in
 
-Sessions last **30 days from creation and cannot be renewed in place** — the
-lifetime is absolute so that a stolen cookie dies on a fixed date. Signing in
-again mints a new one.
+On the server, sessions **slide**: each dies after 30 days without use, and
+active use keeps extending it up to a hard cap of one year from sign-in. The
+iPad app does not see those extensions yet — it still treats the expiry it was
+given at sign-in as final and asks you to sign in again 30 days later. Signing
+in again mints a new session.
 
 1. Open PickPic on the iPad. With no valid session it presents the account
    sheet by itself; otherwise it is behind the settings button.
