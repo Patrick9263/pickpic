@@ -23,10 +23,12 @@ import {
   generateAuthToken,
   hashAuthToken,
   readSessionCookie,
+  refreshedSessionCookieHeader,
   resolveSession,
   revokeSession,
   sessionCookieHeader,
   touchSession,
+  type ResolvedSession,
 } from "./session.ts";
 
 /*
@@ -347,23 +349,43 @@ export async function requireAdminPrincipal(
   }
 
   if (session.needsTouch) {
-    ctx.waitUntil(touchSessionQuietly(database, session.principal.sessionId));
+    ctx.waitUntil(touchSessionQuietly(database, session));
   }
 
-  return { ok: true, principal: session.principal };
+  /*
+   * Only when the expiry actually moved, which is at most once a day -- the
+   * same throttle as the write, so the browser's Max-Age and the row stay
+   * within a day of each other without a Set-Cookie on every response.
+   */
+  return {
+    ok: true,
+    principal: session.principal,
+    setCookie: session.extendedExpiresAt
+      ? refreshedSessionCookieHeader(
+          token,
+          session.extendedExpiresAt,
+          Date.now(),
+        )
+      : undefined,
+  };
 }
 
 /*
- * last_used_at is a convenience for a future device list. Failing to write it
- * must never turn a valid session into an error, and this runs after the
- * response has already been sent, so the failure is logged and dropped.
+ * last_used_at is a convenience for a future device list, and a missed expiry
+ * extension is retried by the next request, since the row still reads as due.
+ * Neither may turn a valid session into an error, and this usually runs after
+ * the response has already been sent, so the failure is logged and dropped.
  */
 async function touchSessionQuietly(
   database: D1Database,
-  sessionId: string,
+  session: ResolvedSession,
 ): Promise<void> {
   try {
-    await touchSession(database, sessionId);
+    await touchSession(
+      database,
+      session.principal.sessionId,
+      session.extendedExpiresAt,
+    );
   } catch (error) {
     console.error("Failed to refresh a session's last_used_at:", error);
   }
@@ -1778,8 +1800,16 @@ async function getSession(
 
   const session = token ? await resolveSession(database, token) : null;
 
-  if (!session) {
+  if (!token || !session) {
     return jsonResponse({ error: "Sign in to continue." }, 401);
+  }
+
+  /*
+   * Awaited rather than deferred because handleAuthRequest has no
+   * ExecutionContext; it is at most one small write an hour per session.
+   */
+  if (session.needsTouch) {
+    await touchSessionQuietly(database, session);
   }
 
   const account = await database
@@ -1802,18 +1832,33 @@ async function getSession(
     return jsonResponse({ error: "This account is not available." }, 403);
   }
 
-  return jsonResponse({
-    account: {
-      id: account.id,
-      name: account.name,
-      rawDeliveryTtlMs: account.rawDeliveryTtlMs,
+  return jsonResponse(
+    {
+      account: {
+        id: account.id,
+        name: account.name,
+        rawDeliveryTtlMs: account.rawDeliveryTtlMs,
+      },
+      user: {
+        id: session.principal.accountUserId,
+        email: session.principal.email,
+        role: session.principal.role,
+      },
     },
-    user: {
-      id: session.principal.accountUserId,
-      email: session.principal.email,
-      role: session.principal.role,
+    200,
+    /*
+     * Unconditionally, unlike requireAdminPrincipal: the SPA asks for this on
+     * every load, so re-aligning the browser's Max-Age with the row here costs
+     * no write and heals any drift a lost admin response left behind.
+     */
+    {
+      "Set-Cookie": refreshedSessionCookieHeader(
+        token,
+        session.expiresAt,
+        Date.now(),
+      ),
     },
-  });
+  );
 }
 
 /*

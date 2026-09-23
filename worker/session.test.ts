@@ -4,7 +4,10 @@ import {
   clearedSessionCookieHeader,
   generateAuthToken,
   readSessionCookie,
+  refreshedSessionCookieHeader,
   sessionCookieHeader,
+  slideSessionExpiry,
+  withSetCookie,
 } from "./session.ts";
 
 function requestWithCookies(header: string | null): Request {
@@ -115,10 +118,130 @@ describe("sessionCookieHeader", () => {
     expect(sessionCookieHeader("token-value")).toContain("SameSite=Lax");
   });
 
-  it("expires thirty days out, absolute rather than sliding", () => {
+  it("starts with the thirty-day idle window", () => {
     expect(sessionCookieHeader("token-value")).toContain(
       `Max-Age=${60 * 60 * 24 * 30}`,
     );
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+
+describe("slideSessionExpiry", () => {
+  const created = Date.parse("2026-01-01T00:00:00.000Z");
+
+  function iso(time: number): string {
+    return new Date(time).toISOString();
+  }
+
+  it("does not move within a day of the last extension", () => {
+    /*
+     * The throttle is what keeps an active session at one D1 write a day
+     * rather than one per request.
+     */
+    const now = created + 12 * 60 * 60 * 1000;
+
+    expect(
+      slideSessionExpiry(iso(created), iso(created + 30 * DAY), now),
+    ).toEqual({ expiresAt: iso(created + 30 * DAY), extended: false });
+  });
+
+  it("slides to thirty days after now once a day has passed", () => {
+    const now = created + 10 * DAY;
+
+    expect(
+      slideSessionExpiry(iso(created), iso(created + 30 * DAY), now),
+    ).toEqual({ expiresAt: iso(now + 30 * DAY), extended: true });
+  });
+
+  it("never passes a year from creation however active the session is", () => {
+    const now = created + 350 * DAY;
+
+    expect(
+      slideSessionExpiry(iso(created), iso(created + 340 * DAY), now),
+    ).toEqual({ expiresAt: iso(created + 365 * DAY), extended: true });
+  });
+
+  it("stops writing once the cap is reached", () => {
+    const now = created + 360 * DAY;
+
+    expect(
+      slideSessionExpiry(iso(created), iso(created + 365 * DAY), now),
+    ).toEqual({ expiresAt: iso(created + 365 * DAY), extended: false });
+  });
+
+  it("never shortens an expiry that is already later", () => {
+    const now = created + 5 * DAY;
+
+    expect(
+      slideSessionExpiry(iso(created), iso(created + 60 * DAY), now),
+    ).toEqual({ expiresAt: iso(created + 60 * DAY), extended: false });
+  });
+});
+
+describe("refreshedSessionCookieHeader", () => {
+  it("sets Max-Age to land on the row's expiry", () => {
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+
+    const header = refreshedSessionCookieHeader(
+      "token-value",
+      new Date(now + 20 * DAY).toISOString(),
+      now,
+    );
+
+    expect(header).toContain(`${SESSION_COOKIE_NAME}=token-value`);
+    expect(header).toContain(`Max-Age=${20 * 24 * 60 * 60}`);
+    expect(header).toContain("HttpOnly");
+  });
+
+  it("never emits a negative Max-Age", () => {
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+
+    expect(
+      refreshedSessionCookieHeader(
+        "token-value",
+        new Date(now - DAY).toISOString(),
+        now,
+      ),
+    ).toContain("Max-Age=0");
+  });
+});
+
+describe("withSetCookie", () => {
+  it("returns the response untouched when there is nothing to set", () => {
+    const response = new Response("body");
+
+    expect(withSetCookie(response, undefined)).toBe(response);
+  });
+
+  it("adds the cookie and keeps status, body and other headers", async () => {
+    const response = withSetCookie(
+      new Response("body", {
+        status: 201,
+        headers: { "Content-Type": "text/plain" },
+      }),
+      "a=b",
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("Content-Type")).toBe("text/plain");
+    expect(response.headers.get("Set-Cookie")).toBe("a=b");
+    expect(await response.text()).toBe("body");
+  });
+
+  it("makes a publicly cacheable response uncacheable", () => {
+    /*
+     * A stored JPEG is public and immutable; a shared cache keeping one with a
+     * session cookie attached would hand that cookie to the next viewer.
+     */
+    const response = withSetCookie(
+      new Response("jpeg", {
+        headers: { "Cache-Control": "public, max-age=31536000, immutable" },
+      }),
+      "a=b",
+    );
+
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 });
 

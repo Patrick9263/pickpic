@@ -80,7 +80,17 @@ export type AdminPrincipal = AccessPrincipal | SessionPrincipal;
  * cannot accidentally test it backwards and let an unverified request through.
  */
 export type AdminAccessResult =
-  { ok: true; principal: AdminPrincipal } | { ok: false; response: Response };
+  | {
+      ok: true;
+      principal: AdminPrincipal;
+
+      /*
+       * A re-issued session cookie when this request slid the session's
+       * expiry, for the caller to attach to whatever response it builds.
+       */
+      setCookie?: string;
+    }
+  | { ok: false; response: Response };
 
 let cachedTeamDomain: string | null = null;
 

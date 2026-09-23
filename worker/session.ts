@@ -16,10 +16,28 @@ import type { SessionPrincipal } from "./access.ts";
 export const SESSION_COOKIE_NAME = "__Host-pickpic_session";
 
 /*
- * Absolute rather than sliding: a session dies thirty days after it was created
- * however active it has been, which bounds the life of a stolen cookie.
+ * Sliding, with an absolute cap (#194). A session dies after thirty days
+ * without use, so an abandoned or forgotten device still loses access on its
+ * own; an active one keeps being extended, so a user -- above all on the iPad,
+ * whose only way back in is pasting a magic link -- no longer meets that on a
+ * fixed schedule.
  */
-const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
+const SESSION_IDLE_TTL_SECONDS = 60 * 60 * 24 * 30;
+
+/*
+ * The ceiling that sliding can never pass, measured from created_at. This is
+ * what still bounds the life of a stolen cookie that is being actively used:
+ * per-device revocation is out of scope, so time is the only thing that
+ * eventually cuts off a copy nobody knows to sign out.
+ */
+const SESSION_MAX_LIFETIME_SECONDS = 60 * 60 * 24 * 365;
+
+/*
+ * expires_at only moves when it would move by at least this much, so an
+ * active session costs one D1 write a day rather than one per request. A day
+ * is invisible against a thirty-day idle window.
+ */
+const SESSION_EXTEND_THRESHOLD_SECONDS = 60 * 60 * 24;
 
 /*
  * last_used_at is only worth a write when it would move by something a human
@@ -33,6 +51,7 @@ const MAX_USER_AGENT_LENGTH = 200;
 
 interface SessionRow {
   sessionId: string;
+  createdAt: string;
   expiresAt: string;
   lastUsedAt: string;
   accountUserId: string;
@@ -51,6 +70,44 @@ export interface ResolvedSession {
    * that through ctx.waitUntil so it never delays a response.
    */
   needsTouch: boolean;
+
+  /*
+   * The new expires_at when the sliding window has moved far enough to be
+   * worth writing, or null. Written by touchSession alongside last_used_at,
+   * and the reason the caller re-issues the cookie: a browser would otherwise
+   * drop it at its original Max-Age however far the row had been extended.
+   */
+  extendedExpiresAt: string | null;
+
+  /*
+   * The row's expiry after any extension above, so a re-issued cookie's
+   * Max-Age can match it exactly.
+   */
+  expiresAt: string;
+}
+
+/*
+ * Pure so the sliding rule is testable without D1. Never shortens: a row whose
+ * expires_at is already beyond the candidate (a session created before #194
+ * cannot be, but a clock skew between isolates could) is left alone.
+ */
+export function slideSessionExpiry(
+  createdAt: string,
+  expiresAt: string,
+  now: number,
+): { expiresAt: string; extended: boolean } {
+  const current = Date.parse(expiresAt);
+
+  const candidate = Math.min(
+    now + SESSION_IDLE_TTL_SECONDS * 1000,
+    Date.parse(createdAt) + SESSION_MAX_LIFETIME_SECONDS * 1000,
+  );
+
+  if (candidate - current < SESSION_EXTEND_THRESHOLD_SECONDS * 1000) {
+    return { expiresAt, extended: false };
+  }
+
+  return { expiresAt: new Date(candidate).toISOString(), extended: true };
 }
 
 /*
@@ -133,7 +190,51 @@ function serializeSessionCookie(value: string, maxAgeSeconds: number): string {
 }
 
 export function sessionCookieHeader(token: string): string {
-  return serializeSessionCookie(token, SESSION_TTL_SECONDS);
+  return serializeSessionCookie(token, SESSION_IDLE_TTL_SECONDS);
+}
+
+/*
+ * The same cookie re-issued after the session row's expiry has slid, with a
+ * Max-Age that lands on the row's new expires_at. The value never changes, so
+ * the browser just gets a later expiry. The iPad does not handle cookies and
+ * so never sees this on its own: it keeps the expiry it parsed at sign-in in
+ * the Keychain and treats itself as signed out once that passes, however far
+ * the row has slid, until it learns to read the refreshed Max-Age.
+ */
+export function refreshedSessionCookieHeader(
+  token: string,
+  expiresAt: string,
+  now: number,
+): string {
+  return serializeSessionCookie(
+    token,
+    Math.max(0, Math.floor((Date.parse(expiresAt) - now) / 1000)),
+  );
+}
+
+/*
+ * Appends a Set-Cookie to a response built elsewhere. Copying first because a
+ * Response from Response.json, fetch or an R2 body may have immutable headers.
+ *
+ * Cache-Control is forced to no-store because the response might be a stored
+ * JPEG marked public and immutable, and a shared cache holding a copy of
+ * someone's session cookie would hand it to the next person to ask. This
+ * happens at most once a day per session, so the lost caching is one image.
+ */
+export function withSetCookie(
+  response: Response,
+  cookie: string | undefined,
+): Response {
+  if (!cookie) {
+    return response;
+  }
+
+  const copy = new Response(response.body, response);
+
+  copy.headers.append("Set-Cookie", cookie);
+  copy.headers.set("Cache-Control", "no-store");
+
+  return copy;
 }
 
 /*
@@ -157,7 +258,7 @@ export async function createSession(
   const nowIso = now.toISOString();
 
   const expiresAt = new Date(
-    now.getTime() + SESSION_TTL_SECONDS * 1000,
+    now.getTime() + SESSION_IDLE_TTL_SECONDS * 1000,
   ).toISOString();
 
   const userAgent =
@@ -207,6 +308,7 @@ export async function resolveSession(
       `
         SELECT
           s.id AS sessionId,
+          s.created_at AS createdAt,
           s.expires_at AS expiresAt,
           s.last_used_at AS lastUsedAt,
           u.id AS accountUserId,
@@ -234,6 +336,8 @@ export async function resolveSession(
     return null;
   }
 
+  const slid = slideSessionExpiry(row.createdAt, row.expiresAt, now);
+
   return {
     principal: {
       kind: "session",
@@ -246,23 +350,37 @@ export async function resolveSession(
       role: row.role,
     },
     needsTouch:
+      slid.extended ||
       now - Date.parse(row.lastUsedAt) >= LAST_USED_REFRESH_SECONDS * 1000,
+    extendedExpiresAt: slid.extended ? slid.expiresAt : null,
+    expiresAt: slid.expiresAt,
   };
 }
 
+/*
+ * One write for both columns, so sliding costs nothing beyond the last_used_at
+ * refresh that was already happening. MAX() keeps two concurrent requests from
+ * moving expires_at backwards; ISO-8601 strings in one format compare
+ * correctly as text. revoked_at IS NULL stops a request that raced a sign-out
+ * from extending a revoked row -- harmless, since revoked rows never resolve,
+ * but pointless.
+ */
 export async function touchSession(
   database: D1Database,
   sessionId: string,
+  extendedExpiresAt: string | null,
 ): Promise<void> {
   await database
     .prepare(
       `
         UPDATE auth_sessions
-        SET last_used_at = ?
+        SET last_used_at = ?,
+            expires_at = MAX(expires_at, COALESCE(?, expires_at))
         WHERE id = ?
+          AND revoked_at IS NULL
       `,
     )
-    .bind(new Date().toISOString(), sessionId)
+    .bind(new Date().toISOString(), extendedExpiresAt, sessionId)
     .run();
 }
 
