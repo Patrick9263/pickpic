@@ -16,11 +16,16 @@ import Foundation
  *     kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly guarantee the service
  *     token had, so an upload can resume while the iPad is locked.
  *
- * expiresAt is not decoration. worker/session.ts mints sessions with an
- * absolute thirty-day lifetime -- deliberately not sliding, so that a stolen
- * cookie dies on a fixed date however much it is used -- which means this app
- * can and will hit an expiry mid-upload. Knowing the date lets the queue warn
- * before a long shoot rather than discovering it as a 401 halfway through.
+ * expiresAt is not decoration, and it is not fixed at sign-in either.
+ * worker/session.ts slides it forward on use -- 30 days of idle time, capped
+ * at a year from creation -- so a stolen cookie still dies on a hard date, but
+ * an actively-used one should not. The app never sees a browser's automatic
+ * Set-Cookie handling (see below), so nothing refreshes this value unless
+ * APIConfigurationStore.refreshSession() spends a round trip to ask for it;
+ * skip that and this reads exactly like the old fixed-lifetime session,
+ * expiring on the date parsed at sign-in however far the server-side row has
+ * actually slid. Knowing the date lets the queue warn before a long shoot
+ * rather than discovering it as a 401 halfway through.
  */
 struct SessionCredential: Codable, Hashable, Sendable {
     let token: String
@@ -65,6 +70,15 @@ struct SessionCredential: Codable, Hashable, Sendable {
         accountName: String?,
         email: String?
     ) -> SessionCredential {
+        SessionCredential(
+            token: token,
+            expiresAt: expiresAt,
+            accountName: accountName,
+            email: email
+        )
+    }
+
+    func withRefreshedExpiry(_ expiresAt: Date) -> SessionCredential {
         SessionCredential(
             token: token,
             expiresAt: expiresAt,
@@ -156,8 +170,9 @@ extension SessionCredential {
      * The app parses this rather than reading HTTPCookieStorage because it
      * never lets URLSession handle cookies at all (see the type comment), so
      * nothing would be in that store to read. Max-Age is the authority on the
-     * expiry: it comes from the same SESSION_TTL_SECONDS the row in
-     * auth_sessions was written with, so the two cannot drift.
+     * expiry, whether this is the cookie minted at sign-in or the one
+     * GET /api/auth/session re-issues on every call once the row has slid --
+     * both are the same header shape, so the same parse serves either.
      *
      * A cleared cookie -- Max-Age=0 with an empty value, which is how sign-out
      * is expressed -- is not a credential and returns nil.
@@ -345,10 +360,13 @@ struct AuthClient {
     }
 
     /*
-     * Confirms a stored credential is still live and refreshes the account
-     * details attached to it. Throws APIClientError.unauthorized -- not an
-     * AuthClientError -- for a dead session, so callers can treat it exactly
-     * like a 401 from any admin route.
+     * Confirms a stored credential is still live, refreshes the account
+     * details attached to it, and picks up however far the session has slid
+     * server-side (worker/auth.ts's getSession re-issues Set-Cookie on every
+     * call, unconditionally, unlike the throttled admin routes). Throws
+     * APIClientError.unauthorized -- not an AuthClientError -- for a dead
+     * session, so callers can treat it exactly like a 401 from any admin
+     * route.
      */
     func describe(
         _ credential: SessionCredential
@@ -361,17 +379,45 @@ struct AuthClient {
             forHTTPHeaderField: "Cookie"
         )
 
-        let (data, _) = try await send(request)
+        let (data, response) = try await send(request)
 
         let body = try JSONDecoder().decode(
             SessionResponse.self,
             from: data
         )
 
-        return credential.withAccountDetails(
+        return Self.refreshedExpiry(
+            of: credential,
+            from: response
+        ).withAccountDetails(
             accountName: body.account.name,
             email: body.user.email
         )
+    }
+
+    /*
+     * Only accepted when the Set-Cookie names the same token this credential
+     * already holds -- the token itself never changes on a slide, so a
+     * mismatch means something is wrong (a stale response, a proxy) and the
+     * locally-known expiry is safer to keep than whatever the header said.
+     */
+    static func refreshedExpiry(
+        of credential: SessionCredential,
+        from response: HTTPURLResponse
+    ) -> SessionCredential {
+        guard
+            let setCookie = response.value(
+                forHTTPHeaderField: "Set-Cookie"
+            ),
+            let parsed = SessionCredential.credential(
+                fromSetCookieHeader: setCookie
+            ),
+            parsed.token == credential.token
+        else {
+            return credential
+        }
+
+        return credential.withRefreshedExpiry(parsed.expiresAt)
     }
 
     func signOut(_ credential: SessionCredential) async throws {
