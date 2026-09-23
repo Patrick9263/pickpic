@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { OperatorAccountRecord } from "../types";
-import { formatDaysAgo, summarizeOperatorAccounts } from "./operatorHelpers";
+import {
+  EMPTY_ORPHAN_SCAN,
+  formatDaysAgo,
+  mergeOrphanScans,
+  ORPHAN_SAMPLE_LIMIT,
+  summarizeOperatorAccounts,
+} from "./operatorHelpers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -109,5 +115,65 @@ describe("formatDaysAgo", () => {
     expect(formatDaysAgo(new Date(NOW - 9 * DAY_MS).toISOString(), NOW)).toBe(
       "9 days ago",
     );
+  });
+});
+
+function orphanSample(key: string) {
+  return {
+    key,
+    size: 1,
+    uploaded: "2026-09-01T00:00:00.000Z",
+    eventExists: true,
+  };
+}
+
+describe("mergeOrphanScans", () => {
+  it("sums every counter and resumes from the newer slice's cursor", () => {
+    const slice = {
+      ...EMPTY_ORPHAN_SCAN,
+      scannedObjects: 10,
+      scannedBytes: 100,
+      orphanCount: 2,
+      orphanBytes: 20,
+      staleOrphanCount: 1,
+      staleOrphanBytes: 5,
+      missingEventOrphanCount: 1,
+      missingEventOrphanBytes: 7,
+    };
+
+    const merged = mergeOrphanScans(
+      mergeOrphanScans(EMPTY_ORPHAN_SCAN, { ...slice, cursor: "a" }),
+      { ...slice, cursor: null },
+    );
+
+    expect(merged).toEqual({
+      scannedObjects: 20,
+      scannedBytes: 200,
+      orphanCount: 4,
+      orphanBytes: 40,
+      staleOrphanCount: 2,
+      staleOrphanBytes: 10,
+      missingEventOrphanCount: 2,
+      missingEventOrphanBytes: 14,
+      sample: [],
+      cursor: null,
+    });
+  });
+
+  it("keeps the earliest samples and stops at the limit", () => {
+    const first = Array.from({ length: ORPHAN_SAMPLE_LIMIT - 1 }, (_, index) =>
+      orphanSample(`first-${index}`),
+    );
+
+    const merged = mergeOrphanScans(
+      { ...EMPTY_ORPHAN_SCAN, sample: first },
+      {
+        ...EMPTY_ORPHAN_SCAN,
+        sample: [orphanSample("second-0"), orphanSample("second-1")],
+      },
+    );
+
+    expect(merged.sample).toHaveLength(ORPHAN_SAMPLE_LIMIT);
+    expect(merged.sample.at(-1)?.key).toBe("second-0");
   });
 });

@@ -1,6 +1,11 @@
 import { env } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BOOTSTRAP_ACCOUNT_ID } from "./accounts.ts";
+import {
+  ORPHAN_GRACE_MS,
+  scanStorageOrphans,
+  type StorageOrphanScan,
+} from "./operator.ts";
 import { clearTestData, insertEvent, insertPhoto } from "./test-fixtures.ts";
 import { adminRequest, expectError } from "./test-request.ts";
 
@@ -378,5 +383,159 @@ describe("GET /api/operator/accounts", () => {
     );
 
     expect(bootstrap?.users[0]?.lastSeenAt).toBe("2026-02-01T00:00:00.000Z");
+  });
+});
+
+/*
+ * #249. R2 is shared across every suite in the run just as D1 is, so this block
+ * empties events/ itself rather than trusting whatever an earlier file left.
+ */
+async function clearStoredObjects(): Promise<void> {
+  let cursor: string | undefined;
+
+  do {
+    const listing = await env.pickpic_photos.list({
+      prefix: "events/",
+      cursor,
+    });
+    const keys = listing.objects.map((object) => object.key);
+
+    if (keys.length > 0) {
+      await env.pickpic_photos.delete(keys);
+    }
+
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+}
+
+async function putObject(key: string, size = 3): Promise<void> {
+  await env.pickpic_photos.put(key, new Uint8Array(size));
+}
+
+const LIVE_EVENT_ID = "event-live";
+const LIVE_PHOTO_ID = "photo-live";
+const PROOF_KEY = `events/${LIVE_EVENT_ID}/photos/${LIVE_PHOTO_ID}.jpg`;
+const FINAL_KEY = `events/${LIVE_EVENT_ID}/photos/${LIVE_PHOTO_ID}/finals/f.jpg`;
+const RAW_KEY = `events/${LIVE_EVENT_ID}/photos/${LIVE_PHOTO_ID}/raw/r.raw`;
+const VARIANT_KEY = `events/${LIVE_EVENT_ID}/photos/${LIVE_PHOTO_ID}/variants/original/u/thumbnail.jpg`;
+const LIVE_ORPHAN_KEY = `events/${LIVE_EVENT_ID}/photos/${LIVE_PHOTO_ID}/variants/original/lost/preview.jpg`;
+const DELETED_EVENT_ORPHAN_KEY = "events/event-gone/photos/p/preview.jpg";
+
+/*
+ * One photo whose every reference column is populated, each with a matching
+ * object, plus an unreferenced object under that live event and one under an
+ * event with no row at all.
+ */
+async function seedReconciliationFixture(): Promise<void> {
+  await insertEvent({ id: LIVE_EVENT_ID, shareToken: "share-live" });
+  await insertPhoto({ id: LIVE_PHOTO_ID, eventId: LIVE_EVENT_ID });
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE photos SET final_storage_key = ?, raw_storage_key = ? WHERE id = ?`,
+    ).bind(FINAL_KEY, RAW_KEY, LIVE_PHOTO_ID),
+    env.DB.prepare(
+      `
+        INSERT INTO photo_variants (
+          photo_id, source_kind, variant_kind, storage_key, content_type,
+          byte_size, width, height, created_at
+        )
+        VALUES (?, 'original', 'thumbnail', ?, 'image/jpeg', 3, 1, 1, ?)
+      `,
+    ).bind(LIVE_PHOTO_ID, VARIANT_KEY, new Date().toISOString()),
+  ]);
+
+  for (const key of [PROOF_KEY, FINAL_KEY, RAW_KEY, VARIANT_KEY]) {
+    await putObject(key);
+  }
+
+  await putObject(LIVE_ORPHAN_KEY, 5);
+  await putObject(DELETED_EVENT_ORPHAN_KEY, 7);
+}
+
+describe("storage orphan reconciliation", () => {
+  beforeEach(clearStoredObjects);
+
+  afterEach(clearStoredObjects);
+
+  it("reports only objects no row references, split by whether the event survives", async () => {
+    await seedReconciliationFixture();
+
+    const scan = await scanStorageOrphans(env);
+
+    expect(scan.cursor).toBeNull();
+    expect(scan.scannedObjects).toBe(6);
+    expect(scan.scannedBytes).toBe(4 * 3 + 5 + 7);
+    expect(scan.orphanCount).toBe(2);
+    expect(scan.orphanBytes).toBe(12);
+    expect(scan.missingEventOrphanCount).toBe(1);
+    expect(scan.missingEventOrphanBytes).toBe(7);
+
+    expect(
+      scan.sample
+        .map(({ key, eventExists }) => ({ key, eventExists }))
+        .sort((a, b) => a.key.localeCompare(b.key)),
+    ).toEqual(
+      [
+        { key: LIVE_ORPHAN_KEY, eventExists: true },
+        { key: DELETED_EVENT_ORPHAN_KEY, eventExists: false },
+      ].sort((a, b) => a.key.localeCompare(b.key)),
+    );
+  });
+
+  it("counts an orphan as stale only once it is past the grace period", async () => {
+    await seedReconciliationFixture();
+
+    /*
+     * A just-written orphan may be an upload whose INSERT has not landed, so it
+     * must not read as stale -- that is the whole reason the split exists.
+     */
+    const fresh = await scanStorageOrphans(env);
+
+    expect(fresh.staleOrphanCount).toBe(0);
+
+    const later = await scanStorageOrphans(env, {
+      now: Date.now() + ORPHAN_GRACE_MS + 60_000,
+    });
+
+    expect(later.staleOrphanCount).toBe(2);
+    expect(later.staleOrphanBytes).toBe(12);
+  });
+
+  it("hands back a cursor when the bucket outruns one request, and resumes from it", async () => {
+    await seedReconciliationFixture();
+
+    /* One key per page, so five pages cover five of the six objects. */
+    const first = await scanStorageOrphans(env, { listLimit: 1 });
+
+    expect(first.scannedObjects).toBe(5);
+    expect(first.cursor).not.toBeNull();
+
+    const second = await scanStorageOrphans(env, {
+      listLimit: 1,
+      cursor: first.cursor ?? undefined,
+    });
+
+    expect(second.scannedObjects).toBe(1);
+    expect(second.cursor).toBeNull();
+    expect(first.orphanCount + second.orphanCount).toBe(2);
+  });
+
+  it("is operator-only over HTTP", async () => {
+    const refused = await adminRequest("GET", "/api/operator/storage-orphans");
+
+    expectError(refused, 403, "Operator access is required.");
+
+    await grantOperator();
+    await seedReconciliationFixture();
+
+    const result = await adminRequest<StorageOrphanScan>(
+      "GET",
+      "/api/operator/storage-orphans",
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.orphanCount).toBe(2);
+    expect(result.body.cursor).toBeNull();
   });
 });

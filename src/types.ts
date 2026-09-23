@@ -232,6 +232,31 @@ export interface OperatorAccountsResponse {
   truncated: boolean;
 }
 
+export interface StorageOrphanSample {
+  key: string;
+  size: number;
+  uploaded: string;
+  eventExists: boolean;
+}
+
+/*
+ * One slice of the R2 reconciliation scan (#249). The console requests slices
+ * until `cursor` comes back null and sums them; see scanStorageOrphans in
+ * worker/operator.ts.
+ */
+export interface StorageOrphanScan {
+  scannedObjects: number;
+  scannedBytes: number;
+  orphanCount: number;
+  orphanBytes: number;
+  staleOrphanCount: number;
+  staleOrphanBytes: number;
+  missingEventOrphanCount: number;
+  missingEventOrphanBytes: number;
+  sample: StorageOrphanSample[];
+  cursor: string | null;
+}
+
 export interface StorageUsageRecord {
   photoCount: number;
   finalCount: number;
