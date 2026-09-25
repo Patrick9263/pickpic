@@ -265,6 +265,17 @@ interface RawPhotoUploadRow {
   rawByteSize: number | null;
 }
 
+interface RawUploadSessionRow {
+  id: string;
+  storageKey: string;
+  r2UploadId: string;
+  originalFilename: string;
+  sha256: string;
+  byteSize: number;
+  partSize: number;
+  createdAt: string;
+}
+
 interface FinalPhotoKeyRow {
   finalStorageKey: string | null;
 }
@@ -621,6 +632,27 @@ const RAW_CONTENT_TYPE = "application/octet-stream";
  * so the two can't drift apart the next time the limit changes.
  */
 const RAW_TOO_LARGE_MESSAGE = `The RAW file must be ${MAX_RAW_BYTES / (1024 * 1024)} MB or smaller.`;
+
+/*
+ * Fixed size for every part of a resumable RAW upload except the last
+ * (#367/#362) -- R2 requires every non-final part of a multipart upload to
+ * be the same size. 8 MiB puts a ~60-80 MB RAW at around 10 parts, so a drop
+ * on a slow connection wastes at most about a minute of re-sent bytes rather
+ * than restarting the whole file.
+ */
+export const RAW_UPLOAD_PART_SIZE = 8 * 1024 * 1024;
+
+/*
+ * R2 auto-aborts an incomplete multipart upload after 7 days. A session row
+ * older than that may already be gone on R2's side even though D1 still has
+ * it, so /raw/start treats a matching row past this age as stale rather than
+ * resumable and starts over.
+ */
+const RAW_UPLOAD_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function rawUploadPartCount(byteSize: number, partSize: number): number {
+  return Math.ceil(byteSize / partSize);
+}
 
 /*
  * The two halves of the reclaim policy (#209). A delivered RAW is the single
@@ -2121,6 +2153,8 @@ async function deleteEvent(
     return jsonResponse({ error: "Event not found." }, 404);
   }
 
+  await abortActiveRawUploadSessionsForEvent(env, scope, eventId);
+
   const { totalBytes } = await getEventStorageTotals(scope, eventId);
 
   try {
@@ -2205,6 +2239,8 @@ async function clearEventPhotos(
       deletedPhotoCount: 0,
     });
   }
+
+  await abortActiveRawUploadSessionsForEvent(env, scope, eventId);
 
   try {
     await scope.database
@@ -2941,6 +2977,8 @@ async function deletePhoto(
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
   }
+
+  await abortActiveRawUploadSession(env, scope, photoId);
 
   const variantResult = await scope.database
     .prepare(
@@ -6467,6 +6505,65 @@ async function uploadRawPhoto(
     );
   }
 
+  return finishRawUpload({
+    request,
+    env,
+    ctx,
+    scope,
+    photoId,
+    storageKey: newStorageKey,
+    originalFilename,
+    sha256: rawSha256,
+    byteSize: storedObject.size,
+    replacedRawBytes,
+    previousStorageKey: photo.rawStorageKey,
+  });
+}
+
+interface FinishRawUploadParams {
+  request: Request;
+  env: TenantEnv;
+  ctx: ExecutionContext;
+  scope: AccountScope;
+  photoId: string;
+  storageKey: string;
+  originalFilename: string;
+  sha256: string;
+  byteSize: number;
+
+  /* What replacing an already-delivered RAW frees -- see uploadRawPhoto. */
+  replacedRawBytes: number;
+
+  /* The RAW this upload is replacing, if any, freed once the new one lands. */
+  previousStorageKey: string | null;
+}
+
+/*
+ * The tail shared by both ways a RAW can land: uploadRawPhoto's single PUT,
+ * and uploadRawPhotoPart's multipart completion (#367). Everything
+ * before this point differs by path -- how the bytes were validated and
+ * stored, and (for multipart) the storage-cap re-check against the real
+ * completed size -- but from here on both write the same photos +
+ * raw_requests batch, queue the same emails, and free the same replaced
+ * object, so this exists once rather than twice.
+ */
+async function finishRawUpload(
+  params: FinishRawUploadParams,
+): Promise<Response> {
+  const {
+    request,
+    env,
+    ctx,
+    scope,
+    photoId,
+    storageKey,
+    originalFilename,
+    sha256,
+    byteSize,
+    replacedRawBytes,
+    previousStorageKey,
+  } = params;
+
   const uploadedAt = new Date().toISOString();
 
   try {
@@ -6486,12 +6583,12 @@ async function uploadRawPhoto(
         `,
         )
         .bind(
-          newStorageKey,
+          storageKey,
           originalFilename,
           RAW_CONTENT_TYPE,
-          storedObject.size,
+          byteSize,
           uploadedAt,
-          rawSha256,
+          sha256,
           photoId,
         ),
 
@@ -6508,7 +6605,7 @@ async function uploadRawPhoto(
         .bind(uploadedAt, photoId),
     ]);
   } catch {
-    await env.pickpic_photos.delete(newStorageKey);
+    await env.pickpic_photos.delete(storageKey);
 
     return jsonResponse(
       { error: "The RAW file metadata could not be saved." },
@@ -6560,11 +6657,11 @@ async function uploadRawPhoto(
     console.error("Unable to queue RAW delivery emails:", error);
   }
 
-  await adjustAccountStorageBytes(scope, storedObject.size - replacedRawBytes);
+  await adjustAccountStorageBytes(scope, byteSize - replacedRawBytes);
 
-  if (photo.rawStorageKey !== null && photo.rawStorageKey !== newStorageKey) {
+  if (previousStorageKey !== null && previousStorageKey !== storageKey) {
     try {
-      await env.pickpic_photos.delete(photo.rawStorageKey);
+      await env.pickpic_photos.delete(previousStorageKey);
     } catch (error) {
       console.error("Unable to remove the replaced RAW file:", error);
     }
@@ -6573,7 +6670,7 @@ async function uploadRawPhoto(
   const rawPhoto: RawPhotoRecord = {
     originalFilename,
     contentType: RAW_CONTENT_TYPE,
-    byteSize: storedObject.size,
+    byteSize,
     uploadedAt,
   };
 
@@ -6582,6 +6679,544 @@ async function uploadRawPhoto(
     pendingRawRequestCount: 0,
     rawPhoto,
   });
+}
+
+/*
+ * POST /api/admin/photos/:id/raw/start (#367/#362).
+ *
+ * Starts, or resumes, a multipart RAW upload. A storage key and R2 upload id
+ * are never accepted from the client -- both are server-built so nothing
+ * about where bytes land is client-controlled.
+ */
+async function startRawUploadSession(
+  request: Request,
+  env: TenantEnv,
+  scope: AccountScope,
+  photoId: string,
+): Promise<Response> {
+  const photo = await scope
+    .prepare(
+      `
+      SELECT
+        event_id AS eventId,
+        raw_storage_key AS rawStorageKey,
+        raw_byte_size AS rawByteSize
+      FROM photos
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<RawPhotoUploadRow>();
+
+  if (!photo) {
+    return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  const parsedBody = await parseJsonObjectBody<{
+    filename?: unknown;
+    sha256?: unknown;
+    byteSize?: unknown;
+  }>(request, "The request body must be valid JSON.");
+
+  if (parsedBody instanceof Response) {
+    return parsedBody;
+  }
+
+  const originalFilename =
+    typeof parsedBody.filename === "string" ? parsedBody.filename.trim() : "";
+
+  if (
+    !originalFilename ||
+    originalFilename.length > 255 ||
+    originalFilename.includes("\0")
+  ) {
+    return jsonResponse({ error: "A valid filename is required." }, 400);
+  }
+
+  const sha256 =
+    typeof parsedBody.sha256 === "string"
+      ? parsedBody.sha256.trim().toLowerCase()
+      : "";
+
+  if (!/^[0-9a-f]{64}$/.test(sha256)) {
+    return jsonResponse(
+      { error: "A valid lowercase SHA-256 value is required." },
+      400,
+    );
+  }
+
+  const byteSize =
+    typeof parsedBody.byteSize === "number" ? parsedBody.byteSize : NaN;
+
+  if (!Number.isInteger(byteSize) || byteSize <= 0) {
+    return jsonResponse({ error: "A valid byteSize is required." }, 400);
+  }
+
+  if (byteSize > MAX_RAW_BYTES) {
+    return jsonResponse({ error: RAW_TOO_LARGE_MESSAGE }, 413);
+  }
+
+  const replacedRawBytes = photo.rawByteSize ?? 0;
+
+  if (wouldExceedStorageCap(scope.account, byteSize - replacedRawBytes)) {
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
+  }
+
+  const existing = await scope
+    .prepare(
+      `
+      SELECT
+        id,
+        storage_key AS storageKey,
+        r2_upload_id AS r2UploadId,
+        original_filename AS originalFilename,
+        sha256,
+        byte_size AS byteSize,
+        part_size AS partSize,
+        created_at AS createdAt
+      FROM raw_upload_sessions
+      WHERE
+        photo_id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<RawUploadSessionRow>();
+
+  if (existing) {
+    const age = Date.now() - Date.parse(existing.createdAt);
+
+    if (
+      existing.sha256 === sha256 &&
+      existing.byteSize === byteSize &&
+      age < RAW_UPLOAD_SESSION_MAX_AGE_MS
+    ) {
+      const landedParts = await scope.database
+        .prepare(
+          `
+          SELECT part_number AS partNumber
+          FROM raw_upload_parts
+          WHERE session_id = ?
+          ORDER BY part_number
+        `,
+        )
+        .bind(existing.id)
+        .all<{ partNumber: number }>();
+
+      return jsonResponse({
+        partSize: existing.partSize,
+        partCount: rawUploadPartCount(existing.byteSize, existing.partSize),
+        landedParts: landedParts.results.map((part) => part.partNumber),
+      });
+    }
+
+    /*
+     * A changed hash or size (a re-saved source file, #362) or a session past
+     * R2's own auto-abort window: neither is resumable, so the old attempt is
+     * abandoned and a fresh one replaces it.
+     */
+    try {
+      await env.pickpic_photos
+        .resumeMultipartUpload(existing.storageKey, existing.r2UploadId)
+        .abort();
+    } catch (error) {
+      console.error(
+        "Unable to abort the replaced RAW multipart upload:",
+        error,
+      );
+    }
+
+    await scope
+      .prepare(
+        `
+        DELETE FROM raw_upload_sessions
+        WHERE
+          id = ?
+          AND account_id = :accountId
+      `,
+        existing.id,
+      )
+      .run();
+  }
+
+  const sessionId = crypto.randomUUID();
+  const storageKey =
+    `events/${photo.eventId}/photos/${photoId}` + `/raw/${sessionId}.raw`;
+
+  let multipartUpload: R2MultipartUpload;
+
+  try {
+    multipartUpload = await env.pickpic_photos.createMultipartUpload(
+      storageKey,
+      {
+        httpMetadata: { contentType: RAW_CONTENT_TYPE },
+        customMetadata: {
+          eventId: photo.eventId,
+          photoId,
+          originalFilename,
+          variant: "raw",
+          sourceSha256: sha256,
+        },
+      },
+    );
+  } catch {
+    return jsonResponse({ error: "The RAW upload could not be started." }, 500);
+  }
+
+  try {
+    await scope
+      .prepare(
+        `
+        INSERT INTO raw_upload_sessions (
+          id,
+          photo_id,
+          account_id,
+          original_filename,
+          sha256,
+          byte_size,
+          part_size,
+          r2_upload_id,
+          storage_key,
+          created_at,
+          completing_at
+        )
+        VALUES (?, ?, :accountId, ?, ?, ?, ?, ?, ?, ?, NULL)
+      `,
+        sessionId,
+        photoId,
+        originalFilename,
+        sha256,
+        byteSize,
+        RAW_UPLOAD_PART_SIZE,
+        multipartUpload.uploadId,
+        storageKey,
+        new Date().toISOString(),
+      )
+      .run();
+  } catch (error) {
+    console.error("Unable to save the RAW upload session:", error);
+
+    await multipartUpload.abort().catch(() => {});
+
+    return jsonResponse({ error: "The RAW upload could not be started." }, 500);
+  }
+
+  return jsonResponse({
+    partSize: RAW_UPLOAD_PART_SIZE,
+    partCount: rawUploadPartCount(byteSize, RAW_UPLOAD_PART_SIZE),
+    landedParts: [],
+  });
+}
+
+/*
+ * PUT /api/admin/photos/:id/raw/parts/:n (#367/#362).
+ *
+ * Stores one part of the active multipart upload for a photo. When this part
+ * is the last one missing, this request finishes the upload itself -- the
+ * iPad queues every part up front and never has to be woken to complete
+ * anything (#362).
+ */
+async function uploadRawPhotoPart(
+  request: Request,
+  env: TenantEnv,
+  ctx: ExecutionContext,
+  scope: AccountScope,
+  photoId: string,
+  partNumberSegment: string,
+): Promise<Response> {
+  const partNumber = Number(partNumberSegment);
+
+  if (!Number.isInteger(partNumber) || partNumber < 1) {
+    return jsonResponse({ error: "Invalid part number." }, 400);
+  }
+
+  const session = await scope
+    .prepare(
+      `
+      SELECT
+        id,
+        storage_key AS storageKey,
+        r2_upload_id AS r2UploadId,
+        original_filename AS originalFilename,
+        sha256,
+        byte_size AS byteSize,
+        part_size AS partSize,
+        created_at AS createdAt
+      FROM raw_upload_sessions
+      WHERE
+        photo_id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<RawUploadSessionRow>();
+
+  if (!session) {
+    return jsonResponse({ error: "No active upload for this photo." }, 404);
+  }
+
+  const partCount = rawUploadPartCount(session.byteSize, session.partSize);
+
+  if (partNumber > partCount) {
+    return jsonResponse({ error: "Invalid part number." }, 400);
+  }
+
+  const expectedSize =
+    partNumber === partCount
+      ? session.byteSize - session.partSize * (partCount - 1)
+      : session.partSize;
+
+  if (!request.body) {
+    return jsonResponse({ error: "The part body is required." }, 400);
+  }
+
+  const partBytes = await request.arrayBuffer();
+
+  if (partBytes.byteLength !== expectedSize) {
+    return jsonResponse(
+      { error: `This part must be exactly ${expectedSize} bytes.` },
+      400,
+    );
+  }
+
+  let uploadedPart: R2UploadedPart;
+
+  try {
+    uploadedPart = await env.pickpic_photos
+      .resumeMultipartUpload(session.storageKey, session.r2UploadId)
+      .uploadPart(partNumber, partBytes);
+  } catch {
+    return jsonResponse({ error: "The part could not be stored." }, 500);
+  }
+
+  /*
+   * Idempotent: the iPad queues every part as an independent background task
+   * and may retry one that already landed, so a re-send just overwrites the
+   * same row with the same (or a refreshed) etag rather than erroring.
+   */
+  await scope.database
+    .prepare(
+      `
+      INSERT INTO raw_upload_parts (session_id, part_number, etag)
+      VALUES (?, ?, ?)
+      ON CONFLICT (session_id, part_number) DO UPDATE SET etag = excluded.etag
+    `,
+    )
+    .bind(session.id, partNumber, uploadedPart.etag)
+    .run();
+
+  const landed = await scope.database
+    .prepare(
+      `
+      SELECT
+        part_number AS partNumber,
+        etag
+      FROM raw_upload_parts
+      WHERE session_id = ?
+      ORDER BY part_number
+    `,
+    )
+    .bind(session.id)
+    .all<{ partNumber: number; etag: string }>();
+
+  if (landed.results.length < partCount) {
+    return jsonResponse({
+      landedParts: landed.results.map((part) => part.partNumber),
+    });
+  }
+
+  /*
+   * No part is missing. Claim completion atomically so that two parts
+   * landing together -- each request's own upsert above leaving none
+   * missing -- still finish the upload exactly once (#362).
+   */
+  const claim = await scope.database
+    .prepare(
+      `
+      UPDATE raw_upload_sessions
+      SET completing_at = ?
+      WHERE
+        id = ?
+        AND completing_at IS NULL
+    `,
+    )
+    .bind(new Date().toISOString(), session.id)
+    .run();
+
+  if ((claim.meta.changes ?? 0) === 0) {
+    /* Another request already claimed completion; let it finish the upload. */
+    return jsonResponse({
+      landedParts: landed.results.map((part) => part.partNumber),
+    });
+  }
+
+  let completedObject: R2Object;
+
+  try {
+    completedObject = await env.pickpic_photos
+      .resumeMultipartUpload(session.storageKey, session.r2UploadId)
+      .complete(
+        landed.results.map((part) => ({
+          partNumber: part.partNumber,
+          etag: part.etag,
+        })),
+      );
+  } catch {
+    /* Release the claim so a retried part can complete the upload instead. */
+    await scope.database
+      .prepare(
+        `UPDATE raw_upload_sessions SET completing_at = NULL WHERE id = ?`,
+      )
+      .bind(session.id)
+      .run();
+
+    return jsonResponse(
+      { error: "The RAW upload could not be completed." },
+      500,
+    );
+  }
+
+  /*
+   * Re-read rather than trust what /start captured: this request can land
+   * minutes after start, and the unchanged PUT /api/admin/photos/:id/raw
+   * path could have replaced the RAW in the meantime (#362 correction 2).
+   */
+  const photo = await scope
+    .prepare(
+      `
+      SELECT
+        event_id AS eventId,
+        raw_storage_key AS rawStorageKey,
+        raw_byte_size AS rawByteSize
+      FROM photos
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<RawPhotoUploadRow>();
+
+  const replacedRawBytes = photo?.rawByteSize ?? 0;
+
+  await refreshAccountStorageBytes(scope);
+
+  if (
+    wouldExceedStorageCap(
+      scope.account,
+      completedObject.size - replacedRawBytes,
+    )
+  ) {
+    await env.pickpic_photos.delete(session.storageKey);
+
+    await scope.database
+      .prepare(`DELETE FROM raw_upload_sessions WHERE id = ?`)
+      .bind(session.id)
+      .run();
+
+    return jsonResponse(
+      { error: "This account's storage limit has been reached." },
+      403,
+    );
+  }
+
+  await scope.database
+    .prepare(`DELETE FROM raw_upload_sessions WHERE id = ?`)
+    .bind(session.id)
+    .run();
+
+  return finishRawUpload({
+    request,
+    env,
+    ctx,
+    scope,
+    photoId,
+    storageKey: session.storageKey,
+    originalFilename: session.originalFilename,
+    sha256: session.sha256,
+    byteSize: completedObject.size,
+    replacedRawBytes,
+    previousStorageKey: photo?.rawStorageKey ?? null,
+  });
+}
+
+/*
+ * Best-effort abort of a photo's active RAW multipart upload, if any. Called
+ * before a delete that would otherwise cascade the session row away in D1
+ * while leaving the upload dangling on R2's side until its own 7-day
+ * auto-abort.
+ */
+async function abortActiveRawUploadSession(
+  env: TenantEnv,
+  scope: AccountScope,
+  photoId: string,
+): Promise<void> {
+  const session = await scope
+    .prepare(
+      `
+      SELECT
+        storage_key AS storageKey,
+        r2_upload_id AS r2UploadId
+      FROM raw_upload_sessions
+      WHERE
+        photo_id = ?
+        AND account_id = :accountId
+    `,
+      photoId,
+    )
+    .first<{ storageKey: string; r2UploadId: string }>();
+
+  if (!session) {
+    return;
+  }
+
+  try {
+    await env.pickpic_photos
+      .resumeMultipartUpload(session.storageKey, session.r2UploadId)
+      .abort();
+  } catch (error) {
+    console.error("Unable to abort an active RAW multipart upload:", error);
+  }
+}
+
+/* Same as abortActiveRawUploadSession, but for every photo under an event. */
+async function abortActiveRawUploadSessionsForEvent(
+  env: TenantEnv,
+  scope: AccountScope,
+  eventId: string,
+): Promise<void> {
+  const sessions = await scope
+    .prepare(
+      `
+      SELECT
+        s.storage_key AS storageKey,
+        s.r2_upload_id AS r2UploadId
+      FROM raw_upload_sessions s
+      INNER JOIN photos p ON p.id = s.photo_id
+      WHERE
+        p.event_id = ?
+        AND s.account_id = :accountId
+    `,
+      eventId,
+    )
+    .all<{ storageKey: string; r2UploadId: string }>();
+
+  await Promise.all(
+    sessions.results.map(async (session) => {
+      try {
+        await env.pickpic_photos
+          .resumeMultipartUpload(session.storageKey, session.r2UploadId)
+          .abort();
+      } catch (error) {
+        console.error("Unable to abort an active RAW multipart upload:", error);
+      }
+    }),
+  );
 }
 
 function getFormInteger(formData: FormData, key: string): number | null {
@@ -7258,6 +7893,49 @@ async function handleAdminRequest(
     }
 
     return uploadRawPhoto(request, env, ctx, scope, photoId);
+  }
+
+  const photoRawStartMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/raw\/start$/,
+  );
+
+  if (photoRawStartMatch) {
+    if (request.method !== "POST") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = safeDecodePathSegment(photoRawStartMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return startRawUploadSession(request, env, scope, photoId);
+  }
+
+  const photoRawPartMatch = url.pathname.match(
+    /^\/api\/admin\/photos\/([^/]+)\/raw\/parts\/([^/]+)$/,
+  );
+
+  if (photoRawPartMatch) {
+    if (request.method !== "PUT") {
+      return jsonResponse({ error: "Method not allowed." }, 405);
+    }
+
+    const photoId = safeDecodePathSegment(photoRawPartMatch[1]);
+
+    if (photoId === null) {
+      return jsonResponse({ error: "Not found." }, 404);
+    }
+
+    return uploadRawPhotoPart(
+      request,
+      env,
+      ctx,
+      scope,
+      photoId,
+      photoRawPartMatch[2],
+    );
   }
 
   const adminPhotoImageMatch = url.pathname.match(

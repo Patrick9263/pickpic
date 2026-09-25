@@ -57,6 +57,8 @@ export async function clearTestData(): Promise<void> {
     env.DB.prepare("DELETE FROM photo_variants"),
     env.DB.prepare("DELETE FROM gallery_visitors"),
     env.DB.prepare("DELETE FROM event_notifications"),
+    env.DB.prepare("DELETE FROM raw_upload_parts"),
+    env.DB.prepare("DELETE FROM raw_upload_sessions"),
     env.DB.prepare("DELETE FROM photos"),
     env.DB.prepare("DELETE FROM events"),
 
