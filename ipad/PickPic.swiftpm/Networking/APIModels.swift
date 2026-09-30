@@ -156,12 +156,24 @@ struct ServerRawPhotoSummary:
     let uploadedAt: String
 }
 
-struct RawPhotoUploadResponse:
+struct RawUploadStartRequest: Encodable {
+    let filename: String
+    let sha256: String
+    let byteSize: Int64
+}
+
+/*
+ * POST .../raw/start (#367). The part size is the server's to choose;
+ * partCount is echoed so a disagreement with the client's own
+ * RawUploadPartPlan is caught before any bytes move.
+ */
+struct RawUploadStartResponse:
     Decodable,
     Sendable
 {
-    let photoId: String
-    let rawPhoto: ServerRawPhotoSummary?
+    let partSize: Int64
+    let partCount: Int
+    let landedParts: [Int]
 }
 
 struct ServerPhotoRecord:
@@ -512,17 +524,6 @@ enum APIClientError: LocalizedError {
     case invalidStorageUsageResponse
     case invalidRawPhotoUploadResponse
 
-    /*
-     * A 413 the worker did not send. Cloudflare caps a Worker's incoming
-     * request body by zone plan -- 100 MB on Free and Pro -- and rejects
-     * anything larger at the edge with its own HTML error before the app's
-     * own limit (now pinned equal to it, #215) is ever the deciding factor;
-     * this stays as a safety net for the difference between a file's byte
-     * size and the slightly larger multipart body it travels in. Distinguished
-     * from .server because the message has to point at the right ceiling.
-     */
-    case rawUploadRejectedByEdge(String)
-
     var errorDescription: String? {
         switch self {
         case .notConfigured:
@@ -607,13 +608,6 @@ enum APIClientError: LocalizedError {
         case .invalidRawPhotoUploadResponse:
             return """
             PickPic returned RAW upload data that the app could not read.
-            """
-
-        case let .rawUploadRejectedByEdge(filename):
-            return """
-            \(filename) was rejected before it reached PickPic — the \
-            server's network plan caps uploads at 100 MB. Deliver this \
-            RAW another way.
             """
         }
     }

@@ -38,6 +38,13 @@ final class RawDeliveryProgress: ObservableObject {
 
     @Published private(set) var phase: Phase?
 
+    /*
+     * The part-level detail behind phase while currentPhotoID's parts are
+     * moving. Kept beside rather than inside Phase so the view's shape --
+     * sent over total -- is unchanged by the switch to multipart (#368).
+     */
+    private var tally: RawUploadProgressTally?
+
     private init() {}
 
     fileprivate func begin(pendingPhotoIDs: [String]) {
@@ -49,13 +56,49 @@ final class RawDeliveryProgress: ObservableObject {
         phase = .staging
     }
 
-    fileprivate func updateProgress(
-        sentBytes: Int64,
-        totalBytes: Int64
+    fileprivate func beginUpload(
+        photoID: String,
+        plan: RawUploadPartPlan,
+        landedParts: some Sequence<Int>
     ) {
+        currentPhotoID = photoID
+        tally = RawUploadProgressTally(
+            plan: plan,
+            landedParts: landedParts
+        )
+        publishTally()
+    }
+
+    /*
+     * Every part callback names its photo, and one for a photo that is no
+     * longer current is dropped: a cancelled or finished photo's last
+     * delegate callbacks can still be in flight to the main actor after the
+     * next photo has begun.
+     */
+    private func updateTally(
+        photoID: String,
+        _ update: (inout RawUploadProgressTally) -> Void
+    ) {
+        guard
+            photoID == currentPhotoID,
+            var tally
+        else {
+            return
+        }
+
+        update(&tally)
+        self.tally = tally
+        publishTally()
+    }
+
+    private func publishTally() {
+        guard let tally else {
+            return
+        }
+
         phase = .uploading(
-            sentBytes: sentBytes,
-            totalBytes: totalBytes
+            sentBytes: tally.sentBytes,
+            totalBytes: tally.totalBytes
         )
     }
 
@@ -67,6 +110,7 @@ final class RawDeliveryProgress: ObservableObject {
         if currentPhotoID == photoID {
             currentPhotoID = nil
             phase = nil
+            tally = nil
         }
     }
 
@@ -75,40 +119,84 @@ final class RawDeliveryProgress: ObservableObject {
      * RawUploadSession.reattachActiveUpload found it still running under a
      * relaunched background session. Without this the row for that photo
      * would show "Waiting" while 100 MB moved quietly in the background.
+     *
+     * Every part in the plan without a running task is counted as landed.
+     * That is what it almost always means -- the parts were all queued
+     * together -- and a part that in fact failed only overstates the bar
+     * until the next sweep asks /raw/start and re-sends it.
      */
     fileprivate func reattach(
-        photoID: String,
+        tag: RawPartTaskTag,
+        activeParts: Set<Int>,
         pendingPhotoIDs: [String]
     ) {
         self.pendingPhotoIDs = pendingPhotoIDs
-        currentPhotoID = photoID
-        phase = .uploading(sentBytes: 0, totalBytes: 0)
+
+        let plan = tag.plan
+
+        beginUpload(
+            photoID: tag.photoID,
+            plan: plan,
+            landedParts: (plan.partNumbers.map(Array.init) ?? [])
+                .filter { partNumber in
+                    !activeParts.contains(partNumber)
+                }
+        )
     }
 
     fileprivate func reset() {
         pendingPhotoIDs = []
         currentPhotoID = nil
         phase = nil
+        tally = nil
     }
 
     /*
-     * The entry point every onProgress closure below actually captures.
-     * RawUploadSession's didSendBodyData fires from its own delegate
-     * queue, not the main actor, so a closure that calls updateProgress
-     * directly would be isolation-unsafe to hand to it. Being nonisolated
-     * lets a plain @Sendable closure call this synchronously from any
-     * thread; the actual mutation still only ever happens on the main
-     * actor, inside the Task.
+     * The entry points every part callback below actually uses.
+     * RawUploadSession's didSendBodyData fires from its own delegate queue,
+     * and the part uploads run in task-group children off the main actor,
+     * so a closure that touched the tally directly would be
+     * isolation-unsafe. Being nonisolated lets a plain @Sendable closure call
+     * these synchronously from any thread; the actual mutation still only
+     * ever happens on the main actor, inside the Task.
      */
-    nonisolated static func scheduleProgressUpdate(
-        sentBytes: Int64,
-        totalBytes: Int64
+    nonisolated static func schedulePartSent(
+        photoID: String,
+        partNumber: Int,
+        sentBytes: Int64
     ) {
         Task { @MainActor in
-            RawDeliveryProgress.shared.updateProgress(
-                sentBytes: sentBytes,
-                totalBytes: totalBytes
-            )
+            RawDeliveryProgress.shared.updateTally(
+                photoID: photoID
+            ) { tally in
+                tally.recordSent(sentBytes, forPart: partNumber)
+            }
+        }
+    }
+
+    nonisolated static func schedulePartLanded(
+        photoID: String,
+        partNumber: Int
+    ) {
+        Task { @MainActor in
+            RawDeliveryProgress.shared.updateTally(
+                photoID: photoID
+            ) { tally in
+                tally.markLanded(partNumber)
+            }
+        }
+    }
+
+    nonisolated static func schedulePartFailed(
+        photoID: String,
+        partNumber: Int
+    ) {
+        Task { @MainActor in
+            RawDeliveryProgress.shared.updateTally(
+                photoID: photoID
+            ) { tally in
+                tally.markFailed(partNumber)
+            }
         }
     }
 }
@@ -117,12 +205,11 @@ extension RawDeliveryProgress.Phase {
     /*
      * A 0...1 fraction for a determinate ProgressView, or nil when there is
      * nothing meaningful to show a bar for: still staging (no bytes sent
-     * yet), or totalBytes not yet known. That second case covers both
-     * URLSession reporting -1 for totalBytesExpectedToSend before it has
-     * resolved the request body length, and reattach() seeding a fresh
-     * reattachment with 0/0 before the first didSendBodyData callback
-     * lands. Clamped because a task can report totalBytesSent fractionally
-     * over totalBytesExpectedToSend right at completion.
+     * yet), or a zero total, which only an empty file -- one the server
+     * refuses anyway -- can produce now that the total is the file's own
+     * size rather than URLSession's per-request estimate. Clamped as a last
+     * line of defence; RawUploadProgressTally already caps each part at its
+     * own size.
      */
     var fractionCompleted: Double? {
         switch self {
@@ -155,8 +242,10 @@ extension RawDeliveryProgress.Phase {
  * construction. A failed or interrupted upload leaves
  * raw_requests.fulfilled_at null, so the next activation simply finds the
  * request still pending and tries again; a delivered one comes back with
- * rawPhoto set and is skipped. There is deliberately no local retry queue —
- * the server is the record of what still needs doing.
+ * rawPhoto set and is skipped. A failed part is retried in-process with
+ * backoff (#368), but beyond that there is deliberately no local retry
+ * queue — the server is the record of what still needs doing, down to which
+ * parts of an interrupted upload are still missing.
  */
 @MainActor
 enum RawRequestSyncService {
@@ -212,10 +301,11 @@ enum RawRequestSyncService {
          * yet, so its request still reads as pending — staging and sending it
          * again would push the same RAW twice.
          *
-         * That transfer is still worth showing progress for, though (#268) —
-         * reattachActiveUpload finds it, tags a handler onto it, and hands
-         * back the photo id its task was tagged with so the view has
-         * something other than "Waiting" for it.
+         * Those transfers -- one per part still queued (#368) -- are worth
+         * showing progress for, though (#268). reattachActiveUploads finds
+         * them, tags a handler onto each, and hands back the tag and the
+         * parts still running so the view has something other than
+         * "Waiting" for the photo.
          */
         guard
             await !RawUploadSession.shared
@@ -224,23 +314,24 @@ enum RawRequestSyncService {
             if
                 RawDeliveryProgress.shared.currentPhotoID
                     == nil,
-                let reattachedPhotoID =
+                let reattached =
                     await RawUploadSession.shared
-                    .reattachActiveUpload(
-                        onProgress: { sentBytes, totalBytes in
-                            RawDeliveryProgress
-                                .scheduleProgressUpdate(
-                                    sentBytes: sentBytes,
-                                    totalBytes: totalBytes
-                                )
+                    .reattachActiveUploads(
+                        onProgress: { tag, sentBytes in
+                            RawDeliveryProgress.schedulePartSent(
+                                photoID: tag.photoID,
+                                partNumber: tag.partNumber,
+                                sentBytes: sentBytes
+                            )
                         }
                     ),
                 photosNeedingRaw.contains(where: { photo in
-                    photo.id == reattachedPhotoID
+                    photo.id == reattached.tag.photoID
                 })
             {
                 RawDeliveryProgress.shared.reattach(
-                    photoID: reattachedPhotoID,
+                    tag: reattached.tag,
+                    activeParts: reattached.activeParts,
                     pendingPhotoIDs:
                         photosNeedingRaw.map(\.id)
                 )
@@ -270,17 +361,11 @@ enum RawRequestSyncService {
             let staged: StagedRawUpload
 
             do {
-                staged =
-                try await Task.detached(
-                    priority: .userInitiated
-                ) {
-                    try RawUploadFileService.stage(
-                        photoID: photo.id,
-                        filename: photo.originalFilename,
-                        reference: reference
-                    )
-                }
-                .value
+                staged = try await stage(
+                    photo: photo,
+                    reference: reference,
+                    partSize: RawUploadPartPlan.defaultPartSize
+                )
             } catch RawUploadFileError
                 .fileMissing(let filename)
             {
@@ -306,20 +391,14 @@ enum RawRequestSyncService {
             }
 
             do {
-                _ = try await client.uploadRawPhoto(
+                uploadedByteCount += try await deliver(
                     staged,
-                    to: photo.id,
-                    onProgress: { sentBytes, totalBytes in
-                        RawDeliveryProgress
-                            .scheduleProgressUpdate(
-                                sentBytes: sentBytes,
-                                totalBytes: totalBytes
-                            )
-                    }
+                    photo: photo,
+                    reference: reference,
+                    using: client
                 )
 
                 uploadedPhotoCount += 1
-                uploadedByteCount += staged.byteSize
             } catch {
                 failures.append(
                     photo.originalFilename
@@ -348,5 +427,269 @@ enum RawRequestSyncService {
             missingFilenames: missingFilenames,
             failures: failures
         )
+    }
+
+    private static func stage(
+        photo: ServerPhotoRecord,
+        reference: EventFolderReference,
+        partSize: Int64
+    ) async throws -> StagedRawUpload {
+        let photoID = photo.id
+        let filename = photo.originalFilename
+
+        return try await Task.detached(
+            priority: .userInitiated
+        ) {
+            try RawUploadFileService.stage(
+                photoID: photoID,
+                filename: filename,
+                reference: reference,
+                partSize: partSize
+            )
+        }
+        .value
+    }
+
+    /*
+     * Sends one staged RAW as a multipart upload (#362/#368) and returns its
+     * byte size once every part has landed -- at which point the server has
+     * already completed the upload from inside the last part's request.
+     *
+     * Every part the server reports missing is queued at once, each as its
+     * own background task. That is what lets iPadOS carry the whole file
+     * with the app suspended: nothing here has to run again to send the next
+     * part or to finish. Awaiting them all is only for this process's own
+     * bookkeeping -- the result and the progress bar -- while it happens to
+     * still be alive.
+     */
+    private static func deliver(
+        _ initiallyStaged: StagedRawUpload,
+        photo: ServerPhotoRecord,
+        reference: EventFolderReference,
+        using client: APIClient
+    ) async throws -> Int64 {
+        var staged = initiallyStaged
+        var start = try await client.startRawUpload(staged)
+
+        /*
+         * Staging had to split before the server had said anything, because
+         * start needs the hash that the split computes. If the server has
+         * chosen a different part size, re-split once at its size and ask
+         * again. The hash is of the whole file, so it only changes if the
+         * file itself did in between, and then start simply restarts for the
+         * new bytes.
+         */
+        if start.partSize != staged.partSize, start.partSize > 0 {
+            staged = try await stage(
+                photo: photo,
+                reference: reference,
+                partSize: start.partSize
+            )
+
+            start = try await client.startRawUpload(staged)
+        }
+
+        guard
+            start.partSize == staged.partSize,
+            start.partCount == staged.plan.partCount
+        else {
+            throw RawRequestSyncError.partPlanMismatch(
+                staged.filename
+            )
+        }
+
+        RawDeliveryProgress.shared.beginUpload(
+            photoID: staged.photoID,
+            plan: staged.plan,
+            landedParts: start.landedParts
+        )
+
+        let partsToSend =
+        staged.plan.partsToSend(
+            landedParts: start.landedParts
+        )
+
+        let sendingStaged = staged
+
+        let allLanded =
+        try await withThrowingTaskGroup(
+            of: Bool.self
+        ) { group in
+            for partNumber in partsToSend {
+                group.addTask {
+                    try await uploadPart(
+                        sendingStaged,
+                        partNumber: partNumber,
+                        using: client
+                    )
+                }
+            }
+
+            var allLanded = true
+
+            do {
+                for try await landed in group {
+                    allLanded = allLanded && landed
+                }
+            } catch {
+                /*
+                 * A part failed for a reason no retry can fix. Its siblings
+                 * could only fail the same way or land bytes for an upload
+                 * this pass is abandoning, and URLSession tasks do not
+                 * observe Swift cancellation -- so they are cancelled
+                 * explicitly, before the group waits on them.
+                 */
+                group.cancelAll()
+
+                await RawUploadSession.shared.cancelUploads(
+                    photoID: sendingStaged.photoID
+                )
+
+                throw error
+            }
+
+            return allLanded
+        }
+
+        /*
+         * Some part ran out of retries. Everything that did land is kept
+         * server-side, so the next sync's start reports only the stragglers.
+         */
+        guard allLanded else {
+            throw RawRequestSyncError.partsIncomplete(
+                staged.filename
+            )
+        }
+
+        return staged.byteSize
+    }
+
+    /*
+     * One part, retried on its own with backoff when the failure is one a
+     * retry can fix. Never restarts the file: its siblings are unaffected,
+     * and the server already holds whatever has landed. Returns false when
+     * retries run out, and throws for a failure that retrying cannot change
+     * (a 401, the storage cap, an upload the server no longer has).
+     */
+    nonisolated private static func uploadPart(
+        _ staged: StagedRawUpload,
+        partNumber: Int,
+        using client: APIClient
+    ) async throws -> Bool {
+        let photoID = staged.photoID
+
+        for attempt in 1...RawPartRetryPolicy.maximumAttempts {
+            try Task.checkCancellation()
+
+            do {
+                try await client.uploadRawPart(
+                    staged,
+                    partNumber: partNumber,
+                    onProgress: { sentBytes, _ in
+                        RawDeliveryProgress.schedulePartSent(
+                            photoID: photoID,
+                            partNumber: partNumber,
+                            sentBytes: sentBytes
+                        )
+                    }
+                )
+
+                RawDeliveryProgress.schedulePartLanded(
+                    photoID: photoID,
+                    partNumber: partNumber
+                )
+
+                return true
+            } catch {
+                RawDeliveryProgress.schedulePartFailed(
+                    photoID: photoID,
+                    partNumber: partNumber
+                )
+
+                guard RawPartRetryPolicy.isRetryable(error) else {
+                    throw error
+                }
+
+                guard
+                    let delay = RawPartRetryPolicy.delay(
+                        afterAttempt: attempt
+                    )
+                else {
+                    return false
+                }
+
+                try await Task.sleep(for: delay)
+            }
+        }
+
+        return false
+    }
+}
+
+/*
+ * When a failed RAW part is worth sending again (#368). Pure, so the
+ * classification is tested rather than trusted.
+ */
+enum RawPartRetryPolicy {
+    static let maximumAttempts = 5
+
+    /* 2, 4, 8, 16 seconds; nil once the attempts are spent. */
+    static func delay(afterAttempt attempt: Int) -> Duration? {
+        guard
+            attempt >= 1,
+            attempt < maximumAttempts
+        else {
+            return nil
+        }
+
+        return .seconds(1 << attempt)
+    }
+
+    /*
+     * Transport failures and the server's transient statuses are retried.
+     * Every other status means the request itself is wrong for the server's
+     * current state -- a part of the wrong size, a session /raw/start has
+     * since replaced, the account's storage cap -- and resending the same
+     * bytes can only fail the same way; the next sync's start is what
+     * repairs those. A 401 in particular must not be retried: the credential
+     * has already been cleared (APIClient.sessionAwareError).
+     */
+    static func isRetryable(_ error: Error) -> Bool {
+        if let apiError = error as? APIClientError {
+            guard case let .server(statusCode, _) = apiError else {
+                return false
+            }
+
+            return statusCode == 408
+                || statusCode == 429
+                || (500..<600).contains(statusCode)
+        }
+
+        if let urlError = error as? URLError {
+            return urlError.code != .cancelled
+        }
+
+        return false
+    }
+}
+
+enum RawRequestSyncError: LocalizedError {
+    case partPlanMismatch(String)
+    case partsIncomplete(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .partPlanMismatch(filename):
+            return """
+            The server split \(filename) into different parts than \
+            PickPic did, so its RAW was not sent.
+            """
+
+        case let .partsIncomplete(filename):
+            return """
+            Some parts of \(filename) could not be sent. The rest were \
+            kept and the missing ones will be retried.
+            """
+        }
     }
 }
