@@ -44,6 +44,13 @@ interface GalleryEvent {
   status: GalleryStatus;
   createdAt: string;
   rawRequestsEnabled: boolean;
+  expiresAt: string | null;
+
+  /*
+   * The worker's verdict on expiresAt (#181), not something to recompute from
+   * the phone's clock -- it is the clock the worker enforces with.
+   */
+  expired: boolean;
 }
 
 interface GalleryResponse {
@@ -218,7 +225,14 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
     () => new Set(visiblePhotos.slice(0, 3).map((photo) => photo.id)),
     [visiblePhotos],
   );
-  const interactionsEnabled = gallery?.event.status === "ready";
+  /*
+   * An expired gallery (#181) is read-only in exactly the way a `completed`
+   * one is -- viewing and downloads keep working -- so both close the same
+   * controls, and only the wording tells the viewer which happened.
+   */
+  const galleryExpired = gallery?.event.expired ?? false;
+  const interactionsEnabled =
+    gallery?.event.status === "ready" && !galleryExpired;
   const rawRequestsEnabled = gallery?.event.rawRequestsEnabled ?? false;
   const requestableSelectedRawPhotos = useMemo(
     () =>
@@ -1372,7 +1386,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
           <p className="gallery-instructions">
             {interactionsEnabled
               ? "Heart a photo to request an edit or another revision."
-              : "This gallery is closed. Photos and downloads remain available, but new edit requests and comments are disabled."}
+              : galleryExpired
+                ? "This gallery has expired. Photos and downloads remain available, but new edit requests and comments are disabled."
+                : "This gallery is closed. Photos and downloads remain available, but new edit requests and comments are disabled."}
           </p>
 
           <div className="gallery-toolbar">
@@ -1449,7 +1465,9 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
       </header>
       {!interactionsEnabled && (
         <div className="gallery-closed-banner" role="status">
-          <strong>Gallery closed</strong>
+          <strong>
+            {galleryExpired ? "Gallery expired" : "Gallery closed"}
+          </strong>
 
           <span>You can continue viewing and downloading photos.</span>
         </div>

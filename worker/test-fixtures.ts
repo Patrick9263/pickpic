@@ -26,6 +26,7 @@ interface EventSeed {
   createdAt?: string;
   rawRequestsEnabled?: boolean;
   accountId?: string;
+  expiresAt?: string | null;
 }
 
 interface PhotoSeed {
@@ -117,9 +118,10 @@ export async function insertEvent(seed: EventSeed): Promise<void> {
         created_at,
         updated_at,
         account_id,
-        raw_requests_enabled
+        raw_requests_enabled,
+        expires_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   )
     .bind(
@@ -131,6 +133,7 @@ export async function insertEvent(seed: EventSeed): Promise<void> {
       createdAt,
       seed.accountId ?? BOOTSTRAP_ACCOUNT_ID,
       seed.rawRequestsEnabled ? 1 : 0,
+      seed.expiresAt ?? null,
     )
     .run();
 }

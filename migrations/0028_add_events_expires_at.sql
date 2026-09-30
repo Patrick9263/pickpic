@@ -1,0 +1,22 @@
+-- Migration number: 0028 	 2026-09-30T00:00:00.000Z
+--
+-- #181: the end of an event's live window, for the per-event pass lifecycle
+-- in docs/pricing.md (live -> read-only at expires_at -> purged later).
+--
+-- A nullable timestamp rather than a new events.status value on purpose.
+-- 0001's six-value CHECK is still on the table, and adding 'closed' means
+-- rebuilding it -- the operation 0012 documents as having cascade-deleted
+-- every photo, visitor and notification row when it was tested. ADD COLUMN
+-- is the cheap, non-destructive path 0013 established.
+--
+-- NULL means the event never expires, and every existing row stays NULL.
+-- Nothing in the worker writes this column yet: Checkout / applying a pass
+-- credit (#183) will. Until then the read-side enforcement is inert, so no
+-- live gallery can start closing because this migration ran.
+--
+-- ISO-8601 TEXT like every other timestamp here, and no CHECK on its shape,
+-- following the application-layer validation precedent the sha256 columns
+-- set. No index yet: the only query that filters on it is the sweep #184
+-- adds, and that PR is the right place to shape one for its WHERE clause.
+
+ALTER TABLE events ADD COLUMN expires_at TEXT;

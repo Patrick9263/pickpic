@@ -12,6 +12,15 @@ export interface EventRecord {
   rawRequestsEnabled: boolean;
 
   /*
+   * The end of the live window (#181). NULL -- every event until pass
+   * credits exist -- means it never expires. `expired` is the worker's
+   * verdict on it (worker/expiry.ts), so the dashboard labels an event with
+   * the same clock that enforces the deadline rather than the browser's.
+   */
+  expiresAt: string | null;
+  expired: boolean;
+
+  /*
    * Whether any photo in this event has ever had a RAW request (#266) --
    * distinct from rawRequestsEnabled, which is just the current opt-in
    * toggle. Drives hiding the "Release collected RAW files" control for the

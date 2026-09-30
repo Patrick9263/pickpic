@@ -381,6 +381,25 @@ function EventCard(props: EventCardProps) {
           {getEventStatusDescription(eventRecord.status)}
         </p>
 
+        {eventRecord.expiresAt !== null && (
+          <p className="event-status-description">
+            {eventRecord.expired ? (
+              <>
+                <strong>Expired {formatDate(eventRecord.expiresAt)}</strong>
+                {" — "}
+                Viewers can still see and download photos, but the gallery takes
+                no new edit requests, comments, or photos.
+              </>
+            ) : (
+              <>
+                <strong>Live until {formatDate(eventRecord.expiresAt)}</strong>
+                {" — "}
+                After that the gallery becomes read-only.
+              </>
+            )}
+          </p>
+        )}
+
         {/*
           One grid child so both RAW controls sit closer to each other than
           to the unrelated sections above and below -- they're a matched

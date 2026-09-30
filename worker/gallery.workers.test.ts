@@ -214,6 +214,36 @@ describe("GET /api/galleries/:shareToken", () => {
     expect(body.photos[0].viewerRequestedRaw).toBe(false);
   });
 
+  it.each([
+    { label: "no expires_at", expiresAt: null, expired: false },
+    {
+      label: "a future expires_at",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+      expired: false,
+    },
+    {
+      label: "a past expires_at",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+      expired: true,
+    },
+  ])(
+    "still serves a gallery with $label, reporting expired: $expired (#181)",
+    async ({ expiresAt, expired }) => {
+      await insertEvent({ id: EVENT_ID, shareToken: SHARE_TOKEN, expiresAt });
+      await insertPhoto({ id: "photo-plain", eventId: EVENT_ID });
+
+      const response = await fetchGallery(SHARE_TOKEN);
+      const body = (await response.json()) as {
+        event: { expiresAt: string | null; expired: boolean };
+        photos: unknown[];
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.event).toMatchObject({ expiresAt, expired });
+      expect(body.photos).toHaveLength(1);
+    },
+  );
+
   it("reports the viewer's own RAW requests only for their visitor token, when enabled", async () => {
     await insertEvent({
       id: EVENT_ID,

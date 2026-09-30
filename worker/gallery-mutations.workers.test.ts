@@ -30,13 +30,21 @@ const GUEST_EMAIL = "guest@example.com";
 
 const CLOSED_GALLERY_ERROR =
   "This gallery is closed and no longer accepts edit requests or comments.";
+const EXPIRED_GALLERY_ERROR =
+  "This gallery has expired and no longer accepts edit requests or comments.";
+const PAST = "2026-01-01T00:00:00.000Z";
+const FUTURE = "2999-01-01T00:00:00.000Z";
 
-async function seedGallery(status: string): Promise<void> {
+async function seedGallery(
+  status: string,
+  expiresAt: string | null = null,
+): Promise<void> {
   await insertEvent({
     id: EVENT_ID,
     shareToken: SHARE_TOKEN,
     status,
     rawRequestsEnabled: true,
+    expiresAt,
   });
   await insertPhoto({ id: PHOTO_ID, eventId: EVENT_ID });
   await insertPhoto({ id: OTHER_PHOTO_ID, eventId: EVENT_ID });
@@ -112,6 +120,54 @@ describe("the requireOpenGallery guard on gallery mutation routes", () => {
       expect([200, 201]).toContain(result.status);
     },
   );
+
+  it.each([
+    {
+      label: "PUT .../heart",
+      method: "PUT",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/heart`,
+      json: { displayName: "Guest" },
+    },
+    {
+      label: "PUT .../raw-request",
+      method: "PUT",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/raw-request`,
+      json: { displayName: "Guest", email: "guest@example.com" },
+    },
+    {
+      label: "POST .../comments",
+      method: "POST",
+      path: `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/comments`,
+      json: { displayName: "Guest", body: "Lovely shot" },
+    },
+  ])(
+    "blocks $label with 409 on a ready gallery past expires_at (#181)",
+    async ({ method, path, json }) => {
+      await seedGallery("ready", PAST);
+
+      const result = await galleryRequest(method, path, {
+        json,
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      });
+
+      expectError(result, 409, EXPIRED_GALLERY_ERROR);
+    },
+  );
+
+  it("allows a heart on a ready gallery whose expires_at is still ahead", async () => {
+    await seedGallery("ready", FUTURE);
+
+    const result = await galleryRequest(
+      "PUT",
+      `/api/galleries/${SHARE_TOKEN}/photos/${PHOTO_ID}/heart`,
+      {
+        json: { displayName: "Guest" },
+        headers: { "X-PickPic-Visitor": VISITOR_TOKEN },
+      },
+    );
+
+    expect([200, 201]).toContain(result.status);
+  });
 
   it("allows DELETE .../raw-request once the gallery is completed, unlike PUT (#326)", async () => {
     await seedGallery("completed");
