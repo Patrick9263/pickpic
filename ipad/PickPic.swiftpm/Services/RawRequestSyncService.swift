@@ -45,6 +45,22 @@ final class RawDeliveryProgress: ObservableObject {
      */
     private var tally: RawUploadProgressTally?
 
+    struct Delivery: Equatable, Sendable {
+        let eventID: String
+        let photoID: String
+        let sequence: Int
+    }
+
+    /*
+     * The most recent RAW the server accepted, as far as this process
+     * knows. The sweep that delivers it runs far from any screen, and
+     * nothing else tells them a request was fulfilled -- so without this
+     * the Liked screen's row fell back to "Waiting" and the sidebar's
+     * count stayed put until a manual refresh. The sequence keeps a
+     * re-requested photo's second delivery distinct from its first.
+     */
+    @Published private(set) var lastDelivery: Delivery?
+
     private init() {}
 
     fileprivate func begin(pendingPhotoIDs: [String]) {
@@ -99,6 +115,17 @@ final class RawDeliveryProgress: ObservableObject {
         phase = .uploading(
             sentBytes: tally.sentBytes,
             totalBytes: tally.totalBytes
+        )
+    }
+
+    fileprivate func recordDelivered(
+        eventID: String,
+        photoID: String
+    ) {
+        lastDelivery = Delivery(
+            eventID: eventID,
+            photoID: photoID,
+            sequence: (lastDelivery?.sequence ?? 0) + 1
         )
     }
 
@@ -290,6 +317,31 @@ enum RawRequestSyncService {
                 == .orderedAscending
             }
 
+        /*
+         * A transfer reattached after a relaunch finishes without this
+         * process awaiting it, so its delivery only becomes visible here:
+         * the photo it was carrying belongs to this event and no longer
+         * needs a RAW. Matching against this event's photos, not just the
+         * pending ones, keeps another event's sweep from claiming it.
+         */
+        if
+            let currentPhotoID =
+                RawDeliveryProgress.shared.currentPhotoID,
+            currentPhotos.contains(where: { photo in
+                photo.id == currentPhotoID
+                    && !photo.needsRawUpload
+            })
+        {
+            RawDeliveryProgress.shared.finish(
+                photoID: currentPhotoID
+            )
+
+            RawDeliveryProgress.shared.recordDelivered(
+                eventID: eventID,
+                photoID: currentPhotoID
+            )
+        }
+
         guard !photosNeedingRaw.isEmpty else {
             RawDeliveryProgress.shared.reset()
             return nil
@@ -399,6 +451,11 @@ enum RawRequestSyncService {
                 )
 
                 uploadedPhotoCount += 1
+
+                RawDeliveryProgress.shared.recordDelivered(
+                    eventID: eventID,
+                    photoID: photo.id
+                )
             } catch {
                 failures.append(
                     photo.originalFilename

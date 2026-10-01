@@ -12,6 +12,9 @@ struct ContentView: View {
 
     @StateObject private var viewModel =
     EventListViewModel()
+
+    @ObservedObject private var rawDeliveryProgress =
+    RawDeliveryProgress.shared
     
     @State private var showingSettings = false
 
@@ -234,6 +237,24 @@ struct ContentView: View {
             await viewModel.load(
                 using: configuration
             )
+        }
+        /*
+         * A delivered RAW lowers its event's RAW Requests count, and the
+         * sweep that delivers it does not otherwise touch the sidebar.
+         */
+        .onChange(
+            of: rawDeliveryProgress.lastDelivery
+        ) { _, delivery in
+            guard let delivery else {
+                return
+            }
+
+            Task {
+                await viewModel.refreshStatistics(
+                    for: delivery.eventID,
+                    using: configuration
+                )
+            }
         }
         .overlay(alignment: .top) {
             if let message = feedback.message {
