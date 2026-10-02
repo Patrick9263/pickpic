@@ -222,25 +222,48 @@ struct SessionCredentialTests {
 
         let message = link.accountSwitchMessage(
             currentAccount: "Studio A",
+            currentEmail: "a@example.com",
             unfinishedUploads: 3
         )
 
-        #expect(message.contains("signed in to Studio A"))
+        #expect(message.contains("signed in to Studio A (a@example.com)."))
         #expect(message.contains("creates a new account"))
-        #expect(message.contains("3 unfinished uploads belong to Studio A"))
+        #expect(message.contains("3 unfinished uploads belong to Studio A (a@example.com)"))
 
         #expect(
             link.accountSwitchMessage(
                 currentAccount: "Studio A",
+                currentEmail: nil,
                 unfinishedUploads: 1
-            ).contains("1 unfinished upload belongs")
+            ).contains("1 unfinished upload belongs to Studio A and")
         )
 
-        #expect(
-            !AuthLink(token: "abc", kind: .signIn).accountSwitchMessage(
-                currentAccount: nil,
+        let signIn = AuthLink(token: "abc", kind: .signIn).accountSwitchMessage(
+            currentAccount: nil,
+            currentEmail: nil,
+            unfinishedUploads: 0
+        )
+
+        #expect(!signIn.contains("upload"))
+        #expect(signIn.contains("signed in to a PickPic account."))
+    }
+
+    /*
+     * A sign-in link may well be for the account already signed in -- the
+     * iPad can't tell before redeeming it -- so the alert must not assert
+     * that it is for a different one.
+     */
+    @Test
+    func signInSwitchWordingStaysConditional() {
+        let message = AuthLink(token: "abc", kind: .signIn)
+            .accountSwitchMessage(
+                currentAccount: "PickPic",
+                currentEmail: "p@example.com",
                 unfinishedUploads: 0
-            ).contains("upload")
+            )
+
+        #expect(
+            message == "This iPad is signed in to PickPic (p@example.com). If this link is for a different account, this iPad will switch to it."
         )
     }
 

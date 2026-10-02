@@ -212,15 +212,38 @@ extension AuthLink {
      * already signed in to. Nothing is redeemed until it is answered, so
      * declining leaves the link unused and still valid.
      *
+     * A sign-in token says nothing about whose it is until it is redeemed,
+     * so the wording stays conditional: tapping a fresh link for the account
+     * already signed in is the common case, and it switches nothing.
+     *
+     * The email goes beside the account name because a studio name alone
+     * can read as something else entirely -- the bootstrap account is called
+     * "PickPic", the app's own name.
+     *
      * Queued uploads carry the old account's event ids, which mean nothing
      * to any other account, so they cannot continue until the iPad is signed
      * back in to the account they came from.
      */
     func accountSwitchMessage(
         currentAccount: String?,
+        currentEmail: String?,
         unfinishedUploads: Int
     ) -> String {
-        let current = currentAccount ?? "another PickPic account"
+        let current: String
+
+        switch (currentAccount, currentEmail) {
+        case let (name?, email?):
+            current = "\(name) (\(email))"
+
+        case let (name?, nil):
+            current = name
+
+        case let (nil, email?):
+            current = email
+
+        case (nil, nil):
+            current = "a PickPic account"
+        }
 
         let action: String
 
@@ -229,7 +252,7 @@ extension AuthLink {
             action = "This link creates a new account and switches this iPad to it."
 
         case .signIn, .unknown:
-            action = "This link signs this iPad in to a different account."
+            action = "If this link is for a different account, this iPad will switch to it."
         }
 
         var message = "This iPad is signed in to \(current). \(action)"

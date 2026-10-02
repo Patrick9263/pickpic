@@ -12,15 +12,24 @@ struct AppFeedbackMessage:
     let detail: String
     let systemImage: String
 
+    /*
+     * Green unless a call site says otherwise -- most toasts confirm
+     * something worked, and a warning in that same green reads as a
+     * success at a glance.
+     */
+    let tint: Color
+
     init(
         title: String,
         detail: String,
-        systemImage: String
+        systemImage: String,
+        tint: Color = .green
     ) {
         id = UUID()
         self.title = title
         self.detail = detail
         self.systemImage = systemImage
+        self.tint = tint
     }
 }
 
@@ -37,14 +46,16 @@ final class AppFeedbackStore:
     func show(
         title: String,
         detail: String,
-        systemImage: String
+        systemImage: String,
+        tint: Color = .green
     ) {
         dismissalTask?.cancel()
 
         let newMessage = AppFeedbackMessage(
             title: title,
             detail: detail,
-            systemImage: systemImage
+            systemImage: systemImage,
+            tint: tint
         )
 
         message = newMessage
@@ -265,7 +276,9 @@ struct PickPicApp: App {
                     Text(
                         link.accountSwitchMessage(
                             currentAccount:
-                                configuration.accountDescription,
+                                configuration.credential?.accountName,
+                            currentEmail:
+                                configuration.credential?.email,
                             unfinishedUploads:
                                 uploadQueue.jobs.filter { job in
                                     job.stage != .completed
@@ -427,7 +440,8 @@ struct PickPicApp: App {
                 detail: AuthClientError
                     .invalidSignInLink
                     .localizedDescription,
-                systemImage: "exclamationmark.triangle.fill"
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .orange
             )
 
             return
@@ -473,7 +487,8 @@ struct PickPicApp: App {
                     ? "Sign-up link didn't work"
                     : "Sign-in link didn't work",
                 detail: error.localizedDescription,
-                systemImage: "exclamationmark.triangle.fill"
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .orange
             )
         }
     }

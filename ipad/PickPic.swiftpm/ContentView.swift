@@ -291,7 +291,7 @@ private struct AppFeedbackBanner: View {
                     message.systemImage
             )
             .font(.title3)
-            .foregroundStyle(.green)
+            .foregroundStyle(message.tint)
 
             VStack(
                 alignment: .leading,
