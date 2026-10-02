@@ -12,15 +12,24 @@ struct AppFeedbackMessage:
     let detail: String
     let systemImage: String
 
+    /*
+     * Green unless a call site says otherwise -- most toasts confirm
+     * something worked, and a warning in that same green reads as a
+     * success at a glance.
+     */
+    let tint: Color
+
     init(
         title: String,
         detail: String,
-        systemImage: String
+        systemImage: String,
+        tint: Color = .green
     ) {
         id = UUID()
         self.title = title
         self.detail = detail
         self.systemImage = systemImage
+        self.tint = tint
     }
 }
 
@@ -37,14 +46,16 @@ final class AppFeedbackStore:
     func show(
         title: String,
         detail: String,
-        systemImage: String
+        systemImage: String,
+        tint: Color = .green
     ) {
         dismissalTask?.cancel()
 
         let newMessage = AppFeedbackMessage(
             title: title,
             detail: detail,
-            systemImage: systemImage
+            systemImage: systemImage,
+            tint: tint
         )
 
         message = newMessage
@@ -208,6 +219,12 @@ struct PickPicApp: App {
     @State private var previousJobStages:
     [UUID: UploadStage] = [:]
 
+    /*
+     * A tapped link waiting on "switch accounts?". Held unredeemed, so
+     * cancelling leaves it valid for wherever it was meant to be used.
+     */
+    @State private var pendingAccountSwitch: AuthLink?
+
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -229,9 +246,45 @@ struct PickPicApp: App {
                  * to keep in sync with it.
                  */
                 .onOpenURL { url in
-                    Task {
-                        await handleIncomingSignInLink(url)
+                    handleIncomingAuthLink(url)
+                }
+                .alert(
+                    "Switch accounts?",
+                    isPresented: Binding(
+                        get: { pendingAccountSwitch != nil },
+                        set: { isPresented in
+                            if !isPresented {
+                                pendingAccountSwitch = nil
+                            }
+                        }
+                    ),
+                    presenting: pendingAccountSwitch
+                ) { link in
+                    Button(
+                        link.kind == .signUp
+                            ? "Create and Switch"
+                            : "Switch Account",
+                        role: .destructive
+                    ) {
+                        Task {
+                            await redeem(link)
+                        }
                     }
+
+                    Button("Cancel", role: .cancel) {}
+                } message: { link in
+                    Text(
+                        link.accountSwitchMessage(
+                            currentAccount:
+                                configuration.credential?.accountName,
+                            currentEmail:
+                                configuration.credential?.email,
+                            unfinishedUploads:
+                                uploadQueue.jobs.filter { job in
+                                    job.stage != .completed
+                                }.count
+                        )
+                    )
                 }
                 .task {
                     await configuration.refreshSession()
@@ -364,37 +417,78 @@ struct PickPicApp: App {
     }
 
     /*
-     * The token extraction and redemption here is exactly
-     * AuthClient.signIn(withPastedLink:) -- a universal link and a pasted
-     * link both end up as the same "https://app.pickpic.photos/sign-in?
-     * token=..." string, so there is no separate parsing path to keep in
-     * sync with ConnectionSettingsView's paste flow. Errors (an already-used
-     * token, an expired one, connectivity) surface as a feedback toast
-     * rather than a sheet, because unlike the paste flow there is no
-     * ConnectionSettingsView on screen to show them in -- the tap can land
-     * from anywhere in the app, or before it has launched at all.
+     * Parses with exactly the AuthLink(pastedText:) ConnectionSettingsView's
+     * paste field uses -- a universal link's absoluteString is just another
+     * pasted string -- so the two paths route /sign-in and /sign-up the same
+     * way. Errors (an already-used token, an expired one, connectivity)
+     * surface as a feedback toast rather than in a sheet, because unlike the
+     * paste flow there is no ConnectionSettingsView on screen to show them in
+     * -- the tap can land from anywhere in the app, or before it has launched
+     * at all.
+     *
+     * An iPad already signed in is asked first, before anything is redeemed:
+     * a link silently replacing the account would strand that account's
+     * queued uploads, and either kind of token is single-use, so redeeming
+     * first and asking afterwards would spend a link the operator may have
+     * meant for another device.
      */
     @MainActor
-    private func handleIncomingSignInLink(_ url: URL) async {
-        do {
-            let credential = try await configuration
-                .makeAuthClient()
-                .signIn(withPastedLink: url.absoluteString)
+    private func handleIncomingAuthLink(_ url: URL) {
+        guard let link = AuthLink(pastedText: url.absoluteString) else {
+            feedback.show(
+                title: "Link didn't work",
+                detail: AuthClientError
+                    .invalidSignInLink
+                    .localizedDescription,
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .orange
+            )
 
-            try configuration.save(credential)
+            return
+        }
+
+        if configuration.isConfigured {
+            pendingAccountSwitch = link
+        } else {
+            Task {
+                await redeem(link)
+            }
+        }
+    }
+
+    @MainActor
+    private func redeem(_ link: AuthLink) async {
+        let authClient = configuration.makeAuthClient()
+        let previousCredential = configuration.credential
+
+        do {
+            let redemption = try await authClient.redeem(link)
+
+            try configuration.save(redemption.credential)
 
             feedback.show(
-                title: "Signed in",
-                detail:
-                    credential.accountName.map { "Signed in to \($0)." }
-                    ?? "This iPad is now signed in to PickPic.",
+                title: redemption.feedbackTitle,
+                detail: redemption.feedbackDetail,
                 systemImage: "checkmark.circle.fill"
             )
+
+            /*
+             * Revoke the session this replaced, as signOut() would have.
+             * Best effort: the local switch has already happened, and a
+             * session nothing holds any more is only a dead row server-side.
+             */
+            if let previousCredential,
+               previousCredential.token != redemption.credential.token {
+                try? await authClient.signOut(previousCredential)
+            }
         } catch {
             feedback.show(
-                title: "Sign-in link didn't work",
+                title: link.kind == .signUp
+                    ? "Sign-up link didn't work"
+                    : "Sign-in link didn't work",
                 detail: error.localizedDescription,
-                systemImage: "exclamationmark.triangle.fill"
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .orange
             )
         }
     }

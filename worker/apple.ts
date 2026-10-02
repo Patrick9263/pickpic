@@ -154,8 +154,11 @@ export interface AppSiteAssociation {
  * Apple Developer team, so it should work even on a deployment that hasn't
  * configured SIWA's client id, redirect URI or signing key.
  *
- * Scoped to /sign-in* so the universal link claims only the tap-to-sign-in
- * path, not every gallery URL on app.pickpic.photos.
+ * Scoped to /sign-in* and /sign-up* so the universal link claims only the
+ * two emailed-link paths, not every gallery URL on app.pickpic.photos. The
+ * cost of /sign-up* is accepted: on any device with PickPic installed, a
+ * signup confirmation opens the app rather than the web page, so an account
+ * created that way is signed in on the iPad and not in Safari.
  */
 export function buildAppleAppSiteAssociation(
   environment: Pick<AppleEnvironment, "APPLE_TEAM_ID">,
@@ -171,7 +174,7 @@ export function buildAppleAppSiteAssociation(
       details: [
         {
           appID: `${teamId}.${APPLE_BUNDLE_ID}`,
-          paths: ["/sign-in*"],
+          paths: ["/sign-in*", "/sign-up*"],
         },
       ],
     },

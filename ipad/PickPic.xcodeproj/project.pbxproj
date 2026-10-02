@@ -16,6 +16,7 @@
 		CDFF00280000000000000000 /* UploadQueueRecovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00290000000000000000 /* UploadQueueRecovery.swift */; };
 		CD5F4D1B301C80320048327C /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CF0301C80320048327C /* APIClient.swift */; };
 		CDFF001C0000000000000000 /* AuthClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF001B0000000000000000 /* AuthClient.swift */; };
+		CDFF00350000000000000000 /* AuthLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00340000000000000000 /* AuthLink.swift */; };
 		CD5F4D1C301C80320048327C /* PublishGalleryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D09301C80320048327C /* PublishGalleryViewModel.swift */; };
 		CD5F4D1D301C80320048327C /* EventListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D05301C80320048327C /* EventListViewModel.swift */; };
 		CD5F4D1E301C80320048327C /* UploadProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4CED301C80320048327C /* UploadProgress.swift */; };
@@ -97,6 +98,7 @@
 		CD5F4CEE301C80320048327C /* UploadStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStage.swift; sourceTree = "<group>"; };
 		CD5F4CF0301C80320048327C /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		CDFF001B0000000000000000 /* AuthClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthClient.swift; sourceTree = "<group>"; };
+		CDFF00340000000000000000 /* AuthLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthLink.swift; sourceTree = "<group>"; };
 		CD5F4CF1301C80320048327C /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		CD5F4CF2301C80320048327C /* PickPicEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PickPicEnvironment.swift; sourceTree = "<group>"; };
 		CD5F4CF4301C80320048327C /* APIConfigurationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIConfigurationStore.swift; sourceTree = "<group>"; };
@@ -301,6 +303,7 @@
 			children = (
 				CD5F4CF0301C80320048327C /* APIClient.swift */,
 				CDFF001B0000000000000000 /* AuthClient.swift */,
+				CDFF00340000000000000000 /* AuthLink.swift */,
 				CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */,
 				CDAA00020000000000000000 /* RawUploadSession.swift */,
 				CD5F4CF1301C80320048327C /* APIModels.swift */,
@@ -510,6 +513,7 @@
 				CDFF00280000000000000000 /* UploadQueueRecovery.swift in Sources */,
 				CD5F4D1B301C80320048327C /* APIClient.swift in Sources */,
 				CDFF001C0000000000000000 /* AuthClient.swift in Sources */,
+				CDFF00350000000000000000 /* AuthLink.swift in Sources */,
 				CD5F4D1C301C80320048327C /* PublishGalleryViewModel.swift in Sources */,
 				CD5F4D1D301C80320048327C /* EventListViewModel.swift in Sources */,
 				CD5F4D1E301C80320048327C /* UploadProgress.swift in Sources */,
