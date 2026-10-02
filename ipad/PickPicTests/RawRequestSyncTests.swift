@@ -315,3 +315,226 @@ struct RawUploadFileServiceValidationTests {
         )
     }
 }
+
+// #368: the part layout has to agree byte-for-byte with the worker's
+// rawUploadPartCount and expectedSize, which reject any part of another
+// length.
+struct RawUploadPartPlanTests {
+    private static let mebibyte: Int64 = 1_024 * 1_024
+
+    @Test func splitsARawIntoFullPartsAndAShorterLastOne() {
+        let plan = RawUploadPartPlan(
+            byteSize: 75 * Self.mebibyte + 123,
+            partSize: 8 * Self.mebibyte
+        )
+
+        #expect(plan.partCount == 10)
+        #expect(plan.size(ofPart: 1) == 8 * Self.mebibyte)
+        #expect(plan.size(ofPart: 9) == 8 * Self.mebibyte)
+        #expect(plan.size(ofPart: 10) == 3 * Self.mebibyte + 123)
+    }
+
+    @Test func anExactMultipleHasNoShortLastPart() {
+        let plan = RawUploadPartPlan(byteSize: 24, partSize: 8)
+
+        #expect(plan.partCount == 3)
+        #expect(plan.size(ofPart: 3) == 8)
+    }
+
+    @Test func aFileSmallerThanOnePartIsOnePart() {
+        let plan = RawUploadPartPlan(byteSize: 5, partSize: 8)
+
+        #expect(plan.partCount == 1)
+        #expect(plan.byteRange(ofPart: 1) == 0..<5)
+    }
+
+    @Test func byteRangesAreContiguousAndCoverTheFile() {
+        let plan = RawUploadPartPlan(byteSize: 20, partSize: 8)
+
+        #expect(plan.byteRange(ofPart: 1) == 0..<8)
+        #expect(plan.byteRange(ofPart: 2) == 8..<16)
+        #expect(plan.byteRange(ofPart: 3) == 16..<20)
+    }
+
+    @Test func partsOutsideThePlanHaveNoRange() {
+        let plan = RawUploadPartPlan(byteSize: 20, partSize: 8)
+        let empty = RawUploadPartPlan(byteSize: 0, partSize: 8)
+
+        #expect(plan.byteRange(ofPart: 0) == nil)
+        #expect(plan.byteRange(ofPart: 4) == nil)
+        #expect(empty.partCount == 0)
+        #expect(empty.byteRange(ofPart: 1) == nil)
+        #expect(empty.partsToSend(landedParts: []).isEmpty)
+    }
+
+    @Test func sendsOnlyTheMissingParts() {
+        let plan = RawUploadPartPlan(byteSize: 40, partSize: 8)
+
+        #expect(plan.partsToSend(landedParts: []) == [1, 2, 3, 4, 5])
+        #expect(plan.partsToSend(landedParts: [1, 3, 5]) == [2, 4])
+        // Out-of-plan numbers from the server are ignored, not trusted.
+        #expect(plan.partsToSend(landedParts: [2, 9, -1]) == [1, 3, 4, 5])
+    }
+
+    // Every part landed but the photo still wants its RAW: the server's
+    // completion failed and released its claim, so the last part is re-sent
+    // to trigger it again.
+    @Test func resendsTheLastPartWhenNothingIsMissing() {
+        let plan = RawUploadPartPlan(byteSize: 40, partSize: 8)
+
+        #expect(plan.partsToSend(landedParts: [1, 2, 3, 4, 5]) == [5])
+    }
+}
+
+struct RawUploadProgressTallyTests {
+    private static let plan = RawUploadPartPlan(byteSize: 20, partSize: 8)
+
+    @Test func countsLandedPartsAndInFlightBytes() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: [1]
+        )
+
+        #expect(tally.sentBytes == 8)
+        #expect(tally.totalBytes == 20)
+
+        tally.recordSent(3, forPart: 2)
+        #expect(tally.sentBytes == 11)
+
+        tally.markLanded(2)
+        #expect(tally.sentBytes == 16)
+
+        tally.recordSent(4, forPart: 3)
+        tally.markLanded(3)
+        #expect(tally.sentBytes == 20)
+    }
+
+    @Test func aFailedPartStartsItsCountAgain() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: []
+        )
+
+        tally.recordSent(6, forPart: 1)
+        tally.markFailed(1)
+
+        #expect(tally.sentBytes == 0)
+    }
+
+    @Test func clampsOverreportedAndIgnoresUnknownParts() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: [7]
+        )
+
+        // A part past its own size (URLSession at completion) and a part
+        // outside the plan must never push the total past the file.
+        tally.recordSent(100, forPart: 3)
+        tally.recordSent(100, forPart: 9)
+
+        #expect(tally.landedParts.isEmpty)
+        #expect(tally.sentBytes == 4)
+    }
+
+    @Test func sentBytesForALandedPartAreNotCountedTwice() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: [1]
+        )
+
+        tally.recordSent(8, forPart: 1)
+
+        #expect(tally.sentBytes == 8)
+    }
+}
+
+struct RawPartTaskTagTests {
+    @Test func roundTripsThroughTaskDescription() {
+        let tag = RawPartTaskTag(
+            photoID: "photo-1",
+            partNumber: 3,
+            byteSize: 20,
+            partSize: 8
+        )
+
+        #expect(
+            RawPartTaskTag(taskDescription: tag.taskDescription) == tag
+        )
+        #expect(tag.plan.partCount == 3)
+    }
+
+    // An older build tagged its single-request upload with the bare photo
+    // id; that must read as "not a part", not crash or misattribute.
+    @Test func rejectsABarePhotoIDAndImpossibleParts() {
+        #expect(RawPartTaskTag(taskDescription: "photo-1") == nil)
+
+        let outOfPlan = RawPartTaskTag(
+            photoID: "photo-1",
+            partNumber: 4,
+            byteSize: 20,
+            partSize: 8
+        )
+
+        #expect(
+            RawPartTaskTag(taskDescription: outOfPlan.taskDescription)
+                == nil
+        )
+
+        #expect(
+            RawPartTaskTag(
+                taskDescription:
+                    #"{"photoID":"p","partNumber":1,"byteSize":20,"partSize":0}"#
+            ) == nil
+        )
+    }
+}
+
+struct RawPartRetryPolicyTests {
+    @Test func backsOffThenGivesUp() {
+        #expect(RawPartRetryPolicy.delay(afterAttempt: 1) == .seconds(2))
+        #expect(RawPartRetryPolicy.delay(afterAttempt: 4) == .seconds(16))
+        #expect(
+            RawPartRetryPolicy.delay(
+                afterAttempt: RawPartRetryPolicy.maximumAttempts
+            ) == nil
+        )
+    }
+
+    @Test func retriesTransientFailuresOnly() {
+        #expect(
+            RawPartRetryPolicy.isRetryable(
+                URLError(.networkConnectionLost)
+            )
+        )
+        #expect(!RawPartRetryPolicy.isRetryable(URLError(.cancelled)))
+
+        for statusCode in [408, 429, 500, 503] {
+            #expect(
+                RawPartRetryPolicy.isRetryable(
+                    APIClientError.server(
+                        statusCode: statusCode,
+                        message: ""
+                    )
+                )
+            )
+        }
+
+        // A wrong-size part, the storage cap, a session start has replaced.
+        for statusCode in [400, 403, 404] {
+            #expect(
+                !RawPartRetryPolicy.isRetryable(
+                    APIClientError.server(
+                        statusCode: statusCode,
+                        message: ""
+                    )
+                )
+            )
+        }
+
+        #expect(
+            !RawPartRetryPolicy.isRetryable(
+                APIClientError.unauthorized(message: "")
+            )
+        )
+    }
+}

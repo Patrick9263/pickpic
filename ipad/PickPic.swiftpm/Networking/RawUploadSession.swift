@@ -13,12 +13,23 @@ import Foundation
  * UploadOperationStep case is added, and so none of the hand-rolled
  * "is this job busy" chains in UploadQueueStore need revisiting.
  *
+ * A RAW travels as a resumable multipart upload (#362/#368): one task per
+ * missing part, PUT .../raw/parts/:n, all queued at once. The server keeps
+ * every part that lands and finishes the upload itself from inside the
+ * request that delivers the last one, so iPadOS can run the whole queue with
+ * the app suspended or killed and nothing ever needs waking to send the next
+ * part or to complete. A drop costs one part, not the file.
+ *
  * It is far smaller than BackgroundUploadSession because it needs no on-disk
  * record of transfers that finished while the app was dead. The server is the
- * durable state: a completed upload has already written photos.raw_storage_key
- * and stamped raw_requests.fulfilled_at, so the next activation sweep sees the
- * photo no longer needs one and skips it. An interrupted upload leaves
- * fulfilled_at null and is simply retried. Nothing local has to survive.
+ * durable state, twice over: a completed upload has already written
+ * photos.raw_storage_key and stamped raw_requests.fulfilled_at, so the next
+ * activation sweep sees the photo no longer needs one and skips it; and an
+ * interrupted one is described by raw_upload_sessions, so the next sweep
+ * calls /raw/start again and is told exactly which parts are still missing.
+ * Nothing local has to survive. The one thing a task does carry is its
+ * RawPartTaskTag in taskDescription -- state iPadOS keeps for us, used only
+ * to redraw progress for transfers that outlive the process.
  */
 final class RawUploadSession:
     NSObject,
@@ -81,8 +92,9 @@ final class RawUploadSession:
 
     /*
      * Keyed by taskIdentifier rather than photo id, matching continuations
-     * and responseDataByTaskID above -- a task outlives any one process's
-     * notion of which photo it belongs to (see reattachActiveUpload).
+     * and responseDataByTaskID above -- a photo now has one task per part,
+     * and a task outlives any one process's notion of which photo it belongs
+     * to (see reattachActiveUploads).
      */
     private var progressHandlersByTaskID:
         [Int: @Sendable (Int64, Int64) -> Void] = [:]
@@ -104,7 +116,7 @@ final class RawUploadSession:
     func upload(
         request: URLRequest,
         fromFile fileURL: URL,
-        photoID: String,
+        tag: RawPartTaskTag,
         onProgress: (@Sendable (Int64, Int64) -> Void)? =
             nil
     ) async throws -> (Data, URLResponse) {
@@ -116,11 +128,11 @@ final class RawUploadSession:
             )
 
             /*
-             * Read back by reattachActiveUpload after a relaunch, when this
+             * Read back by reattachActiveUploads after a relaunch, when this
              * process never called upload() for the task and so has no
-             * other record of which photo it belongs to.
+             * other record of which photo and part it belongs to.
              */
-            task.taskDescription = photoID
+            task.taskDescription = tag.taskDescription
 
             lock.lock()
             continuations[task.taskIdentifier] =
@@ -141,38 +153,92 @@ final class RawUploadSession:
     /*
      * Called once per activation, only when hasActiveUploads() has already
      * reported a transfer in flight that this process did not start itself
-     * -- i.e. it survived a relaunch. Finds that task, registers a progress
-     * handler for it going forward, and hands back the photo id its
-     * taskDescription was tagged with so the caller can re-seed
-     * RawDeliveryProgress. Returns nil if the task has already finished
-     * between the two checks, or was never tagged (an older build's
-     * transfer still in flight).
+     * -- i.e. it survived a relaunch. A photo's parts are queued together, so
+     * several tasks can belong to it: every still-running task for the first
+     * tagged photo found gets a progress handler (told which part it is), and
+     * the tag plus the set of part numbers still running is handed back so
+     * the caller can re-seed RawDeliveryProgress. A part in the plan with no
+     * running task has already finished. Returns nil if everything finished
+     * between the two checks, or the task was never tagged as a part (an
+     * older build's single-request transfer still in flight).
      */
-    func reattachActiveUpload(
+    func reattachActiveUploads(
         onProgress:
-            @escaping @Sendable (Int64, Int64) -> Void
-    ) async -> String? {
+            @escaping @Sendable (
+                _ tag: RawPartTaskTag,
+                _ sentBytes: Int64
+            ) -> Void
+    ) async -> (tag: RawPartTaskTag, activeParts: Set<Int>)? {
         await withCheckedContinuation { continuation in
             session.getAllTasks { tasks in
-                guard
-                    let activeTask = tasks.first(
-                        where: { task in
-                            task.state != .completed
-                        }
-                    ),
-                    let photoID = activeTask.taskDescription
-                else {
+                let tagged = tasks.compactMap {
+                    task -> (URLSessionTask, RawPartTaskTag)? in
+                    guard
+                        task.state != .completed,
+                        let description = task.taskDescription,
+                        let tag = RawPartTaskTag(
+                            taskDescription: description
+                        )
+                    else {
+                        return nil
+                    }
+
+                    return (task, tag)
+                }
+
+                guard let firstTag = tagged.first?.1 else {
                     continuation.resume(returning: nil)
                     return
                 }
 
+                let photoTasks = tagged.filter { _, tag in
+                    tag.photoID == firstTag.photoID
+                }
+
                 self.lock.lock()
-                self.progressHandlersByTaskID[
-                    activeTask.taskIdentifier
-                ] = onProgress
+                for (task, tag) in photoTasks {
+                    self.progressHandlersByTaskID[
+                        task.taskIdentifier
+                    ] = { sentBytes, _ in
+                        onProgress(tag, sentBytes)
+                    }
+                }
                 self.lock.unlock()
 
-                continuation.resume(returning: photoID)
+                continuation.resume(
+                    returning: (
+                        firstTag,
+                        Set(photoTasks.map { _, tag in tag.partNumber })
+                    )
+                )
+            }
+        }
+    }
+
+    /*
+     * Stops every part still queued or running for one photo. A part that
+     * fails for good (a 401, the storage cap, a session the server no longer
+     * has) means the rest of that photo's queue can only fail the same way
+     * or land bytes for an upload this sync has abandoned -- and with one
+     * connection per host they would hold up the next photo's parts too.
+     */
+    func cancelUploads(photoID: String) async {
+        await withCheckedContinuation { continuation in
+            session.getAllTasks { tasks in
+                for task in tasks {
+                    guard
+                        let description = task.taskDescription,
+                        RawPartTaskTag(
+                            taskDescription: description
+                        )?.photoID == photoID
+                    else {
+                        continue
+                    }
+
+                    task.cancel()
+                }
+
+                continuation.resume()
             }
         }
     }
@@ -316,6 +382,61 @@ final class RawUploadSession:
         DispatchQueue.main.async {
             handler()
         }
+    }
+}
+
+/*
+ * Which photo and part a background task carries, stored as JSON in its
+ * taskDescription. Carries the file's byte size and part size as well, so a
+ * relaunched process can rebuild the RawUploadPartPlan -- and so the
+ * progress bar -- for a transfer it did not start, without asking the server
+ * or re-reading the file.
+ */
+struct RawPartTaskTag: Codable, Equatable, Sendable {
+    let photoID: String
+    let partNumber: Int
+    let byteSize: Int64
+    let partSize: Int64
+
+    init(
+        photoID: String,
+        partNumber: Int,
+        byteSize: Int64,
+        partSize: Int64
+    ) {
+        self.photoID = photoID
+        self.partNumber = partNumber
+        self.byteSize = byteSize
+        self.partSize = partSize
+    }
+
+    /*
+     * Nil for anything that is not a tag -- in particular the bare photo id
+     * an older build wrote for its single-request upload.
+     */
+    init?(taskDescription: String) {
+        guard
+            let tag = try? JSONDecoder().decode(
+                Self.self,
+                from: Data(taskDescription.utf8)
+            ),
+            tag.partSize > 0,
+            tag.plan.size(ofPart: tag.partNumber) != nil
+        else {
+            return nil
+        }
+
+        self = tag
+    }
+
+    var taskDescription: String {
+        let data = (try? JSONEncoder().encode(self)) ?? Data()
+
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    var plan: RawUploadPartPlan {
+        RawUploadPartPlan(byteSize: byteSize, partSize: partSize)
     }
 }
 
