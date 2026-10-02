@@ -847,7 +847,8 @@ struct EventDetailView: View {
         do {
             let job =
             try importModel.makeUploadJob(
-                for: event
+                for: event,
+                accountID: configuration.accountID
             )
 
             try eventFolders.save(job: job)

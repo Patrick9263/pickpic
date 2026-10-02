@@ -54,6 +54,19 @@ private struct ActiveContinuedProcessingTask {
     let operationTask: Task<Void, Never>
 }
 
+/*
+ * Thrown in place of a client for a job the signed-in account does not own
+ * (APIConfigurationStore.owns). Surfaces as the job's error message, so a
+ * parked job says why it is not moving instead of looking stuck.
+ */
+enum UploadAccountMismatchError: LocalizedError, Sendable {
+    case belongsToAnotherAccount
+
+    var errorDescription: String? {
+        "This import was queued under a different PickPic account. Sign in to that account to upload it."
+    }
+}
+
 private enum UploadFolderRelinkError: LocalizedError, Sendable {
     case jobNotFound
     case operationInProgress
@@ -1004,6 +1017,7 @@ final class UploadQueueStore: ObservableObject {
                 job.eventID == eventID
                 && job.stage != .completed
                 && !job.stage.isActiveOperation
+                && configuration.owns(job)
             }
             .sorted { first, second in
                 first.createdAt < second.createdAt
@@ -1065,9 +1079,16 @@ final class UploadQueueStore: ObservableObject {
 
         let jobIDs = jobs
             .filter { job in
+                /*
+                 * Another account's jobs are left out, not just refused
+                 * further down: one of them still marked as waiting would
+                 * end this loop early (see below) and hold back every job
+                 * the signed-in account does own.
+                 */
                 job.stage == .readyToUpload
                 && job.uploadProgress
                     .isWaitingForConnectivity
+                && configuration.owns(job)
             }
             .sorted { first, second in
                 first.createdAt < second.createdAt
@@ -1301,8 +1322,19 @@ final class UploadQueueStore: ObservableObject {
              * cleared for the same reason it is on the foreground path -- no
              * retry with it can succeed. The job stays at .readyToUpload
              * below and picks up after the next sign-in.
+             *
+             * Only when the job is the signed-in account's, though. A
+             * transfer queued under an account this iPad has since switched
+             * away from carries that account's revoked session, and its 401
+             * says nothing about the session that replaced it.
              */
-            configuration.handleUnauthorized()
+            if let job = jobs.first(where: { job in
+                job.id == context.jobID
+            }),
+               configuration.owns(job)
+            {
+                configuration.handleUnauthorized()
+            }
 
             failureMessage = APIClientError.signInRequiredMessage
         } else if let statusCode = completion.statusCode {
@@ -1423,6 +1455,7 @@ final class UploadQueueStore: ObservableObject {
                 && !job.uploadProgress.isPaused
                 && job.uploadProgress
                     .backgroundTransferNeedsReconciliation
+                && configuration.owns(job)
             }
             .sorted { first, second in
                 first.createdAt < second.createdAt
@@ -1486,6 +1519,64 @@ final class UploadQueueStore: ObservableObject {
         try remove(
             jobIDs: completedJobIDs
         )
+    }
+
+    /*
+     * Every client this store makes for a job comes through here, because
+     * the upload path creates the job's event server-side before sending a
+     * single photo: a job from another account reaching it would create
+     * that account's offline-only event in this one and upload into it.
+     */
+    private func makeClient(
+        for job: UploadJob,
+        using configuration: APIConfigurationStore
+    ) throws -> APIClient {
+        guard configuration.owns(job) else {
+            throw UploadAccountMismatchError.belongsToAnotherAccount
+        }
+
+        return try configuration.makeClient()
+    }
+
+    /*
+     * Gives jobs queued before UploadJob carried an account to the first
+     * account this iPad knows after upgrading. Builds before #375 could not
+     * switch accounts, so the signed-in account is the one they were queued
+     * under in every case but a device that was left signed out across the
+     * upgrade and then signed in to a different account -- which had no
+     * protection before this either, and cannot be told apart now.
+     */
+    func adoptUnownedJobs(
+        accountID: String
+    ) {
+        guard jobs.contains(where: { job in
+            job.accountID == nil
+        }) else {
+            return
+        }
+
+        let updatedJobs = jobs.map { job in
+            guard job.accountID == nil else {
+                return job
+            }
+
+            var adopted = job
+            adopted.accountID = accountID
+
+            return adopted
+        }
+
+        // Same ordering rule as updateJob(_:change:).
+        pendingProgressSaveTask?.cancel()
+        pendingProgressSaveTask = nil
+
+        do {
+            try save(updatedJobs)
+
+            jobs = updatedJobs
+        } catch {
+            loadErrorMessage = error.localizedDescription
+        }
     }
 
     func add(
@@ -1799,7 +1890,10 @@ final class UploadQueueStore: ObservableObject {
         let client: APIClient
 
         do {
-            client = try configuration.makeClient()
+            client = try makeClient(
+                for: currentJob,
+                using: configuration
+            )
         } catch {
             recordPreflightFailure(
                 jobID: jobID,
@@ -1924,8 +2018,10 @@ final class UploadQueueStore: ObservableObject {
         }
 
         guard
-            let client = try? configuration
-                .makeClient()
+            let client = try? makeClient(
+                for: currentJob,
+                using: configuration
+            )
         else {
             return
         }
@@ -2625,7 +2721,10 @@ final class UploadQueueStore: ObservableObject {
         let client: APIClient
 
         do {
-            client = try configuration.makeClient()
+            client = try makeClient(
+                for: currentJob,
+                using: configuration
+            )
         } catch {
             do {
                 try updateJob(jobID) { job in

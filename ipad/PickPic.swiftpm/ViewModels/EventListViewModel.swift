@@ -30,22 +30,140 @@ final class EventListViewModel:
     @Published private(set)
     var errorMessage: String?
 
+    /*
+     * Whose events this is showing. Every account has its own cache file
+     * (AccountScope.eventCacheFilename), so switching accounts swaps the
+     * whole list -- offline-created events included -- instead of carrying
+     * one account's events into another's. An unknown account (a credential
+     * from before accounts were recorded, not yet refreshed) reads and
+     * writes the pre-#376 unscoped file, which is what every earlier build
+     * showed in that position.
+     */
+    private enum Scope: Equatable {
+        case signedOut
+        case account(String?)
+    }
+
     private let fileManager: FileManager
-    private let cacheURL: URL
+    private var scope = Scope.signedOut
     private var cachedAt: Date?
     private var hasCachedSnapshot = false
+
+    /*
+     * Bumped on every scope change. Anything that awaits the network
+     * compares it afterwards, so a response for the account that was just
+     * switched away from is dropped rather than landing in the new one's
+     * list and cache.
+     */
+    private var scopeGeneration = 0
 
     init(
         fileManager: FileManager = .default
     ) {
         self.fileManager = fileManager
-        cacheURL = AppStorageService.rootURL
+    }
+
+    private var cacheURL: URL? {
+        guard case let .account(accountID) = scope else {
+            return nil
+        }
+
+        return Self.cacheURL(for: accountID)
+    }
+
+    private static func cacheURL(
+        for accountID: String?
+    ) -> URL {
+        AppStorageService.rootURL
             .appendingPathComponent(
-                "events-cache.json",
+                AccountScope.eventCacheFilename(
+                    for: accountID
+                ),
                 isDirectory: false
             )
+    }
+
+    /*
+     * Called whenever the signed-in account may have changed. Signed out
+     * clears what is on screen but leaves every account's cache file in
+     * place, so signing back in to the same account shows its list --
+     * offline-created events and all -- straight away.
+     */
+    func activate(
+        accountID: String?,
+        isSignedIn: Bool
+    ) {
+        let newScope: Scope =
+            isSignedIn
+            ? .account(accountID)
+            : .signedOut
+
+        guard newScope != scope else {
+            return
+        }
+
+        scope = newScope
+        scopeGeneration += 1
+
+        events = []
+        statisticsByEventID = [:]
+        statisticsFailedEventIDs = []
+        errorMessage = nil
+        cachedAt = nil
+        hasCachedSnapshot = false
+
+        /*
+         * A load still running belongs to the old scope and will be
+         * discarded when it returns; leaving this set would make the new
+         * scope's first load bail out as a duplicate.
+         */
+        isLoading = false
+        isLoadingStatistics = false
 
         restoreCachedEvents()
+    }
+
+    /*
+     * Hands the pre-#376 unscoped cache to the first account this iPad
+     * identifies -- see APIConfigurationStore.onAccountIdentified for why
+     * that is the account it belongs to. Replaces any file the account
+     * already has: the unscoped file is only ever written while the
+     * signed-in account is unknown, so if one exists it is the newer
+     * snapshot of this same account.
+     */
+    static func adoptLegacyCache(
+        into accountID: String,
+        fileManager: FileManager = .default
+    ) {
+        let legacyURL = cacheURL(for: nil)
+
+        guard fileManager.fileExists(
+            atPath: legacyURL.path
+        ) else {
+            return
+        }
+
+        let scopedURL = cacheURL(for: accountID)
+
+        do {
+            if fileManager.fileExists(
+                atPath: scopedURL.path
+            ) {
+                try fileManager.removeItem(
+                    at: scopedURL
+                )
+            }
+
+            try fileManager.moveItem(
+                at: legacyURL,
+                to: scopedURL
+            )
+        } catch {
+            print(
+                "Unable to adopt the legacy event cache:",
+                error
+            )
+        }
     }
 
     func load(
@@ -80,12 +198,18 @@ final class EventListViewModel:
         isLoading = true
         errorMessage = nil
 
+        let generation = scopeGeneration
+
         do {
             let client =
             try configuration.makeClient()
 
             let loadedEvents =
             try await client.fetchEvents()
+
+            guard generation == scopeGeneration else {
+                return
+            }
 
             let loadedEventIDs =
             Set(loadedEvents.map(\.id))
@@ -128,6 +252,10 @@ final class EventListViewModel:
                 using: configuration
             )
         } catch {
+            guard generation == scopeGeneration else {
+                return
+            }
+
             isLoading = false
 
             if hasCachedSnapshot {
@@ -155,8 +283,13 @@ final class EventListViewModel:
 
         isLoadingStatistics = true
 
+        let generation = scopeGeneration
+
         defer {
-            isLoadingStatistics = false
+            // activate() has already reset it for the new scope.
+            if generation == scopeGeneration {
+                isLoadingStatistics = false
+            }
         }
 
         let client: APIClient
@@ -175,7 +308,10 @@ final class EventListViewModel:
         Set<String> = []
 
         for event in events {
-            guard !Task.isCancelled else {
+            guard
+                !Task.isCancelled,
+                generation == scopeGeneration
+            else {
                 return
             }
 
@@ -224,6 +360,7 @@ final class EventListViewModel:
         APIConfigurationStore
     ) async throws -> String {
         let eventID = UUID().uuidString.lowercased()
+        let generation = scopeGeneration
 
         do {
             let client =
@@ -235,8 +372,23 @@ final class EventListViewModel:
                 id: eventID
             )
 
+            /*
+             * Created under the account that was signed in when the
+             * request went out, so it belongs in that account's list --
+             * which is no longer this one if the iPad switched meanwhile.
+             * It is already on the server and appears when that account
+             * signs back in.
+             */
+            guard generation == scopeGeneration else {
+                return eventID
+            }
+
             insert(createdEvent)
         } catch {
+            guard generation == scopeGeneration else {
+                throw error
+            }
+
             /*
              * Only an unreachable server justifies working offline. A
              * request the server actively rejected, such as an invalid
@@ -424,9 +576,12 @@ final class EventListViewModel:
     }
 
     private func restoreCachedEvents() {
-        guard fileManager.fileExists(
-            atPath: cacheURL.path
-        ) else {
+        guard
+            let cacheURL,
+            fileManager.fileExists(
+                atPath: cacheURL.path
+            )
+        else {
             return
         }
 
@@ -453,6 +608,10 @@ final class EventListViewModel:
     }
 
     private func persistCachedEvents() {
+        guard let cacheURL else {
+            return
+        }
+
         let savedAt = Date()
         let snapshot = CachedEventList(
             events: events,

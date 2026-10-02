@@ -34,6 +34,18 @@ struct UploadJob:
     
     let eventID: String
     var eventTitle: String
+
+    /*
+     * The PickPic account this job was queued under. Uploading it -- and
+     * creating its event server-side first, which the upload path does for
+     * every job -- only ever happens while that account is signed in
+     * (APIConfigurationStore.owns), so switching accounts mid-shoot parks
+     * the job rather than putting one account's photos into another's
+     * events. Nil for jobs queued before this field existed; those are
+     * stamped with the first account known after upgrade
+     * (UploadQueueStore.adoptUnownedJobs). A var for that reason only.
+     */
+    var accountID: String?
     
     var folderName: String
     var folderBookmarkData: Data
@@ -286,6 +298,7 @@ struct UploadJob:
         id: UUID,
         eventID: String,
         eventTitle: String,
+        accountID: String? = nil,
         folderName: String,
         folderBookmarkData: Data,
         photos: [SourcePhoto],
@@ -324,6 +337,7 @@ struct UploadJob:
         self.id = id
         self.eventID = eventID
         self.eventTitle = eventTitle
+        self.accountID = accountID
         self.folderName = folderName
         self.folderBookmarkData =
         folderBookmarkData
@@ -365,6 +379,7 @@ struct UploadJob:
         case id
         case eventID
         case eventTitle
+        case accountID
         case folderName
         case folderBookmarkData
         case photos
@@ -411,6 +426,13 @@ struct UploadJob:
             forKey: .eventTitle
         )
         
+        // Newer field: decodeIfPresent, per CLAUDE.md trap 1.
+        accountID =
+        try container.decodeIfPresent(
+            String.self,
+            forKey: .accountID
+        )
+
         folderName = try container.decode(
             String.self,
             forKey: .folderName

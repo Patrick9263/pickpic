@@ -391,6 +391,122 @@ struct SessionCredentialTests {
     }
 
     /*
+     * A credential saved before SessionCredential carried an account has to
+     * keep loading from the Keychain -- failing to decode it would sign the
+     * iPad out on upgrade -- and has to come back with no account, so
+     * refreshSession() knows to fill it in.
+     */
+    @Test
+    func decodesAKeychainValueSavedBeforeAccountIDsExisted() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let stored = """
+            {
+                "token": "\(Self.token)",
+                "expiresAt": "2030-01-01T00:00:00Z",
+                "accountName": "PickPic",
+                "email": "photographer@example.com"
+            }
+            """
+
+        let credential = try decoder.decode(
+            SessionCredential.self,
+            from: Data(stored.utf8)
+        )
+
+        #expect(credential.token == Self.token)
+        #expect(credential.accountName == "PickPic")
+        #expect(credential.accountID == nil)
+    }
+
+    @Test
+    func keepsTheAccountWhenTheExpirySlides() {
+        let credential = SessionCredential(
+            token: Self.token,
+            expiresAt: Date(timeIntervalSince1970: 1_700_000_000),
+            accountID: "acct-1"
+        )
+
+        let slid = credential.withRefreshedExpiry(
+            Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        #expect(slid.accountID == "acct-1")
+    }
+
+    // MARK: - AccountScope
+
+    @Test
+    func untaggedWorkBelongsToWhoeverIsSignedIn() {
+        #expect(
+            AccountScope.owns(currentAccountID: "acct-a", workAccountID: nil)
+        )
+        #expect(
+            AccountScope.owns(currentAccountID: nil, workAccountID: nil)
+        )
+    }
+
+    @Test
+    func taggedWorkBelongsOnlyToItsOwnAccount() {
+        #expect(
+            AccountScope.owns(
+                currentAccountID: "acct-a",
+                workAccountID: "acct-a"
+            )
+        )
+        #expect(
+            !AccountScope.owns(
+                currentAccountID: "acct-b",
+                workAccountID: "acct-a"
+            )
+        )
+    }
+
+    /*
+     * A credential that has not learned its account yet must not guess:
+     * guessing wrong is the cross-account upload this rule exists to stop.
+     */
+    @Test
+    func anUnknownAccountOwnsNoTaggedWork() {
+        #expect(
+            !AccountScope.owns(currentAccountID: nil, workAccountID: "acct-a")
+        )
+    }
+
+    @Test
+    func anUnknownAccountUsesTheLegacyCacheFile() {
+        #expect(
+            AccountScope.eventCacheFilename(for: nil) == "events-cache.json"
+        )
+    }
+
+    @Test
+    func aUUIDAccountIDIsUsedAsIsInItsCacheFilename() {
+        let accountID = "2f1d6c1e-8a1b-4c55-9d3e-7f0a6b2c9e41"
+
+        #expect(
+            AccountScope.eventCacheFilename(for: accountID)
+                == "events-cache-\(accountID).json"
+        )
+    }
+
+    /*
+     * Hashed rather than filtered, so ids that differ only in characters a
+     * filename cannot hold still get separate files.
+     */
+    @Test
+    func unsafeAccountIDsAreHashedIntoDistinctFilenames() {
+        let first = AccountScope.eventCacheFilename(for: "../a")
+        let second = AccountScope.eventCacheFilename(for: "/a")
+
+        #expect(first != second)
+        #expect(!first.contains("/"))
+        #expect(!second.contains("/"))
+        #expect(first.hasPrefix("events-cache-"))
+    }
+
+    /*
      * isSameOriginRequest in worker/auth.ts compares this against
      * new URL(request.url).origin, which never carries a path.
      */

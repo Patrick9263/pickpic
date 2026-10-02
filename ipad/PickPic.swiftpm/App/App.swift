@@ -282,11 +282,31 @@ struct PickPicApp: App {
                             unfinishedUploads:
                                 uploadQueue.jobs.filter { job in
                                     job.stage != .completed
+                                    && configuration.owns(job)
                                 }.count
                         )
                     )
                 }
                 .task {
+                    /*
+                     * Set before anything can save a credential, so the
+                     * first account identified -- usually by the refresh
+                     * just below, on the first launch after upgrading --
+                     * claims the work recorded before jobs and the event
+                     * cache were per account.
+                     */
+                    let queue = uploadQueue
+
+                    configuration.onAccountIdentified = { accountID in
+                        queue.adoptUnownedJobs(
+                            accountID: accountID
+                        )
+
+                        EventListViewModel.adoptLegacyCache(
+                            into: accountID
+                        )
+                    }
+
                     await configuration.refreshSession()
 
                     BackgroundUploadSession.shared
@@ -458,29 +478,20 @@ struct PickPicApp: App {
 
     @MainActor
     private func redeem(_ link: AuthLink) async {
-        let authClient = configuration.makeAuthClient()
-        let previousCredential = configuration.credential
-
         do {
-            let redemption = try await authClient.redeem(link)
+            let redemption = try await configuration
+                .makeAuthClient()
+                .redeem(link)
 
-            try configuration.save(redemption.credential)
+            try await configuration.replaceCredential(
+                with: redemption.credential
+            )
 
             feedback.show(
                 title: redemption.feedbackTitle,
                 detail: redemption.feedbackDetail,
                 systemImage: "checkmark.circle.fill"
             )
-
-            /*
-             * Revoke the session this replaced, as signOut() would have.
-             * Best effort: the local switch has already happened, and a
-             * session nothing holds any more is only a dead row server-side.
-             */
-            if let previousCredential,
-               previousCredential.token != redemption.credential.token {
-                try? await authClient.signOut(previousCredential)
-            }
         } catch {
             feedback.show(
                 title: link.kind == .signUp

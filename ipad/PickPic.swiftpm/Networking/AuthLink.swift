@@ -262,7 +262,7 @@ extension AuthLink {
                 ? "1 unfinished upload belongs"
                 : "\(unfinishedUploads) unfinished uploads belong"
 
-            message += " \(uploads) to \(current) and can't upload while this iPad is signed in to another account."
+            message += " \(uploads) to \(current) and can't upload while this iPad is signed in to another account. They can upload again once you sign back in to \(current)."
         }
 
         return message

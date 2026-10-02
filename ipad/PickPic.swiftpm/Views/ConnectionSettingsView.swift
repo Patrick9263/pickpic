@@ -49,6 +49,17 @@ struct ConnectionSettingsView: View {
     @State private var isWorking = false
 
     /*
+     * Requesting and redeeming a link for a different account while this
+     * one stays signed in. Signing out first used to be the only way, which
+     * ended this account's session before the new link had even arrived.
+     */
+    @State private var isAddingAccount = false
+
+    private var showsSignInSteps: Bool {
+        !configuration.isConfigured || isAddingAccount
+    }
+
+    /*
      * Which numbered section a message is shown in. Messages used to sit in
      * their own section at the foot of the form, and the signup fields push
      * that below the fold -- a rejected invite code looked like a button
@@ -67,7 +78,9 @@ struct ConnectionSettingsView: View {
 
                 if configuration.isConfigured {
                     signedInSection
-                } else {
+                }
+
+                if showsSignInSteps {
                     modeSection
 
                     switch mode {
@@ -81,7 +94,11 @@ struct ConnectionSettingsView: View {
                     redeemLinkSection
                 }
             }
-            .navigationTitle("PickPic Account")
+            .navigationTitle(
+                configuration.isConfigured
+                    ? "PickPic Account"
+                    : "Sign In to PickPic"
+            )
             .navigationBarTitleDisplayMode(.inline)
             .disabled(isWorking)
             .toolbar {
@@ -168,6 +185,37 @@ struct ConnectionSettingsView: View {
                     )
                     .font(.footnote)
                     .foregroundStyle(.orange)
+                }
+            }
+
+            if isAddingAccount {
+                /*
+                 * Said before the link is requested, not in the switch
+                 * itself: by then the operator has already decided.
+                 */
+                Text(
+                    """
+                    This iPad stays signed in to this account until the new \
+                    link is used. After the switch, this account's events \
+                    and unfinished uploads stay on this iPad, and can \
+                    upload again once you sign back in to it.
+                    """
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+                Button("Cancel") {
+                    isAddingAccount = false
+                    statusMessage = nil
+                    errorMessage = nil
+                    pastedLink = ""
+                }
+            } else {
+                Button("Sign In to Another Account") {
+                    mode = .signIn
+                    statusMessage = nil
+                    errorMessage = nil
+                    isAddingAccount = true
                 }
             }
 
@@ -320,7 +368,7 @@ struct ConnectionSettingsView: View {
                 }
             }
 
-            Button(mode == .signUp ? "Create Account" : "Sign In") {
+            Button(redeemButtonTitle) {
                 Task {
                     await signIn()
                 }
@@ -344,6 +392,22 @@ struct ConnectionSettingsView: View {
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
+        }
+    }
+
+    private var redeemButtonTitle: String {
+        switch (mode, isAddingAccount) {
+        case (.signUp, false):
+            return "Create Account"
+
+        case (.signUp, true):
+            return "Create and Switch"
+
+        case (.signIn, false):
+            return "Sign In"
+
+        case (.signIn, true):
+            return "Switch Account"
         }
     }
 
@@ -468,10 +532,18 @@ struct ConnectionSettingsView: View {
                 .makeAuthClient()
                 .redeem(pastedText: pastedLink)
 
-            try configuration.save(redemption.credential)
+            /*
+             * Not save(): when this is a switch, the session being replaced
+             * must be revoked rather than left live, the same as a tapped
+             * link (App.swift's redeem).
+             */
+            try await configuration.replaceCredential(
+                with: redemption.credential
+            )
 
             pastedLink = ""
             statusMessage = nil
+            isAddingAccount = false
 
             feedback.show(
                 title: redemption.feedbackTitle,
