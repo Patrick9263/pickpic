@@ -538,3 +538,102 @@ struct RawPartRetryPolicyTests {
         )
     }
 }
+
+// #373: RawRequestsView's Pending and Delivered lists.
+struct RawRequestListTests {
+    private static func photo(
+        filename: String,
+        pendingRawRequestCount: Int,
+        rawUploadedAt: String?
+    ) throws -> ServerPhotoRecord {
+        let rawPhoto =
+        rawUploadedAt.map { uploadedAt in
+            """
+            {
+                "originalFilename": "\(filename)",
+                "byteSize": 74000000,
+                "uploadedAt": "\(uploadedAt)"
+            }
+            """
+        } ?? "null"
+
+        let json = """
+            {
+                "id": "\(filename)",
+                "originalFilename": "\(filename)",
+                "heartCount": 0,
+                "workflowStatus": "idle",
+                "variants": {},
+                "finalPhoto": null,
+                "capturedAt": null,
+                "pendingRawRequestCount": \(pendingRawRequestCount),
+                "rawPhoto": \(rawPhoto)
+            }
+            """
+
+        return try JSONDecoder().decode(
+            ServerPhotoRecord.self,
+            from: Data(json.utf8)
+        )
+    }
+
+    @Test
+    func pendingIsUndeliveredRequestsInFilenameOrder() throws {
+        let photos = [
+            try Self.photo(
+                filename: "DSC01010.ARW",
+                pendingRawRequestCount: 1,
+                rawUploadedAt: nil
+            ),
+            try Self.photo(
+                filename: "DSC01002.ARW",
+                pendingRawRequestCount: 2,
+                rawUploadedAt: nil
+            ),
+            // Re-requested after delivery: not pending again.
+            try Self.photo(
+                filename: "DSC01001.ARW",
+                pendingRawRequestCount: 1,
+                rawUploadedAt: "2026-09-09T00:00:00.000Z"
+            ),
+            try Self.photo(
+                filename: "DSC01003.ARW",
+                pendingRawRequestCount: 0,
+                rawUploadedAt: nil
+            ),
+        ]
+
+        #expect(
+            RawRequestList.pending(in: photos)
+                .map(\.originalFilename)
+            == ["DSC01002.ARW", "DSC01010.ARW"]
+        )
+    }
+
+    @Test
+    func deliveredIsEveryStoredRawNewestFirst() throws {
+        let photos = [
+            try Self.photo(
+                filename: "DSC01001.ARW",
+                pendingRawRequestCount: 0,
+                rawUploadedAt: "2026-09-08T10:00:00.000Z"
+            ),
+            try Self.photo(
+                filename: "DSC01002.ARW",
+                pendingRawRequestCount: 1,
+                rawUploadedAt: "2026-09-09T10:00:00.000Z"
+            ),
+            try Self.photo(
+                filename: "DSC01003.ARW",
+                pendingRawRequestCount: 1,
+                rawUploadedAt: nil
+            ),
+        ]
+
+        #expect(
+            RawRequestList.delivered(in: photos)
+                .map(\.originalFilename)
+            == ["DSC01002.ARW", "DSC01001.ARW"]
+        )
+    }
+}

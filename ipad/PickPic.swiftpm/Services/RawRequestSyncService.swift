@@ -9,7 +9,7 @@ struct RawRequestSyncResult: Sendable {
 }
 
 /*
- * What LikedPhotosView reads to show per-file progress for the one RAW
+ * What RawRequestsView reads to show per-file progress for the one RAW
  * request sync() is actively working on (#268) -- everywhere else in the
  * pending list still just reads "Waiting", since the queue itself is
  * already the ordered photo list the view has from the server.

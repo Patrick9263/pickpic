@@ -89,7 +89,7 @@ final class AppFeedbackStore:
  * Holds the outcome of the most recent RawRequestSyncService pass per
  * event. Before this, a missing file or a failed upload only ever reached
  * a print() statement — invisible on a device running detached (#217).
- * LikedPhotosView reads this so a failure stays visible until the next
+ * RawRequestsView reads this so a failure stays visible until the next
  * sweep either clears or replaces it, rather than existing only as a line
  * in the Xcode console.
  */

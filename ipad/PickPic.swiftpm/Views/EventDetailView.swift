@@ -23,6 +23,9 @@ struct EventDetailView: View {
     @EnvironmentObject private var eventFolders:
     EventFolderStore
 
+    @EnvironmentObject private var rawRequestStatus:
+    RawRequestStatusStore
+
     @Environment(\.dismiss) private var dismiss
 
     /*
@@ -39,6 +42,14 @@ struct EventDetailView: View {
      */
     @State private var eventJobsState:
     [UploadJob] = []
+
+    /*
+     * Mirrors rawRequestStatus for this event, for the same #315 reason
+     * as eventJobsState above: it drives the primary action, which has to
+     * update while this column sits unfocused beside Affinity Photo.
+     */
+    @State private var rawDeliveryFailure:
+    RawRequestStatusStore.Failure?
 
     @State private var showingRenameEvent = false
     @State private var showingDeleteConfirmation = false
@@ -66,15 +77,6 @@ struct EventDetailView: View {
     @State private var showingDeleteError = false
     @State private var deleteErrorMessage = ""
 
-    @State private var showingStopOfferingRawsConfirmation = false
-    @State private var isStoppingOfferingRaws = false
-    @State private var showingStopOfferingRawsError = false
-    @State private var stopOfferingRawsErrorMessage = ""
-
-    @State private var isUpdatingRawRequestsEnabled = false
-    @State private var showingRawRequestsEnabledError = false
-    @State private var rawRequestsEnabledErrorMessage = ""
-    
     @State private var isUpdatingStatus = false
     @State private var showingArchiveConfirmation = false
     @State private var showingStatusError = false
@@ -137,6 +139,7 @@ struct EventDetailView: View {
     private enum PrimaryAction {
         case importPhotos
         case continueUpload
+        case resolveRawRequests
         case uploadReadyFinals
         case reviewLiked
         case publish
@@ -148,6 +151,9 @@ struct EventDetailView: View {
 
             case .continueUpload:
                 return "Continue Upload"
+
+            case .resolveRawRequests:
+                return "Resolve RAW Requests"
 
             case .uploadReadyFinals:
                 return "Upload Ready Finals"
@@ -168,6 +174,9 @@ struct EventDetailView: View {
             case .continueUpload:
                 return "clock.arrow.circlepath"
 
+            case .resolveRawRequests:
+                return "exclamationmark.triangle.fill"
+
             case .uploadReadyFinals:
                 return "bolt.circle.fill"
 
@@ -187,6 +196,9 @@ struct EventDetailView: View {
             case .continueUpload:
                 return "This event has uploads that have not finished."
 
+            case .resolveRawRequests:
+                return "A requested original could not be sent."
+
             case .uploadReadyFinals:
                 return "Edited files are waiting in the Edited folder."
 
@@ -202,6 +214,15 @@ struct EventDetailView: View {
     private var primaryAction: PrimaryAction? {
         if unfinishedEventJobCount > 0 {
             return .continueUpload
+        }
+
+        /*
+         * Only a failure, never a merely pending request (#373): delivery
+         * is automatic, so pending is not something to act on -- but a
+         * missing file or a failed upload will not fix itself.
+         */
+        if rawDeliveryFailure != nil {
+            return .resolveRawRequests
         }
 
         if eventJobs.isEmpty,
@@ -316,6 +337,7 @@ struct EventDetailView: View {
                     .foregroundStyle(.white)
 
                 case .continueUpload,
+                        .resolveRawRequests,
                         .uploadReadyFinals,
                         .reviewLiked,
                         .publish:
@@ -353,6 +375,46 @@ struct EventDetailView: View {
         )
     }
 
+    private var rawRequestsDestination: some View {
+        RawRequestsView(
+            event: event
+        ) { updatedEvent in
+            event = updatedEvent
+
+            onEventUpdated(updatedEvent)
+        }
+    }
+
+    /*
+     * Always shown rather than only while requests are on (#373): the
+     * on/off switch lives behind this row, so hiding it when requests are
+     * off would leave no way to turn them back on. "Off" stands in for
+     * the count instead.
+     */
+    @ViewBuilder
+    private var rawRequestsBadge: some View {
+        if rawDeliveryFailure != nil {
+            Image(
+                systemName:
+                    "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(.orange)
+        } else if !(event.rawRequestsEnabled ?? true) {
+            Text("Off")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else if
+            let pendingCount =
+                dashboardStatistics?
+                .pendingRawRequestCount,
+            pendingCount > 0
+        {
+            Text("\(pendingCount)")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+        }
+    }
+
     @ViewBuilder
     private func primaryDestination(
         for action: PrimaryAction
@@ -367,6 +429,9 @@ struct EventDetailView: View {
 
         case .continueUpload:
             UploadQueueView(event: event)
+
+        case .resolveRawRequests:
+            rawRequestsDestination
 
         case .uploadReadyFinals:
             FinalUploadsView(
@@ -412,6 +477,27 @@ struct EventDetailView: View {
             .onReceive(uploadQueue.$jobs) { jobs in
                 eventJobsState = jobs.filter { job in
                     job.eventID == event.id
+                }
+            }
+            .onReceive(
+                rawRequestStatus.$failuresByEventID
+            ) { failures in
+                rawDeliveryFailure = failures[event.id]
+            }
+            /*
+             * A delivery lowers the pending count on the RAW Requests row,
+             * and the sweep that makes it never otherwise touches this
+             * screen's dashboard.
+             */
+            .onReceive(
+                RawDeliveryProgress.shared.$lastDelivery
+            ) { delivery in
+                guard delivery?.eventID == event.id else {
+                    return
+                }
+
+                Task {
+                    await loadDashboard()
                 }
             }
             /*
@@ -651,46 +737,6 @@ struct EventDetailView: View {
             }
 
         return coreAlertedEventList
-            .alert(
-                "Stop Offering Originals for \(event.title)?",
-                isPresented:
-                    $showingStopOfferingRawsConfirmation
-            ) {
-                Button(
-                    "Stop Offering Originals",
-                    role: .destructive
-                ) {
-                    Task {
-                        await stopOfferingRawRequests()
-                    }
-                }
-
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text(
-                    """
-                    This cancels every pending RAW delivery for this event and \
-                    frees the storage now, regardless of collection status. \
-                    Requests stay off until you turn them back on.
-                    """
-                )
-            }
-            .alert(
-                "Unable to Stop Offering Originals",
-                isPresented: $showingStopOfferingRawsError
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(stopOfferingRawsErrorMessage)
-            }
-            .alert(
-                "Unable to Update RAW Requests",
-                isPresented: $showingRawRequestsEnabledError
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(rawRequestsEnabledErrorMessage)
-            }
     }
 
     @ViewBuilder
@@ -798,8 +844,6 @@ struct EventDetailView: View {
                 }
             }
             
-            rawRequestsSection
-
             manageEventSection
         }
     }
@@ -1402,6 +1446,22 @@ struct EventDetailView: View {
             }
 
             NavigationLink {
+                rawRequestsDestination
+            } label: {
+                HStack {
+                    Label(
+                        "RAW Requests",
+                        systemImage:
+                            "tray.and.arrow.up"
+                    )
+
+                    Spacer()
+
+                    rawRequestsBadge
+                }
+            }
+
+            NavigationLink {
                 FinalUploadsView(
                     event: event,
                     automaticallyUploadReadyFinals: true
@@ -1504,123 +1564,6 @@ struct EventDetailView: View {
                 folder, To Edit, and Edited folders are not changed.
                 """
             )
-        }
-    }
-
-    @ViewBuilder
-    private var rawRequestsSection: some View {
-        Section {
-            Toggle(
-                "Allow Viewers to Request Originals",
-                isOn: rawRequestsEnabledBinding
-            )
-            .disabled(isUpdatingRawRequestsEnabled)
-
-            Button {
-                showingStopOfferingRawsConfirmation = true
-            } label: {
-                Label(
-                    "Stop Offering Originals",
-                    systemImage: "stop.circle"
-                )
-            }
-            .disabled(isStoppingOfferingRaws)
-        } header: {
-            Text("RAW Requests")
-        } footer: {
-            Text(
-                """
-                Turning requests off does not take back a RAW already \
-                delivered to a viewer -- use Stop Offering Originals \
-                below to also cancel every pending delivery and free \
-                all storage for this event now, regardless of \
-                collection status. Both are reversible: turn requests \
-                back on and the next request re-uploads.
-                """
-            )
-        }
-    }
-
-    /*
-     * event.rawRequestsEnabled is optional (nil until the server has been
-     * asked at least once, see PickPicEvent), so this reads nil as "on" --
-     * the same default the model documents -- rather than exposing the
-     * optionality to the Toggle, and writes go through
-     * setRawRequestsEnabled(_:) so a failed request reverts the switch.
-     */
-    private var rawRequestsEnabledBinding: Binding<Bool> {
-        Binding(
-            get: { event.rawRequestsEnabled ?? true },
-            set: { newValue in
-                Task {
-                    await setRawRequestsEnabled(newValue)
-                }
-            }
-        )
-    }
-
-    private func setRawRequestsEnabled(
-        _ enabled: Bool
-    ) async {
-        guard !isUpdatingRawRequestsEnabled else {
-            return
-        }
-
-        isUpdatingRawRequestsEnabled = true
-
-        defer {
-            isUpdatingRawRequestsEnabled = false
-        }
-
-        do {
-            let client =
-            try configuration.makeClient()
-
-            let updatedEvent =
-            try await client.setRawRequestsEnabled(
-                enabled,
-                for: event.id
-            )
-
-            event = updatedEvent
-            onEventUpdated(updatedEvent)
-        } catch {
-            rawRequestsEnabledErrorMessage =
-            error.localizedDescription
-
-            showingRawRequestsEnabledError = true
-        }
-    }
-
-    private func stopOfferingRawRequests() async {
-        guard !isStoppingOfferingRaws else {
-            return
-        }
-
-        isStoppingOfferingRaws = true
-
-        defer {
-            isStoppingOfferingRaws = false
-        }
-
-        do {
-            let client =
-            try configuration.makeClient()
-
-            let updatedEvent =
-            try await client.stopOfferingRawRequests(
-                eventID: event.id
-            )
-
-            event = updatedEvent
-            onEventUpdated(updatedEvent)
-
-            await loadDashboard()
-        } catch {
-            stopOfferingRawsErrorMessage =
-            error.localizedDescription
-
-            showingStopOfferingRawsError = true
         }
     }
 }
