@@ -342,9 +342,22 @@ enum RawRequestSyncService {
             )
         }
 
+        /*
+         * An empty result rather than nil: nothing outstanding is an outcome
+         * the caller must record. Returning nil here left the last pass's
+         * "Delivery failed" on screen forever once its photo was deleted or
+         * its request withdrawn -- no later pass would ever report again.
+         * Nil stays reserved for a pass that was skipped.
+         */
         guard !photosNeedingRaw.isEmpty else {
             RawDeliveryProgress.shared.reset()
-            return nil
+
+            return RawRequestSyncResult(
+                uploadedPhotoCount: 0,
+                uploadedByteCount: 0,
+                missingFilenames: [],
+                failures: []
+            )
         }
 
         /*
