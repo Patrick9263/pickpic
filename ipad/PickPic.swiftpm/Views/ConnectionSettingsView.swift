@@ -45,7 +45,20 @@ struct ConnectionSettingsView: View {
     @State private var pastedLink = ""
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    @State private var errorStep = Step.request
     @State private var isWorking = false
+
+    /*
+     * Which numbered section a message is shown in. Messages used to sit in
+     * their own section at the foot of the form, and the signup fields push
+     * that below the fold -- a rejected invite code looked like a button
+     * that did nothing. Status only ever comes from step 1; an error is
+     * shown beside whichever step's action produced it.
+     */
+    private enum Step {
+        case request
+        case redeem
+    }
 
     var body: some View {
         NavigationStack {
@@ -66,26 +79,6 @@ struct ConnectionSettingsView: View {
                     }
 
                     redeemLinkSection
-                }
-
-                if let statusMessage {
-                    Section {
-                        Label(
-                            statusMessage,
-                            systemImage: "envelope"
-                        )
-                        .font(.footnote)
-                    }
-                }
-
-                if let errorMessage {
-                    Section {
-                        Label(
-                            errorMessage,
-                            systemImage: "exclamationmark.triangle"
-                        )
-                        .foregroundStyle(.red)
-                    }
                 }
             }
             .navigationTitle("PickPic Account")
@@ -250,6 +243,27 @@ struct ConnectionSettingsView: View {
                     ).isEmpty
                 }
             )
+
+            messages(for: .request)
+        }
+    }
+
+    @ViewBuilder
+    private func messages(for step: Step) -> some View {
+        if step == .request, let statusMessage {
+            Label(
+                statusMessage,
+                systemImage: "envelope"
+            )
+            .font(.footnote)
+        }
+
+        if errorStep == step, let errorMessage {
+            Label(
+                errorMessage,
+                systemImage: "exclamationmark.triangle"
+            )
+            .foregroundStyle(.red)
         }
     }
 
@@ -274,6 +288,8 @@ struct ConnectionSettingsView: View {
                     in: .whitespacesAndNewlines
                 ).isEmpty
             )
+
+            messages(for: .request)
         }
     }
 
@@ -315,6 +331,8 @@ struct ConnectionSettingsView: View {
                 ).isEmpty
             )
 
+            messages(for: .redeem)
+
             Text(
                 """
                 Tapping the link in the email signs this iPad in directly. \
@@ -347,6 +365,7 @@ struct ConnectionSettingsView: View {
         )
 
         guard !trimmed.isEmpty else {
+            errorStep = .request
             errorMessage = APIConfigurationError
                 .missingEmail
                 .localizedDescription
@@ -373,6 +392,7 @@ struct ConnectionSettingsView: View {
             way. Copy the link from the email and paste it below.
             """
         } catch {
+            errorStep = .request
             errorMessage = error.localizedDescription
         }
 
@@ -421,6 +441,7 @@ struct ConnectionSettingsView: View {
 
             inviteCode = ""
         } catch {
+            errorStep = .request
             errorMessage = error.localizedDescription
         }
 
@@ -469,10 +490,13 @@ struct ConnectionSettingsView: View {
             statusMessage = nil
             mode = .signIn
 
+            // Shown at step 1, where the sign-in link it asks for is sent.
+            errorStep = .request
             errorMessage = AuthClientError
                 .accountCreatedButNotSignedIn
                 .localizedDescription
         } catch {
+            errorStep = .redeem
             errorMessage = error.localizedDescription
         }
 
