@@ -92,76 +92,8 @@ extension SessionCredential {
     /** Matches worker/session.ts's SESSION_COOKIE_NAME. */
     static let cookieName = "__Host-pickpic_session"
 
-    /*
-     * The base64url alphabet generateAuthToken emits. Used to find where a
-     * token ends inside pasted text, so a trailing "&foo=bar", a quotation
-     * mark a mail client wrapped the link in, or a newline does not become
-     * part of the token.
-     */
-    private static let tokenCharacters = CharacterSet(
-        charactersIn:
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-    )
-
-    /*
-     * Pulls the sign-in token out of whatever the operator managed to paste.
-     *
-     * There is no universal link and no custom URL scheme here, so the way a
-     * token reaches this app is that someone long-presses the link in Mail,
-     * copies it, and pastes it in. In practice that clipboard can hold the
-     * bare URL, the URL wrapped in punctuation, several lines of quoted email
-     * body around it, or -- if they copied from a page rather than a link --
-     * just the token. All four have to work, because the alternative is an
-     * operator who cannot sign in staring at a field that says "invalid".
-     *
-     * The last occurrence wins: a quoted reply chain repeats the older link
-     * above the newest one, and only the newest is unconsumed.
-     */
     static func token(fromPastedText text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-
-        if let queryRange = trimmed.range(
-            of: "token=",
-            options: .backwards
-        ) {
-            return normalizedToken(
-                String(trimmed[queryRange.upperBound...])
-            )
-        }
-
-        /*
-         * No query string at all, so this is either a bare token or something
-         * that was never a sign-in link. Anything containing a scheme or
-         * whitespace is the latter -- returning it would send junk to the
-         * consume endpoint and report "expired or already used", which is a
-         * misleading thing to tell someone who pasted the wrong thing.
-         */
-        guard
-            !trimmed.contains("://"),
-            trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
-        else {
-            return nil
-        }
-
-        return normalizedToken(trimmed)
-    }
-
-    private static func normalizedToken(
-        _ candidate: String
-    ) -> String? {
-        let token = String(
-            candidate.prefix { character in
-                character.unicodeScalars.allSatisfy(
-                    tokenCharacters.contains
-                )
-            }
-        )
-
-        return token.isEmpty ? nil : token
+        AuthLink(pastedText: text)?.token
     }
 
     /*
@@ -232,6 +164,169 @@ extension SessionCredential {
     }
 }
 
+/*
+ * Which consume endpoint a token belongs to. The token itself carries no
+ * marker -- both kinds are the same 32 random bytes from generateAuthToken --
+ * so the only signal is the path of the link it arrived in.
+ */
+enum AuthLinkKind: Equatable, Sendable {
+    /** /sign-in, redeemed at /api/auth/magic-link/consume. */
+    case signIn
+
+    /** /sign-up, redeemed at /api/auth/signup/consume. */
+    case signUp
+
+    /*
+     * A bare token, or a link whose path is neither. AuthClient.redeem(_:)
+     * tries sign-in first and then signup, which is safe because a consume
+     * handed the other kind's token finds no row and writes nothing.
+     */
+    case unknown
+}
+
+struct AuthLink: Equatable, Sendable {
+    let token: String
+    let kind: AuthLinkKind
+
+    init(token: String, kind: AuthLinkKind) {
+        self.token = token
+        self.kind = kind
+    }
+
+    /*
+     * Pulls the token, and the kind of link it came in, out of whatever the
+     * operator managed to paste -- or out of a universal link's absoluteString,
+     * which goes through the same parse so the two paths cannot disagree.
+     *
+     * A link in Safari rather than this app is copied out of Mail and pasted.
+     * In practice that clipboard can hold the bare URL, the URL wrapped in
+     * punctuation, several lines of quoted email body around it, or -- if they
+     * copied from a page rather than a link -- just the token. All four have to
+     * work, because the alternative is an operator who cannot sign in staring
+     * at a field that says "invalid".
+     *
+     * The last occurrence wins: a quoted reply chain repeats the older link
+     * above the newest one, and only the newest is unconsumed. The kind is read
+     * from that same occurrence, so a reply quoting a sign-in link above a
+     * newer sign-up link routes to signup.
+     */
+    init?(pastedText text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        if let queryRange = trimmed.range(
+            of: "token=",
+            options: .backwards
+        ) {
+            guard
+                let token = Self.normalizedToken(
+                    String(trimmed[queryRange.upperBound...])
+                )
+            else {
+                return nil
+            }
+
+            self.init(
+                token: token,
+                kind: Self.kind(
+                    ofLinkBefore: trimmed[..<queryRange.lowerBound]
+                )
+            )
+
+            return
+        }
+
+        /*
+         * No query string at all, so this is either a bare token or something
+         * that was never a sign-in link. Anything containing a scheme or
+         * whitespace is the latter -- returning it would send junk to the
+         * consume endpoint and report "expired or already used", which is a
+         * misleading thing to tell someone who pasted the wrong thing.
+         */
+        guard
+            !trimmed.contains("://"),
+            trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil
+        else {
+            return nil
+        }
+
+        guard let token = Self.normalizedToken(trimmed) else {
+            return nil
+        }
+
+        self.init(token: token, kind: .unknown)
+    }
+
+    /*
+     * Reads the path immediately before the query that holds "token=". Only
+     * the end of the path is compared, so the scheme, host and any punctuation
+     * a mail client wrapped around the URL do not matter. The query between
+     * "?" and "token=" has to be free of whitespace, or the "?" belongs to some
+     * other line of the pasted text and says nothing about this token.
+     */
+    private static func kind(
+        ofLinkBefore prefix: Substring
+    ) -> AuthLinkKind {
+        guard let questionMark = prefix.lastIndex(of: "?") else {
+            return .unknown
+        }
+
+        let leadingQuery = prefix[prefix.index(after: questionMark)...]
+
+        guard
+            leadingQuery.rangeOfCharacter(
+                from: .whitespacesAndNewlines
+            ) == nil
+        else {
+            return .unknown
+        }
+
+        var path = prefix[..<questionMark]
+
+        if path.hasSuffix("/") {
+            path = path.dropLast()
+        }
+
+        if path.hasSuffix("/sign-up") {
+            return .signUp
+        }
+
+        if path.hasSuffix("/sign-in") {
+            return .signIn
+        }
+
+        return .unknown
+    }
+
+    /*
+     * The base64url alphabet generateAuthToken emits. Used to find where a
+     * token ends inside pasted text, so a trailing "&foo=bar", a quotation
+     * mark a mail client wrapped the link in, or a newline does not become
+     * part of the token.
+     */
+    private static let tokenCharacters = CharacterSet(
+        charactersIn:
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    )
+
+    private static func normalizedToken(
+        _ candidate: String
+    ) -> String? {
+        let token = String(
+            candidate.prefix { character in
+                character.unicodeScalars.allSatisfy(
+                    tokenCharacters.contains
+                )
+            }
+        )
+
+        return token.isEmpty ? nil : token
+    }
+}
+
 extension URL {
     /*
      * The value an Origin header has to carry to satisfy the worker's
@@ -261,6 +356,7 @@ enum AuthClientError: LocalizedError {
     case invalidResponse
     case missingSessionCookie
     case invalidSignInLink
+    case accountCreatedButNotSignedIn
     case server(statusCode: Int, message: String)
 
     var errorDescription: String? {
@@ -276,8 +372,15 @@ enum AuthClientError: LocalizedError {
 
         case .invalidSignInLink:
             return """
-            That does not look like a PickPic sign-in link. Copy the link \
-            from the email and paste it again.
+            That does not look like a PickPic link. Copy the link from the \
+            email and paste it again.
+            """
+
+        case .accountCreatedButNotSignedIn:
+            return """
+            Your PickPic account was created, but signing this iPad in \
+            failed. Request a sign-in link with the same email address to \
+            finish.
             """
 
         case let .server(statusCode, message):
@@ -322,17 +425,146 @@ struct AuthClient {
         _ = try await send(request)
     }
 
-    func signIn(withPastedLink pastedText: String) async throws
-        -> SessionCredential {
-        guard
-            let token = SessionCredential.token(
-                fromPastedText: pastedText
-            )
-        else {
+    /*
+     * The worker checks the invite code before anything else and answers ok
+     * without saying whether the address already had an account -- if it did,
+     * the email holds a sign-in link instead and accountName is ignored; if
+     * that account is disabled, nothing is sent at all. So, exactly like
+     * requestSignInLink(email:), success promises only "check your email".
+     */
+    func requestSignup(
+        inviteCode: String,
+        email: String,
+        accountName: String
+    ) async throws {
+        var request = makeRequest(path: "signup")
+        request.httpMethod = "POST"
+
+        request.httpBody = try JSONEncoder().encode(
+            [
+                "inviteCode": inviteCode,
+                "email": email,
+                "accountName": accountName,
+            ]
+        )
+
+        _ = try await send(request)
+    }
+
+    func redeem(pastedText: String) async throws -> AuthRedemption {
+        guard let link = AuthLink(pastedText: pastedText) else {
             throw AuthClientError.invalidSignInLink
         }
 
-        var request = makeRequest(path: "magic-link/consume")
+        return try await redeem(link)
+    }
+
+    func redeem(_ link: AuthLink) async throws -> AuthRedemption {
+        switch link.kind {
+        case .signIn:
+            return .signedIn(try await consumeSignInToken(link.token))
+
+        case .signUp:
+            return .signedUp(try await consumeSignupToken(link.token))
+
+        case .unknown:
+            /*
+             * Sign-in first because it is by far the more common link. A
+             * consume handed the other kind's token finds no row and returns
+             * 400 before writing anything (worker/auth.ts, consumeMagicLink
+             * and consumeSignup), so trying both costs one round trip and
+             * cannot spend or damage either kind.
+             */
+            do {
+                return .signedIn(try await consumeSignInToken(link.token))
+            } catch let signInError
+                where Self.mayBeTheOtherKindOfToken(signInError) {
+                do {
+                    return .signedUp(
+                        try await consumeSignupToken(link.token)
+                    )
+                } catch let signupError
+                    where Self.mayBeTheOtherKindOfToken(signupError)
+                        || Self.isSignupUnavailable(signupError) {
+                    /*
+                     * Neither endpoint knew the token, or signup is switched
+                     * off. Most bare tokens are sign-in tokens, so that
+                     * endpoint's "expired or already used" is the more
+                     * likely-true thing to say.
+                     */
+                    throw signInError
+                }
+            }
+        }
+    }
+
+    /*
+     * A 400 is what both consume endpoints answer for a token they have no
+     * row for -- the only case worth retrying against the other endpoint.
+     * Anything else (a 409, a 500, no network) is a real answer about this
+     * token or this connection and must surface as-is.
+     */
+    static func mayBeTheOtherKindOfToken(_ error: Error) -> Bool {
+        guard case AuthClientError.server(400, _) = error else {
+            return false
+        }
+
+        return true
+    }
+
+    static func isSignupUnavailable(_ error: Error) -> Bool {
+        guard case AuthClientError.server(503, _) = error else {
+            return false
+        }
+
+        return true
+    }
+
+    /*
+     * consumeSignup has two 500s and only one of them means "try again":
+     * the other is the account having been created with the session that
+     * should follow it failing to start. They differ only in their message,
+     * so this matches the message -- a server rewording falls back to
+     * showing the worker's own text, which also tells the user to sign in,
+     * so the cost of this breaking is a less tailored message, not a wrong
+     * one.
+     */
+    static func isAccountCreatedButNotSignedIn(
+        statusCode: Int,
+        message: String
+    ) -> Bool {
+        statusCode == 500 && message.hasPrefix("Your account is ready")
+    }
+
+    private func consumeSignupToken(
+        _ token: String
+    ) async throws -> SessionCredential {
+        do {
+            return try await consume(token, path: "signup/consume")
+        } catch let AuthClientError.server(statusCode, message)
+            where Self.isAccountCreatedButNotSignedIn(
+                statusCode: statusCode,
+                message: message
+            ) {
+            throw AuthClientError.accountCreatedButNotSignedIn
+        }
+    }
+
+    private func consumeSignInToken(
+        _ token: String
+    ) async throws -> SessionCredential {
+        try await consume(token, path: "magic-link/consume")
+    }
+
+    /*
+     * Both consume endpoints take the same body and answer with the same
+     * Set-Cookie, so one implementation serves both.
+     */
+    private func consume(
+        _ token: String,
+        path: String
+    ) async throws -> SessionCredential {
+        var request = makeRequest(path: path)
         request.httpMethod = "POST"
 
         request.httpBody = try JSONEncoder().encode(
@@ -503,6 +735,89 @@ struct AuthClient {
         }
 
         return (data, httpResponse)
+    }
+}
+
+enum AuthRedemption: Sendable {
+    case signedIn(SessionCredential)
+
+    /** A brand-new account, so it has no events yet. */
+    case signedUp(SessionCredential)
+
+    var credential: SessionCredential {
+        switch self {
+        case let .signedIn(credential), let .signedUp(credential):
+            return credential
+        }
+    }
+
+    var feedbackTitle: String {
+        switch self {
+        case .signedIn:
+            return "Signed in"
+
+        case .signedUp:
+            return "Account created"
+        }
+    }
+
+    /*
+     * A new account's event list is empty, which on its own reads like the
+     * sign-in went to the wrong place. Saying so up front is the difference
+     * between "nothing here yet" and "something is broken".
+     */
+    var feedbackDetail: String {
+        switch self {
+        case let .signedIn(credential):
+            return credential.accountName.map { "Signed in to \($0)." }
+                ?? "This iPad is now signed in to PickPic."
+
+        case let .signedUp(credential):
+            let name = credential.accountName.map { "\($0) is" }
+                ?? "Your account is"
+
+            return "\(name) ready. It's empty for now — create your first event to start uploading."
+        }
+    }
+}
+
+extension AuthLink {
+    /*
+     * The question asked before a link replaces the account this iPad is
+     * already signed in to. Nothing is redeemed until it is answered, so
+     * declining leaves the link unused and still valid.
+     *
+     * Queued uploads carry the old account's event ids, which mean nothing
+     * to any other account, so they cannot continue until the iPad is signed
+     * back in to the account they came from.
+     */
+    func accountSwitchMessage(
+        currentAccount: String?,
+        unfinishedUploads: Int
+    ) -> String {
+        let current = currentAccount ?? "another PickPic account"
+
+        let action: String
+
+        switch kind {
+        case .signUp:
+            action = "This link creates a new account and switches this iPad to it."
+
+        case .signIn, .unknown:
+            action = "This link signs this iPad in to a different account."
+        }
+
+        var message = "This iPad is signed in to \(current). \(action)"
+
+        if unfinishedUploads > 0 {
+            let uploads = unfinishedUploads == 1
+                ? "1 unfinished upload belongs"
+                : "\(unfinishedUploads) unfinished uploads belong"
+
+            message += " \(uploads) to \(current) and can't upload while this iPad is signed in to another account."
+        }
+
+        return message
     }
 }
 

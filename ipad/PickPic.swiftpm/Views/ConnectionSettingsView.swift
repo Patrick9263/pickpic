@@ -15,6 +15,11 @@ import SwiftUI
  * and pastes it here, and the app redeems it itself rather than letting
  * Safari redeem it into a browser session this app could never read.
  *
+ * Creating an account works the same way: POST /api/auth/signup emails a
+ * /sign-up link, and that link -- tapped or pasted -- redeems here at
+ * /api/auth/signup/consume. The invite code is typed by the operator and
+ * never stored, so it exists nowhere in the app or the repository.
+ *
  * Sign in with Apple, which the worker already implements for the web app,
  * would remove the paste step too but needs a native endpoint that accepts an
  * identity token minted for the app's bundle id rather than the web Services
@@ -24,9 +29,19 @@ import SwiftUI
 struct ConnectionSettingsView: View {
     @ObservedObject var configuration: APIConfigurationStore
 
+    @EnvironmentObject private var feedback: AppFeedbackStore
+
     @Environment(\.dismiss) private var dismiss
 
+    private enum Mode: Hashable {
+        case signIn
+        case signUp
+    }
+
+    @State private var mode = Mode.signIn
     @State private var email = ""
+    @State private var inviteCode = ""
+    @State private var studioName = ""
     @State private var pastedLink = ""
     @State private var statusMessage: String?
     @State private var errorMessage: String?
@@ -40,7 +55,16 @@ struct ConnectionSettingsView: View {
                 if configuration.isConfigured {
                     signedInSection
                 } else {
-                    requestLinkSection
+                    modeSection
+
+                    switch mode {
+                    case .signIn:
+                        requestLinkSection
+
+                    case .signUp:
+                        signupSection
+                    }
+
                     redeemLinkSection
                 }
 
@@ -164,6 +188,71 @@ struct ConnectionSettingsView: View {
         }
     }
 
+    private var modeSection: some View {
+        Section {
+            /*
+             * Messages are cleared here, on the operator's own switch, rather
+             * than in an onChange(of: mode) -- signIn() also changes the mode
+             * to steer a half-finished signup towards sign-in, and an
+             * onChange would then wipe the error explaining why.
+             */
+            Picker(
+                "Account",
+                selection: Binding(
+                    get: { mode },
+                    set: { newMode in
+                        mode = newMode
+                        statusMessage = nil
+                        errorMessage = nil
+                    }
+                )
+            ) {
+                Text("Sign In").tag(Mode.signIn)
+                Text("Create Account").tag(Mode.signUp)
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private var signupSection: some View {
+        Section("1. Create your account") {
+            TextField(
+                "Invite code",
+                text: $inviteCode
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+
+            TextField(
+                "Email address",
+                text: $email
+            )
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .keyboardType(.emailAddress)
+            .textContentType(.emailAddress)
+
+            TextField(
+                "Studio name",
+                text: $studioName
+            )
+            .textContentType(.organizationName)
+
+            Button("Email Me a Sign-Up Link") {
+                Task {
+                    await requestSignup()
+                }
+            }
+            .disabled(
+                [inviteCode, email, studioName].contains { field in
+                    field.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty
+                }
+            )
+        }
+    }
+
     private var requestLinkSection: some View {
         Section("1. Email yourself a sign-in link") {
             TextField(
@@ -191,7 +280,7 @@ struct ConnectionSettingsView: View {
     private var redeemLinkSection: some View {
         Section("2. Tap the link in the email") {
             TextField(
-                "https://app.pickpic.photos/sign-in?token=…",
+                "Paste the link from the email",
                 text: $pastedLink,
                 axis: .vertical
             )
@@ -215,7 +304,7 @@ struct ConnectionSettingsView: View {
                 }
             }
 
-            Button("Sign In") {
+            Button(mode == .signUp ? "Create Account" : "Sign In") {
                 Task {
                     await signIn()
                 }
@@ -230,8 +319,9 @@ struct ConnectionSettingsView: View {
                 """
                 Tapping the link in the email signs this iPad in directly. \
                 If it opens Safari instead of PickPic, press and hold the \
-                link, choose Copy Link, and paste it above. Links expire \
-                15 minutes after they are sent and work only once.
+                link, choose Copy Link, and paste it above. Sign-in links \
+                expire after 15 minutes and sign-up links after 30, and \
+                each works only once.
                 """
             )
             .font(.footnote)
@@ -289,6 +379,54 @@ struct ConnectionSettingsView: View {
         isWorking = false
     }
 
+    private func requestSignup() async {
+        // Same re-entrancy guard as requestLink() below.
+        guard !isWorking else {
+            return
+        }
+
+        let trimmedEmail = email.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+
+        isWorking = true
+        errorMessage = nil
+        statusMessage = nil
+
+        do {
+            try await configuration
+                .makeAuthClient()
+                .requestSignup(
+                    inviteCode: inviteCode.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ),
+                    email: trimmedEmail,
+                    accountName: studioName.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    )
+                )
+
+            /*
+             * Worded to be true in all three cases the worker answers ok for:
+             * a new address gets a sign-up link, one with an active account
+             * gets a sign-in link instead, and a disabled account gets
+             * nothing. Promising "confirm your new account" would be wrong
+             * for the last two.
+             */
+            statusMessage = """
+            Check your email at \(trimmedEmail). If the address already has \
+            a PickPic account, the email holds a sign-in link instead. Tap \
+            the link, or copy it and paste it below.
+            """
+
+            inviteCode = ""
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+
+        isWorking = false
+    }
+
     private func signIn() async {
         /*
          * Same re-entrancy window as requestLink() above, and worse here: a
@@ -305,16 +443,35 @@ struct ConnectionSettingsView: View {
         errorMessage = nil
 
         do {
-            let credential = try await configuration
+            let redemption = try await configuration
                 .makeAuthClient()
-                .signIn(withPastedLink: pastedLink)
+                .redeem(pastedText: pastedLink)
 
-            try configuration.save(credential)
+            try configuration.save(redemption.credential)
 
             pastedLink = ""
             statusMessage = nil
 
+            feedback.show(
+                title: redemption.feedbackTitle,
+                detail: redemption.feedbackDetail,
+                systemImage: "checkmark.circle.fill"
+            )
+
             dismiss()
+        } catch AuthClientError.accountCreatedButNotSignedIn {
+            /*
+             * The account exists and the link is spent, so the only way in
+             * is a sign-in link. Switching the form there, with the address
+             * already filled in when this view knows it, makes that one tap.
+             */
+            pastedLink = ""
+            statusMessage = nil
+            mode = .signIn
+
+            errorMessage = AuthClientError
+                .accountCreatedButNotSignedIn
+                .localizedDescription
         } catch {
             errorMessage = error.localizedDescription
         }

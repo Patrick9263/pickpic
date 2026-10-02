@@ -101,12 +101,15 @@ describe("buildAppleAppSiteAssociation", () => {
     );
   });
 
-  it("scopes paths to /sign-in* so it doesn't capture every gallery URL", () => {
+  it("scopes paths to /sign-in* and /sign-up* so it doesn't capture every gallery URL", () => {
     const association = buildAppleAppSiteAssociation({
       APPLE_TEAM_ID: "TEAM123456",
     });
 
-    expect(association?.applinks.details[0]?.paths).toEqual(["/sign-in*"]);
+    expect(association?.applinks.details[0]?.paths).toEqual([
+      "/sign-in*",
+      "/sign-up*",
+    ]);
   });
 
   it("trims the surrounding whitespace a pasted secret arrives with", () => {

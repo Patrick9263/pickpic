@@ -95,6 +95,155 @@ struct SessionCredentialTests {
         #expect(SessionCredential.token(fromPastedText: pasted) == nil)
     }
 
+    /*
+     * The token says nothing about which consume endpoint it belongs to, so
+     * the link's path is the only routing signal -- and a wrong route is
+     * reported as "expired or already used" for a link that is still good.
+     */
+    @Test(arguments: [
+        ("https://app.pickpic.photos/sign-in?token=abc", AuthLinkKind.signIn),
+        ("https://app.pickpic.photos/sign-up?token=abc", .signUp),
+        ("https://app.pickpic.photos/sign-up/?token=abc", .signUp),
+        ("https://app.pickpic.photos/sign-up?ref=mail&token=abc", .signUp),
+        ("<https://app.pickpic.photos/sign-up?token=abc>.", .signUp),
+        ("\"https://app.pickpic.photos/sign-in?token=abc\"", .signIn),
+        ("https://app.pickpic.photos/?token=abc", .unknown),
+        ("https://app.pickpic.photos/g/share?token=abc", .unknown),
+        ("abc", .unknown),
+    ])
+    func classifiesALinkByItsPath(
+        pasted: String,
+        kind: AuthLinkKind
+    ) {
+        #expect(
+            AuthLink(pastedText: pasted)
+                == AuthLink(token: "abc", kind: kind)
+        )
+    }
+
+    @Test
+    func classifiesASignupLinkInsideQuotedEmailText() {
+        #expect(
+            AuthLink(
+                pastedText: """
+                Confirm your PickPic account:
+                > https://app.pickpic.photos/sign-up?token=abc
+                This link expires in 30 minutes.
+                """
+            ) == AuthLink(token: "abc", kind: .signUp)
+        )
+    }
+
+    /*
+     * The kind comes from the same, last, occurrence as the token -- a
+     * reply quoting an old sign-in link above a newer sign-up link must
+     * route to signup.
+     */
+    @Test
+    func takesTheKindFromTheLastLink() {
+        #expect(
+            AuthLink(
+                pastedText: """
+                https://app.pickpic.photos/sign-in?token=olderTOKEN
+                https://app.pickpic.photos/sign-up?token=newerTOKEN
+                """
+            ) == AuthLink(token: "newerTOKEN", kind: .signUp)
+        )
+    }
+
+    /*
+     * A "?" on an earlier line is not this token's query, so it must not
+     * lend this token a path.
+     */
+    @Test
+    func ignoresAQuestionMarkFromAnotherLine() {
+        #expect(
+            AuthLink(
+                pastedText: """
+                Did you mean https://app.pickpic.photos/sign-up?
+                token=abc
+                """
+            ) == AuthLink(token: "abc", kind: .unknown)
+        )
+    }
+
+    @Test(arguments: [
+        "",
+        "https://app.pickpic.photos/sign-up",
+        "https://app.pickpic.photos/sign-up?token=",
+        "not a token at all",
+    ])
+    func rejectsLinksThatCarryNoToken(pasted: String) {
+        #expect(AuthLink(pastedText: pasted) == nil)
+    }
+
+    @Test
+    func retriesOnlyAnUnknownTokenAgainstTheOtherEndpoint() {
+        #expect(
+            AuthClient.mayBeTheOtherKindOfToken(
+                AuthClientError.server(statusCode: 400, message: "Expired.")
+            )
+        )
+
+        for error: Error in [
+            AuthClientError.server(statusCode: 409, message: "Exists."),
+            AuthClientError.server(statusCode: 500, message: "Oops."),
+            AuthClientError.invalidResponse,
+            URLError(.notConnectedToInternet),
+        ] {
+            #expect(!AuthClient.mayBeTheOtherKindOfToken(error))
+        }
+    }
+
+    @Test
+    func recognisesAnAccountCreatedWithoutASession() {
+        #expect(
+            AuthClient.isAccountCreatedButNotSignedIn(
+                statusCode: 500,
+                message: """
+                Your account is ready, but signing you in failed. Open the \
+                sign-in page and enter your email.
+                """
+            )
+        )
+
+        // The other 500 consumeSignup returns means nothing was created.
+        #expect(
+            !AuthClient.isAccountCreatedButNotSignedIn(
+                statusCode: 500,
+                message: "Your account could not be created. Try again."
+            )
+        )
+    }
+
+    @Test
+    func namesTheAccountAndStrandedUploadsBeforeSwitching() {
+        let link = AuthLink(token: "abc", kind: .signUp)
+
+        let message = link.accountSwitchMessage(
+            currentAccount: "Studio A",
+            unfinishedUploads: 3
+        )
+
+        #expect(message.contains("signed in to Studio A"))
+        #expect(message.contains("creates a new account"))
+        #expect(message.contains("3 unfinished uploads belong to Studio A"))
+
+        #expect(
+            link.accountSwitchMessage(
+                currentAccount: "Studio A",
+                unfinishedUploads: 1
+            ).contains("1 unfinished upload belongs")
+        )
+
+        #expect(
+            !AuthLink(token: "abc", kind: .signIn).accountSwitchMessage(
+                currentAccount: nil,
+                unfinishedUploads: 0
+            ).contains("upload")
+        )
+    }
+
     @Test
     func readsTheSessionCookie() {
         let receivedAt = Date(timeIntervalSince1970: 1_700_000_000)
