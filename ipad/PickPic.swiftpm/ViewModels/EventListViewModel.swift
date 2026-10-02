@@ -340,6 +340,37 @@ final class EventListViewModel:
         return true
     }
 
+    /*
+     * One event's counts, for a change made outside this view model -- a
+     * RAW delivered by the automatic sweep. refreshStatistics would refetch
+     * every event to update one. A failure keeps the old counts: the next
+     * full refresh corrects them, and this is not worth an error state.
+     */
+    func refreshStatistics(
+        for eventID: String,
+        using configuration:
+        APIConfigurationStore
+    ) async {
+        guard
+            configuration.isConfigured,
+            let client =
+                try? configuration.makeClient(),
+            let photos =
+                try? await client.fetchEventPhotos(
+                    eventID: eventID
+                )
+        else {
+            return
+        }
+
+        replaceStatistics(
+            EventPhotoStatistics(
+                photos: photos
+            ),
+            for: eventID
+        )
+    }
+
     func replaceStatistics(
         _ statistics: EventPhotoStatistics,
         for eventID: String

@@ -773,63 +773,98 @@ struct APIClient {
     }
     
     /*
-     * Delivers the original RAW for a photo a gallery viewer asked for
-     * (issue #205). Shaped like uploadFinalPhoto above, with two differences
-     * that matter.
-     *
-     * It goes through RawUploadSession rather than the shared session, so a
-     * transfer this size survives the app being backgrounded or killed. And
-     * a 413 is inspected rather than passed straight through: on a Free or
-     * Pro Cloudflare zone an oversize body never reaches the worker, so the
-     * response carries Cloudflare's HTML instead of our JSON, and reporting
-     * it as an ordinary server error would name the wrong limit.
+     * Starts, or resumes, the multipart upload of a photo's original RAW
+     * (#362/#368). Keyed on the file's sha256 and size: when both match the
+     * server's active upload for the photo, the reply lists the parts that
+     * already landed, so an upload interrupted by a drop or a relaunch picks
+     * up where it stopped. Anything else -- a source re-saved in Affinity, a
+     * session past R2's 7-day auto-abort -- starts over server-side.
      */
-    func uploadRawPhoto(
-        _ stagedUpload: StagedRawUpload,
-        to photoID: String,
-        onProgress: (@Sendable (Int64, Int64) -> Void)? =
-            nil
-    ) async throws -> RawPhotoUploadResponse {
-        let fileValues =
-        try? stagedUpload.fileURL.resourceValues(
-            forKeys: [
-                .isRegularFileKey
-            ]
+    func startRawUpload(
+        _ stagedUpload: StagedRawUpload
+    ) async throws -> RawUploadStartResponse {
+        var request = makeAdminJSONRequest(
+            url: rawUploadURL(photoID: stagedUpload.photoID)
+                .appending(path: "start")
         )
 
-        guard fileValues?.isRegularFile == true else {
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(
+            RawUploadStartRequest(
+                filename: stagedUpload.filename,
+                sha256: stagedUpload.sha256,
+                byteSize: stagedUpload.byteSize
+            )
+        )
+
+        let (data, response) =
+        try await session.data(
+            for: request
+        )
+
+        try validateJSONResponse(
+            data: data,
+            response: response
+        )
+
+        do {
+            return try makeDecoder().decode(
+                RawUploadStartResponse.self,
+                from: data
+            )
+        } catch {
+            print(
+                "RAW upload start decoding failed:",
+                error
+            )
+
+            throw APIClientError
+                .invalidRawPhotoUploadResponse
+        }
+    }
+
+    /*
+     * Sends one part of a RAW's multipart upload. It goes through
+     * RawUploadSession rather than the shared session, so the part keeps
+     * moving while the app is backgrounded or killed -- and since the
+     * server completes the upload from the request carrying the last part,
+     * nothing more is needed from the app once every part is queued.
+     *
+     * An 8 MiB part is far below Cloudflare's per-request body cap, so the
+     * edge-rejected 413 the old single PUT had to special-case cannot arise
+     * here.
+     */
+    func uploadRawPart(
+        _ stagedUpload: StagedRawUpload,
+        partNumber: Int,
+        onProgress: (@Sendable (Int64, Int64) -> Void)? =
+            nil
+    ) async throws {
+        guard
+            let partURL = stagedUpload.partURL(partNumber),
+            let partSize = stagedUpload.plan.size(
+                ofPart: partNumber
+            ),
+            (try? partURL.resourceValues(
+                forKeys: [.isRegularFileKey]
+            ))?.isRegularFile == true
+        else {
             throw APIClientError.preparedFileMissing(
                 stagedUpload.filename
             )
         }
 
-        guard
-            let encodedFilename =
-                stagedUpload.filename
-                .addingPercentEncoding(
-                    withAllowedCharacters:
-                        Self.filenameHeaderAllowed
-                )
-        else {
-            throw APIClientError.invalidUploadFilename(
-                stagedUpload.filename
-            )
-        }
-
-        let url = baseURL
-            .appending(path: "api")
-            .appending(path: "admin")
-            .appending(path: "photos")
-            .appending(path: photoID)
-            .appending(path: "raw")
-
-        var request = URLRequest(url: url)
+        var request = URLRequest(
+            url: rawUploadURL(photoID: stagedUpload.photoID)
+                .appending(path: "parts")
+                .appending(path: String(partNumber))
+        )
 
         request.httpMethod = "PUT"
 
         /*
          * The resource timeout on the background session governs how long a
-         * RAW has to finish; this only bounds the request itself.
+         * part has to finish; this only bounds the request itself.
          */
         request.timeoutInterval = 600
 
@@ -846,18 +881,7 @@ struct APIClient {
         applyCredentials(to: &request)
 
         request.setValue(
-            encodedFilename,
-            forHTTPHeaderField: "X-File-Name"
-        )
-
-        request.setValue(
-            stagedUpload.sha256,
-            forHTTPHeaderField:
-                "X-File-SHA256"
-        )
-
-        request.setValue(
-            String(stagedUpload.byteSize),
+            String(partSize),
             forHTTPHeaderField:
                 "Content-Length"
         )
@@ -865,88 +889,29 @@ struct APIClient {
         let (data, response) =
         try await RawUploadSession.shared.upload(
             request: request,
-            fromFile: stagedUpload.fileURL,
-            photoID: photoID,
+            fromFile: partURL,
+            tag: RawPartTaskTag(
+                photoID: stagedUpload.photoID,
+                partNumber: partNumber,
+                byteSize: stagedUpload.byteSize,
+                partSize: stagedUpload.partSize
+            ),
             onProgress: onProgress
         )
 
-        guard
-            let httpResponse =
-                response as? HTTPURLResponse
-        else {
-            throw APIClientError.invalidResponse
-        }
+        try validateJSONResponse(
+            data: data,
+            response: response
+        )
+    }
 
-        guard
-            (200..<300).contains(
-                httpResponse.statusCode
-            )
-        else {
-            let serverMessage =
-            try? makeDecoder().decode(
-                APIErrorResponse.self,
-                from: data
-            ).error
-
-            /*
-             * A 413 with no JSON body of ours did not come from the worker.
-             * See the note above uploadRawPhoto.
-             */
-            if
-                httpResponse.statusCode == 413,
-                serverMessage == nil
-            {
-                throw APIClientError
-                    .rawUploadRejectedByEdge(
-                        stagedUpload.filename
-                    )
-            }
-
-            let fallbackMessage =
-            HTTPURLResponse.localizedString(
-                forStatusCode:
-                    httpResponse.statusCode
-            )
-
-            throw sessionAwareError(
-                statusCode:
-                    httpResponse.statusCode,
-                message:
-                    serverMessage
-                ?? fallbackMessage
-            )
-        }
-
-        let contentType =
-        httpResponse.value(
-            forHTTPHeaderField:
-                "Content-Type"
-        )?
-            .lowercased()
-        ?? ""
-
-        guard
-            contentType.contains(
-                "application/json"
-            )
-        else {
-            throw APIClientError.unexpectedResponse
-        }
-
-        do {
-            return try makeDecoder().decode(
-                RawPhotoUploadResponse.self,
-                from: data
-            )
-        } catch {
-            print(
-                "RAW photo decoding failed:",
-                error
-            )
-
-            throw APIClientError
-                .invalidRawPhotoUploadResponse
-        }
+    private func rawUploadURL(photoID: String) -> URL {
+        baseURL
+            .appending(path: "api")
+            .appending(path: "admin")
+            .appending(path: "photos")
+            .appending(path: photoID)
+            .appending(path: "raw")
     }
 
     func uploadFinalVariants(

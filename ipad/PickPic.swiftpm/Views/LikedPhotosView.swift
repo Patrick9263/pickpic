@@ -208,6 +208,24 @@ struct LikedPhotosView: View {
                 )
             }
         }
+        /*
+         * Likewise for a RAW the automatic sweep delivered: the photo has
+         * to leave RAW Requests rather than drop back to "Waiting".
+         */
+        .onChange(
+            of: rawDeliveryProgress.lastDelivery
+        ) { _, delivery in
+            guard delivery?.eventID == event.id else {
+                return
+            }
+
+            Task {
+                await viewModel.load(
+                    eventID: event.id,
+                    using: configuration
+                )
+            }
+        }
     }
     
     private var eventFolderSection: some View {
