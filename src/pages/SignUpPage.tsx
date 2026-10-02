@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { fetchJson } from "../api";
 
 const MAX_ACCOUNT_NAME_LENGTH = 120;
@@ -9,7 +9,7 @@ function readTokenFromLocation(): string | null {
 
 function SignUpPage() {
   const [token, setToken] = useState(readTokenFromLocation);
-  const [isConsuming, setIsConsuming] = useState(token !== null);
+  const [isConsuming, setIsConsuming] = useState(false);
   const [consumeFailed, setConsumeFailed] = useState(false);
   const [accountName, setAccountName] = useState("");
   const [email, setEmail] = useState("");
@@ -19,46 +19,54 @@ function SignUpPage() {
   const [error, setError] = useState<string | null>(null);
   const consumedTokenRef = useRef<string | null>(null);
 
-  useEffect(() => {
+  /*
+   * Spending the token is behind a press on purpose, and must never move back
+   * into a mount effect -- the same rule as the sign-in page, with a higher
+   * stake: a spent sign-up token has created an account. Rendering this page
+   * is not something only the recipient does. Mail scanners that run
+   * JavaScript (Outlook Safe Links, Gmail) and Mail's press-and-hold preview
+   * load the URL too, and when consumption lived in an effect they created the
+   * account before the person opened the email, leaving them on a spent link
+   * with no session. A page load has to be inert; only a person pressing this
+   * button may spend the token.
+   *
+   * The ref is the one-shot guard. It is set synchronously, so a double press
+   * cannot fire a second request before React re-renders with isConsuming --
+   * and that second request would report the link as already-used while the
+   * first was still creating the account.
+   */
+  async function handleConsume() {
     if (token === null || consumedTokenRef.current === token) {
       return;
     }
 
-    // A confirmation token is single-use, so this request must not fire twice
-    // for the same token -- including React StrictMode's dev-only double
-    // effect invocation, which would otherwise burn the token on a request
-    // the UI throws away and surface a false "link expired" error. The stake
-    // is higher here than on the sign-in page: the discarded request would
-    // spend a signup rather than a sign-in. Because that guard already makes
-    // this a one-shot action, the fetch's own completion is left unguarded (no
-    // per-invocation "cancelled" flag): StrictMode tears down the effect that
-    // started the request before the request resolves, and gating on that
-    // would silently drop a successful signup.
     consumedTokenRef.current = token;
     setIsConsuming(true);
     setError(null);
 
-    fetchJson("/api/auth/signup/consume", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ token }),
-    })
-      .then(() => {
-        window.location.assign("/");
-      })
-      .catch((caughtError: unknown) => {
-        setError(
-          caughtError instanceof Error
-            ? caughtError.message
-            : "This confirmation link is not valid.",
-        );
-        setToken(null);
-        setIsConsuming(false);
-        setConsumeFailed(true);
+    try {
+      await fetchJson("/api/auth/signup/consume", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token }),
       });
-  }, [token]);
+
+      // Deliberately leaves isConsuming set: the navigation is already in
+      // flight, and clearing it would flash the form over a page on its way out.
+      window.location.assign("/");
+    } catch (caughtError) {
+      setError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "This confirmation link is not valid.",
+      );
+      setToken(null);
+      setIsConsuming(false);
+      setConsumeFailed(true);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -111,8 +119,14 @@ function SignUpPage() {
 
       <h1>Create an account</h1>
 
-      {isConsuming ? (
-        <p>Creating your account…</p>
+      {token !== null ? (
+        <div className="sign-in-confirm">
+          <p>You opened a link to finish creating your PickPic account.</p>
+
+          <button type="button" onClick={handleConsume} disabled={isConsuming}>
+            {isConsuming ? "Creating your account…" : "Create account"}
+          </button>
+        </div>
       ) : sent ? (
         // Deliberately vague about what was sent. An address that already has an
         // account is mailed a sign-in link instead, and this line has to be true
@@ -215,7 +229,7 @@ function SignUpPage() {
           </a>
         </p>
       ) : (
-        !isConsuming && (
+        token === null && (
           <p>
             Already have an account?{" "}
             <a className="auth-inline-link" href="/sign-in">
