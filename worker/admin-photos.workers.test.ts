@@ -508,6 +508,95 @@ describe("POST /api/admin/events/:id/photos", () => {
   });
 });
 
+describe("uploads to an event past expires_at (#181)", () => {
+  const EXPIRED_EVENT_ID = "event-expired";
+  const EXPIRED_UPLOAD_ERROR =
+    "This event has expired and no longer accepts new photos.";
+
+  beforeEach(async () => {
+    await insertEvent({
+      id: EXPIRED_EVENT_ID,
+      shareToken: "share-expired",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    });
+    await insertPhoto({ id: "photo-expired", eventId: EXPIRED_EVENT_ID });
+  });
+
+  it("refuses a new proof with 403 and stores nothing", async () => {
+    const result = await adminRequest(
+      "POST",
+      `/api/admin/events/${EXPIRED_EVENT_ID}/photos`,
+      {
+        body: new Uint8Array(16),
+        headers: {
+          "Content-Type": "image/jpeg",
+          "X-File-Name": "late.jpg",
+          "X-File-SHA256": testSha256("late-proof"),
+        },
+      },
+    );
+
+    expectError(result, 403, EXPIRED_UPLOAD_ERROR);
+
+    const photoCount = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM photos WHERE event_id = ?`,
+    )
+      .bind(EXPIRED_EVENT_ID)
+      .first<{ count: number }>();
+
+    expect(photoCount?.count).toBe(1);
+  });
+
+  it("refuses a new final with 403", async () => {
+    const result = await adminRequest(
+      "PUT",
+      "/api/admin/photos/photo-expired/final",
+      {
+        body: new Uint8Array(16),
+        headers: {
+          "Content-Type": "image/jpeg",
+          "X-File-Name": "DSC01015-final.jpg",
+          "X-File-SHA256": testSha256("late-final"),
+        },
+      },
+    );
+
+    expectError(result, 403, EXPIRED_UPLOAD_ERROR);
+  });
+
+  it("still accepts a RAW, which only fulfils requests made while live", async () => {
+    const result = await adminRequest<RawUploadBody>(
+      "PUT",
+      "/api/admin/photos/photo-expired/raw",
+      { body: new Uint8Array(2048), headers: RAW_HEADERS },
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body.rawPhoto?.byteSize).toBe(2048);
+  });
+
+  it("accepts a proof when expires_at is still ahead", async () => {
+    await env.DB.prepare(`UPDATE events SET expires_at = ? WHERE id = ?`)
+      .bind("2999-01-01T00:00:00.000Z", EXPIRED_EVENT_ID)
+      .run();
+
+    const result = await adminRequest(
+      "POST",
+      `/api/admin/events/${EXPIRED_EVENT_ID}/photos`,
+      {
+        body: new Uint8Array(16),
+        headers: {
+          "Content-Type": "image/jpeg",
+          "X-File-Name": "ontime.jpg",
+          "X-File-SHA256": testSha256("ontime-proof"),
+        },
+      },
+    );
+
+    expect(result.status).toBe(201);
+  });
+});
+
 describe("DELETE /api/admin/events/:id/photos", () => {
   it("deletes every photo on the event and reports the count", async () => {
     await insertPhoto({ id: "photo-a", eventId: EVENT_ID });

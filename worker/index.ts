@@ -34,6 +34,7 @@ import {
   type AccountScope,
   type TenantEnv,
 } from "./tenancy.ts";
+import { isEventExpired } from "./expiry.ts";
 
 const ADMIN_PHOTO_IMAGE_BASE = "/api/admin/photos";
 
@@ -67,6 +68,7 @@ interface EventStatusRow extends EventQueryRow {
 
 interface GalleryStatusRow {
   status: string;
+  expiresAt: string | null;
 }
 
 interface HeartRequestBody {
@@ -94,6 +96,15 @@ interface EventRecord {
   rawRequestsEnabled: boolean;
 
   /*
+   * The end of the live window (#181, see worker/expiry.ts). NULL -- every
+   * event until pass credits exist -- means it never expires. `expired` is
+   * derived in toEventRecord rather than left to the dashboard, so the label
+   * a photographer sees comes from the clock that enforces the deadline.
+   */
+  expiresAt: string | null;
+  expired: boolean;
+
+  /*
    * Whether any photo in this event has ever had a RAW request (#266) --
    * distinct from rawRequestsEnabled, which is just the current opt-in
    * toggle. Drives hiding the "Release collected RAW files" control for the
@@ -110,7 +121,7 @@ interface EventRecord {
  */
 type EventQueryRow = Omit<
   EventRecord,
-  "rawRequestsEnabled" | "hasRawRequests"
+  "rawRequestsEnabled" | "hasRawRequests" | "expired"
 > & {
   rawRequestsEnabled: number;
   hasRawRequests: number;
@@ -121,6 +132,7 @@ function toEventRecord(row: EventQueryRow): EventRecord {
     ...row,
     rawRequestsEnabled: Boolean(row.rawRequestsEnabled),
     hasRawRequests: Boolean(row.hasRawRequests),
+    expired: isEventExpired(row.expiresAt),
   };
 }
 
@@ -257,6 +269,7 @@ interface FinalPhotoUploadRow {
   eventId: string;
   finalStorageKey: string | null;
   finalByteSize: number | null;
+  expiresAt: string | null;
 }
 
 interface RawPhotoUploadRow {
@@ -285,11 +298,19 @@ interface PublicGalleryEvent {
   status: string;
   createdAt: string;
   rawRequestsEnabled: boolean;
+  expiresAt: string | null;
+
+  /*
+   * Decided here rather than left to the viewer's browser to compare against
+   * expiresAt, because phone clocks drift and the worker's clock is the one
+   * requireOpenGallery actually enforces with.
+   */
+  expired: boolean;
 }
 
 interface PublicGalleryEventRow extends Omit<
   PublicGalleryEvent,
-  "rawRequestsEnabled"
+  "rawRequestsEnabled" | "expired"
 > {
   id: string;
   rawDeliveryTtlMs: number;
@@ -1280,6 +1301,7 @@ async function findEventById(
         created_at AS createdAt,
         updated_at AS updatedAt,
         raw_requests_enabled AS rawRequestsEnabled,
+        expires_at AS expiresAt,
         EXISTS (
           SELECT 1
           FROM raw_requests r
@@ -1343,6 +1365,7 @@ async function setEventStatus(
         created_at AS createdAt,
         updated_at AS updatedAt,
         raw_requests_enabled AS rawRequestsEnabled,
+        expires_at AS expiresAt,
         EXISTS (
           SELECT 1
           FROM raw_requests r
@@ -1422,6 +1445,7 @@ async function setEventRawRequestsEnabled(
         created_at AS createdAt,
         updated_at AS updatedAt,
         raw_requests_enabled AS rawRequestsEnabled,
+        expires_at AS expiresAt,
         EXISTS (
           SELECT 1
           FROM raw_requests r
@@ -1679,6 +1703,7 @@ async function stopOfferingRawRequests(
         created_at AS createdAt,
         updated_at AS updatedAt,
         raw_requests_enabled AS rawRequestsEnabled,
+        expires_at AS expiresAt,
         EXISTS (
           SELECT 1
           FROM raw_requests r
@@ -1710,7 +1735,9 @@ async function requireOpenGallery(
 ): Promise<Response | null> {
   const event = await env.DB.prepare(
     `
-      SELECT status
+      SELECT
+        status,
+        expires_at AS expiresAt
       FROM events
       WHERE share_token = ?
     `,
@@ -1730,6 +1757,69 @@ async function requireOpenGallery(
       },
       409,
     );
+  }
+
+  /*
+   * Same 409 as a `completed` gallery, because to a viewer it is the same
+   * state: still viewable, downloads still work, nothing new accepted. Only
+   * the wording differs, so the message the gallery shows is accurate.
+   */
+  if (isEventExpired(event.expiresAt)) {
+    return jsonResponse(
+      {
+        error:
+          "This gallery has expired and no longer accepts edit requests or comments.",
+      },
+      409,
+    );
+  }
+
+  return null;
+}
+
+/*
+ * The upload-side half of #181's read-only phase: an expired event takes no
+ * new proofs (createPhoto) and no new finals (uploadFinalPhoto).
+ *
+ * Deliberately *not* applied to RAW uploads or to variant uploads. A RAW only
+ * ever exists here to fulfil a request a viewer made while the gallery was
+ * live, and docs/pricing.md keeps downloads working through the read-only
+ * phase -- refusing the RAW would strand a request the worker already
+ * accepted, the same reasoning that keeps raw-confirm outside
+ * requireOpenGallery. Variants add no photo, only thumbnails of one that was
+ * accepted before the deadline; refusing them would leave that photo with no
+ * grid image rather than stop anything.
+ *
+ * 403, matching the storage-cap refusal: both mean "this account is not
+ * entitled to add this", and the iPad already surfaces any non-401 refusal
+ * as a failed job carrying the worker's message.
+ */
+const EXPIRED_EVENT_UPLOAD_MESSAGE =
+  "This event has expired and no longer accepts new photos.";
+
+async function requireEventAcceptsUploads(
+  scope: AccountScope,
+  eventId: string,
+): Promise<Response | null> {
+  const event = await scope
+    .prepare(
+      `
+      SELECT expires_at AS expiresAt
+      FROM events
+      WHERE
+        id = ?
+        AND account_id = :accountId
+    `,
+      eventId,
+    )
+    .first<{ expiresAt: string | null }>();
+
+  if (!event) {
+    return jsonResponse({ error: "Event not found." }, 404);
+  }
+
+  if (isEventExpired(event.expiresAt)) {
+    return jsonResponse({ error: EXPIRED_EVENT_UPLOAD_MESSAGE }, 403);
   }
 
   return null;
@@ -1795,6 +1885,8 @@ async function createEvent(
     createdAt: now,
     updatedAt: now,
     rawRequestsEnabled: false,
+    expiresAt: null,
+    expired: false,
     hasRawRequests: false,
   };
 
@@ -1993,6 +2085,7 @@ async function updateEvent(
         created_at AS createdAt,
         updated_at AS updatedAt,
         raw_requests_enabled AS rawRequestsEnabled,
+        expires_at AS expiresAt,
         EXISTS (
           SELECT 1
           FROM raw_requests r
@@ -2294,6 +2387,7 @@ async function listEvents(scope: AccountScope): Promise<Response> {
         created_at AS createdAt,
         updated_at AS updatedAt,
         raw_requests_enabled AS rawRequestsEnabled,
+        expires_at AS expiresAt,
         EXISTS (
           SELECT 1
           FROM raw_requests r
@@ -2549,8 +2643,10 @@ async function createPhoto(
   eventId: string,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  if (!(await eventExists(scope, eventId))) {
-    return jsonResponse({ error: "Event not found." }, 404);
+  const uploadGuard = await requireEventAcceptsUploads(scope, eventId);
+
+  if (uploadGuard) {
+    return uploadGuard;
   }
 
   const contentType = request.headers
@@ -3057,6 +3153,7 @@ async function getPublicGallery(
         e.status,
         e.created_at AS createdAt,
         e.raw_requests_enabled AS rawRequestsEnabled,
+        e.expires_at AS expiresAt,
         a.raw_delivery_ttl_ms AS rawDeliveryTtlMs
       FROM events e
       INNER JOIN accounts a
@@ -3234,6 +3331,8 @@ async function getPublicGallery(
       status: event.status,
       createdAt: event.createdAt,
       rawRequestsEnabled,
+      expiresAt: event.expiresAt,
+      expired: isEventExpired(event.expiresAt),
     },
     photos: photoResult.results.map((row) => {
       const commentRows = commentsByPhoto.get(row.id) ?? [];
@@ -6101,13 +6200,16 @@ async function uploadFinalPhoto(
     .prepare(
       `
       SELECT
-        event_id AS eventId,
-        final_storage_key AS finalStorageKey,
-        final_byte_size AS finalByteSize
-      FROM photos
+        p.event_id AS eventId,
+        p.final_storage_key AS finalStorageKey,
+        p.final_byte_size AS finalByteSize,
+        e.expires_at AS expiresAt
+      FROM photos p
+      INNER JOIN events e
+        ON e.id = p.event_id
       WHERE
-        id = ?
-        AND account_id = :accountId
+        p.id = ?
+        AND p.account_id = :accountId
     `,
       photoId,
     )
@@ -6115,6 +6217,11 @@ async function uploadFinalPhoto(
 
   if (!photo) {
     return jsonResponse({ error: "Photo not found." }, 404);
+  }
+
+  // See requireEventAcceptsUploads.
+  if (isEventExpired(photo.expiresAt)) {
+    return jsonResponse({ error: EXPIRED_EVENT_UPLOAD_MESSAGE }, 403);
   }
 
   const oldFinalVariants = await scope.database

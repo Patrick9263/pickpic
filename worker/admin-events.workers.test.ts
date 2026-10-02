@@ -153,10 +153,45 @@ interface EventListBody {
     id: string;
     rawRequestsEnabled: boolean;
     hasRawRequests: boolean;
+    expiresAt: string | null;
+    expired: boolean;
   }>;
 }
 
 describe("GET /api/admin/events", () => {
+  it("reports expiresAt with the worker's expired verdict on it (#181)", async () => {
+    await insertEvent({ id: "event-no-expiry", shareToken: "share-none" });
+    await insertEvent({
+      id: "event-live",
+      shareToken: "share-live",
+      expiresAt: "2999-01-01T00:00:00.000Z",
+    });
+    await insertEvent({
+      id: "event-expired",
+      shareToken: "share-expired",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    const listed = await adminRequest<EventListBody>(
+      "GET",
+      "/api/admin/events",
+    );
+    const byId = new Map(listed.body.events.map((event) => [event.id, event]));
+
+    expect(byId.get("event-no-expiry")).toMatchObject({
+      expiresAt: null,
+      expired: false,
+    });
+    expect(byId.get("event-live")).toMatchObject({
+      expiresAt: "2999-01-01T00:00:00.000Z",
+      expired: false,
+    });
+    expect(byId.get("event-expired")).toMatchObject({
+      expiresAt: "2026-01-01T00:00:00.000Z",
+      expired: true,
+    });
+  });
+
   /*
    * listEvents' own SELECT once omitted raw_requests_enabled entirely, so
    * every listed event read back as rawRequestsEnabled: undefined --
