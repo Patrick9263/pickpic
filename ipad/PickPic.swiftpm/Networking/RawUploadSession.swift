@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /*
  * The background URLSession that carries an original RAW to the server when a
@@ -44,6 +45,18 @@ final class RawUploadSession:
 
     private typealias UploadContinuation =
         CheckedContinuation<(Data, URLResponse), Error>
+
+    /*
+     * Debug-level, so it costs nothing unless a debugger or Console is
+     * collecting. Exists to measure #374: whether the bar's early jump is
+     * bytes buffered into the network stack across every in-flight part,
+     * which needs each part's totalBytesSent against time on a real device.
+     * Filter the Xcode console on the "raw-upload" category.
+     */
+    private static let logger = Logger(
+        subsystem: "photos.pickpic.app",
+        category: "raw-upload"
+    )
 
     private let lock = NSLock()
 
@@ -145,6 +158,10 @@ final class RawUploadSession:
                 ] = onProgress
             }
             lock.unlock()
+
+            Self.logger.debug(
+                "task \(task.taskIdentifier) start: part \(tag.partNumber) of \(tag.plan.partCount), \(tag.plan.size(ofPart: tag.partNumber) ?? 0) bytes"
+            )
 
             task.resume()
         }
@@ -304,6 +321,10 @@ final class RawUploadSession:
         totalBytesSent: Int64,
         totalBytesExpectedToSend: Int64
     ) {
+        Self.logger.debug(
+            "task \(task.taskIdentifier) sent \(totalBytesSent) of \(totalBytesExpectedToSend)"
+        )
+
         lock.lock()
         let handler =
             progressHandlersByTaskID[task.taskIdentifier]
@@ -326,6 +347,10 @@ final class RawUploadSession:
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
+        Self.logger.debug(
+            "task \(task.taskIdentifier) complete: status \((task.response as? HTTPURLResponse)?.statusCode ?? 0), error \(error?.localizedDescription ?? "none", privacy: .public)"
+        )
+
         lock.lock()
         let continuation =
             continuations
