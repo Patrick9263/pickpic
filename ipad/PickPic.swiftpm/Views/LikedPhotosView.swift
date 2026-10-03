@@ -17,21 +17,8 @@ struct LikedPhotosView: View {
     @EnvironmentObject private var finishedEdits:
     FinishedEditsWatcher
 
-    @EnvironmentObject private var rawRequestStatus:
-    RawRequestStatusStore
-
     @StateObject private var viewModel =
     LikedPhotosViewModel()
-
-    /*
-     * A singleton rather than an @EnvironmentObject (#268): the one thing
-     * that writes it, RawRequestSyncService.sync, is only ever invoked
-     * from App.swift's automatic sweep, several layers away from this
-     * view, and threading a new environment object through there just to
-     * read it back here would be a bigger diff for no behavioral gain.
-     */
-    @ObservedObject private var rawDeliveryProgress =
-    RawDeliveryProgress.shared
 
     @State private var showingFolderPicker = false
 
@@ -53,8 +40,6 @@ struct LikedPhotosView: View {
             if folderReference != nil {
                 automaticSyncSection
             }
-
-            pendingRawRequestsSection
 
             likedPhotosSection
             
@@ -208,24 +193,6 @@ struct LikedPhotosView: View {
                 )
             }
         }
-        /*
-         * Likewise for a RAW the automatic sweep delivered: the photo has
-         * to leave RAW Requests rather than drop back to "Waiting".
-         */
-        .onChange(
-            of: rawDeliveryProgress.lastDelivery
-        ) { _, delivery in
-            guard delivery?.eventID == event.id else {
-                return
-            }
-
-            Task {
-                await viewModel.load(
-                    eventID: event.id,
-                    using: configuration
-                )
-            }
-        }
     }
     
     private var eventFolderSection: some View {
@@ -353,151 +320,6 @@ struct LikedPhotosView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-    }
-
-    /*
-     * Answers "what has been asked for and not yet sent?" (#217). Before
-     * this, needsRawUpload was computed server-side and consumed entirely
-     * inside the background sweep — nothing rendered it, so the only
-     * in-app signal was a toast that appeared after a delivery already
-     * succeeded.
-     */
-    private var pendingRawRequestsSection: some View {
-        Section {
-            if viewModel.pendingRawUploadPhotos.isEmpty {
-                Label(
-                    "Nothing outstanding",
-                    systemImage: "checkmark.circle"
-                )
-                .foregroundStyle(.secondary)
-            } else {
-                ForEach(
-                    viewModel.pendingRawUploadPhotos
-                ) { photo in
-                    pendingRawUploadRow(for: photo)
-                }
-            }
-
-            if let failure =
-                rawRequestStatus
-                    .failuresByEventID[event.id] {
-                if !failure.failedFilenames.isEmpty {
-                    Label(
-                        "Delivery failed: "
-                        + failure.failedFilenames
-                            .joined(separator: ", "),
-                        systemImage:
-                            "exclamationmark.triangle"
-                    )
-                    .foregroundStyle(.red)
-                }
-
-                if !failure.missingFilenames.isEmpty {
-                    Label(
-                        "Not found in the event folder: "
-                        + failure.missingFilenames
-                            .joined(separator: ", "),
-                        systemImage:
-                            "questionmark.folder"
-                    )
-                    .foregroundStyle(.orange)
-                }
-
-                LabeledContent(
-                    "As of",
-                    value:
-                        failure.checkedAt
-                        .formatted(
-                            date: .omitted,
-                            time: .shortened
-                        )
-                )
-                .foregroundStyle(.secondary)
-            }
-        } header: {
-            Text(
-                "RAW Requests (\(viewModel.pendingRawUploadPhotos.count))"
-            )
-        } footer: {
-            Text(
-                "Originals PickPic sends automatically to viewers who asked for them. A failure or a missing file here clears once it's resolved and the next automatic check runs."
-            )
-        }
-    }
-
-    /*
-     * Byte-level progress for the one file RawRequestSyncService.sync is
-     * actively staging or sending; every other row just reads "Waiting" --
-     * the ordered list above is already the queue, so no per-row state is
-     * needed for anything but the active upload (#268). A static
-     * "Uploading…" on what can be a 100 MB transfer is indistinguishable
-     * from a hang, especially over cellular.
-     */
-    @ViewBuilder
-    private func pendingRawUploadRow(
-        for photo: ServerPhotoRecord
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(photo.originalFilename)
-
-            if
-                rawDeliveryProgress.currentPhotoID
-                    == photo.id,
-                let phase = rawDeliveryProgress.phase
-            {
-                activeRawUploadStatus(for: phase)
-            } else {
-                Text("Waiting")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func activeRawUploadStatus(
-        for phase: RawDeliveryProgress.Phase
-    ) -> some View {
-        switch phase {
-        case .staging:
-            Label("Staging…", systemImage: "hourglass")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-        case let .uploading(sentBytes, totalBytes):
-            if let fraction = phase.fractionCompleted {
-                VStack(alignment: .leading, spacing: 2) {
-                    ProgressView(value: fraction)
-
-                    Text(
-                        uploadProgressDescription(
-                            sentBytes: sentBytes,
-                            totalBytes: totalBytes
-                        )
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-            } else {
-                Label(
-                    "Uploading…",
-                    systemImage: "arrow.up.circle"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func uploadProgressDescription(
-        sentBytes: Int64,
-        totalBytes: Int64
-    ) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-
-        return
-            "\(formatter.string(fromByteCount: sentBytes)) of \(formatter.string(fromByteCount: totalBytes))"
     }
 
     private var likedPhotosSection: some View {
