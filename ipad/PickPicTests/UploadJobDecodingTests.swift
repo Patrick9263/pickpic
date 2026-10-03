@@ -42,6 +42,7 @@ struct UploadJobDecodingTests {
         #expect(job.conversionCompletedAt == nil)
         #expect(job.uploadProgress == .empty)
         #expect(job.continuedProcessing == nil)
+        #expect(job.accountID == nil)
     }
 
     @Test
@@ -62,6 +63,7 @@ struct UploadJobDecodingTests {
             id: UUID(),
             eventID: "evt-42",
             eventTitle: "Full Event",
+            accountID: "acct-1",
             folderName: "FullFolder",
             folderBookmarkData: Data([0x01, 0x02, 0x03]),
             photos: [

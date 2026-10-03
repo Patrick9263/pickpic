@@ -101,7 +101,8 @@ final class PhotoImportViewModel: ObservableObject {
     }
     
     func makeUploadJob(
-        for event: PickPicEvent
+        for event: PickPicEvent,
+        accountID: String?
     ) throws -> UploadJob {
         guard
             let folderName,
@@ -120,6 +121,7 @@ final class PhotoImportViewModel: ObservableObject {
             id: UUID(),
             eventID: event.id,
             eventTitle: event.title,
+            accountID: accountID,
             folderName: folderName,
             folderBookmarkData:
                 folderBookmarkData,

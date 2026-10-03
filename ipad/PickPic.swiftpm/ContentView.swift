@@ -115,7 +115,114 @@ struct ContentView: View {
         }
     }
 
+    /*
+     * Signed out, the whole window is the sign-in page rather than a sheet
+     * over the event list: the list behind a sheet read as still signed in,
+     * and showing it at all would show the previous account's events to
+     * whoever signs in next. Expired counts as signed out, since nothing
+     * behind the page could load or upload anyway.
+     */
     var body: some View {
+        Group {
+            if configuration.isConfigured {
+                signedInContent
+            } else {
+                ConnectionSettingsView(
+                    configuration:
+                        configuration
+                )
+            }
+        }
+        .environmentObject(configuration)
+        .sheet(
+            isPresented: $showingSettings
+        ) {
+            ConnectionSettingsView(
+                configuration:
+                    configuration
+            )
+        }
+        .task(id: configuration.revision) {
+            viewModel.activate(
+                accountID: configuration.accountID,
+                isSignedIn: configuration.isConfigured
+            )
+
+            /*
+             * Selection outlives a switch otherwise, and an id from the
+             * previous account would keep its detail -- and the
+             * finished-edits watcher following it -- alive under this one.
+             */
+            if let selectedEventID,
+               !viewModel.events.contains(where: { event in
+                   event.id == selectedEventID
+               }) {
+                self.selectedEventID = nil
+            }
+
+            guard configuration.isConfigured else {
+                // Nothing is behind the sign-in page for the sheet to cover.
+                showingSettings = false
+
+                return
+            }
+
+            /*
+             * A sign-in whose follow-up account lookup failed does not know
+             * which account it is, and until it does none of this account's
+             * queued work can upload (AccountScope.owns). A success saves,
+             * which bumps the revision and re-runs this task.
+             */
+            if configuration.accountID == nil {
+                await configuration.refreshSession()
+            }
+
+            await viewModel.load(
+                using: configuration
+            )
+        }
+        /*
+         * A delivered RAW lowers its event's RAW Requests count, and the
+         * sweep that delivers it does not otherwise touch the sidebar.
+         */
+        .onChange(
+            of: rawDeliveryProgress.lastDelivery
+        ) { _, delivery in
+            guard let delivery else {
+                return
+            }
+
+            Task {
+                await viewModel.refreshStatistics(
+                    for: delivery.eventID,
+                    using: configuration
+                )
+            }
+        }
+        .overlay(alignment: .top) {
+            if let message = feedback.message {
+                AppFeedbackBanner(
+                    message: message,
+                    onDismiss: {
+                        feedback.dismiss()
+                    }
+                )
+                .padding(.horizontal)
+                .padding(.top, 8)
+                .transition(
+                    .move(edge: .top)
+                        .combined(with: .opacity)
+                )
+                .zIndex(10)
+            }
+        }
+        .animation(
+            .snappy,
+            value: feedback.message?.id
+        )
+    }
+
+    private var signedInContent: some View {
         NavigationSplitView {
             EventListView(
                 events: viewModel.events,
@@ -220,63 +327,6 @@ struct ContentView: View {
                 }
             }
         }
-        .environmentObject(configuration)
-        .sheet(
-            isPresented: $showingSettings
-        ) {
-            ConnectionSettingsView(
-                configuration:
-                    configuration
-            )
-        }
-        .task(id: configuration.revision) {
-            if !configuration.isConfigured {
-                showingSettings = true
-            }
-            
-            await viewModel.load(
-                using: configuration
-            )
-        }
-        /*
-         * A delivered RAW lowers its event's RAW Requests count, and the
-         * sweep that delivers it does not otherwise touch the sidebar.
-         */
-        .onChange(
-            of: rawDeliveryProgress.lastDelivery
-        ) { _, delivery in
-            guard let delivery else {
-                return
-            }
-
-            Task {
-                await viewModel.refreshStatistics(
-                    for: delivery.eventID,
-                    using: configuration
-                )
-            }
-        }
-        .overlay(alignment: .top) {
-            if let message = feedback.message {
-                AppFeedbackBanner(
-                    message: message,
-                    onDismiss: {
-                        feedback.dismiss()
-                    }
-                )
-                .padding(.horizontal)
-                .padding(.top, 8)
-                .transition(
-                    .move(edge: .top)
-                        .combined(with: .opacity)
-                )
-                .zIndex(10)
-            }
-        }
-        .animation(
-            .snappy,
-            value: feedback.message?.id
-        )
     }
 }
 

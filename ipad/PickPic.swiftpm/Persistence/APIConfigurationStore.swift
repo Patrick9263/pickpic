@@ -1,5 +1,85 @@
 import Combine
+import CryptoKit
 import Foundation
+
+/*
+ * Which account a piece of on-device work belongs to, and where per-account
+ * state is kept. Pure so PickPicTests can pin the rules: getting ownership
+ * wrong either uploads one account's photos into another's events, or strands
+ * work that should have resumed.
+ */
+enum AccountScope {
+    /*
+     * Work with no account recorded predates jobs carrying one, from a build
+     * that could not switch accounts, so it belongs to whoever is signed in --
+     * and UploadQueueStore.adoptUnownedJobs stamps it with that account the
+     * first time one is known, after which this rule no longer applies to it.
+     *
+     * Work tagged with an account is usable only under that same account. A
+     * credential whose own account is not known yet (see
+     * SessionCredential.accountID) owns nothing tagged: guessing would be
+     * exactly the cross-account upload this exists to prevent, and the next
+     * refreshSession() settles it.
+     */
+    static func owns(
+        currentAccountID: String?,
+        workAccountID: String?
+    ) -> Bool {
+        guard let workAccountID else {
+            return true
+        }
+
+        return workAccountID == currentAccountID
+    }
+
+    /*
+     * The single, unscoped file every build before #376 wrote. It is still
+     * read while the signed-in account is unknown, so an upgrade launched
+     * offline shows the same list it always did, and it is handed to the
+     * first account that becomes known (EventListViewModel.adoptLegacyCache).
+     */
+    static let legacyEventCacheFilename = "events-cache.json"
+
+    static func eventCacheFilename(
+        for accountID: String?
+    ) -> String {
+        guard let accountID else {
+            return legacyEventCacheFilename
+        }
+
+        return "events-cache-\(filenameComponent(for: accountID)).json"
+    }
+
+    /*
+     * Account ids are server-generated UUIDs today, which pass through
+     * untouched so the files stay recognisable. Anything else is hashed
+     * rather than filtered: filtering could map two ids to one file, which
+     * would put two accounts' events back in the same cache.
+     */
+    static func filenameComponent(
+        for accountID: String
+    ) -> String {
+        let isSafe =
+            !accountID.isEmpty
+            && accountID.count <= 64
+            && accountID.unicodeScalars.allSatisfy { scalar in
+                scalar.isASCII
+                    && (CharacterSet.alphanumerics.contains(scalar)
+                        || scalar == "-"
+                        || scalar == "_")
+            }
+
+        if isSafe {
+            return accountID
+        }
+
+        return SHA256.hash(data: Data(accountID.utf8))
+            .map { byte in
+                String(format: "%02x", byte)
+            }
+            .joined()
+    }
+}
 
 enum APIConfigurationError: LocalizedError {
     case missingEmail
@@ -59,6 +139,23 @@ final class APIConfigurationStore: ObservableObject {
      */
     @Published private(set) var signInRequiredMessage: String?
 
+    /*
+     * Fired, synchronously, whenever this store holds a credential whose
+     * account is known -- on being set, and on every save after. App.swift
+     * uses it to hand state recorded before #376 (untagged upload jobs, the
+     * unscoped event cache) to that account. "The first account this iPad
+     * identifies" is the right owner because builds before #375 could not
+     * switch accounts, and replaceCredential(with:) identifies an outgoing
+     * account before switching away from it, so the incoming one cannot
+     * claim the outgoing one's work. Both handlers are idempotent, so
+     * firing on every save costs a check and nothing more.
+     */
+    var onAccountIdentified: ((String) -> Void)? {
+        didSet {
+            notifyAccountIdentified()
+        }
+    }
+
     init() {
         credential = Self.loadCredential()
 
@@ -90,6 +187,22 @@ final class APIConfigurationStore: ObservableObject {
         return credential.accountName ?? credential.email
     }
 
+    /*
+     * Read regardless of expiry, unlike isConfigured: an expired session
+     * still says whose work is on screen and in the queue, and a sign-in
+     * to the same account should find that work exactly where it was.
+     */
+    var accountID: String? {
+        credential?.accountID
+    }
+
+    func owns(_ job: UploadJob) -> Bool {
+        AccountScope.owns(
+            currentAccountID: accountID,
+            workAccountID: job.accountID
+        )
+    }
+
     func makeAuthClient() -> AuthClient {
         AuthClient(baseURL: Self.productionBaseURL)
     }
@@ -98,6 +211,8 @@ final class APIConfigurationStore: ObservableObject {
         guard let credential, !credential.isExpired() else {
             throw APIClientError.notConfigured
         }
+
+        let token = credential.token
 
         return APIClient(
             baseURL: Self.productionBaseURL,
@@ -109,7 +224,7 @@ final class APIConfigurationStore: ObservableObject {
                  * @MainActor state that SwiftUI is observing.
                  */
                 Task { @MainActor in
-                    self?.handleUnauthorized()
+                    self?.handleUnauthorized(token: token)
                 }
             }
         )
@@ -138,7 +253,53 @@ final class APIConfigurationStore: ObservableObject {
             return
         }
 
+        /*
+         * The await above is long enough for a sign-out or an account switch
+         * to land, and saving then would resurrect the session it replaced.
+         */
+        guard self.credential?.token == credential.token else {
+            return
+        }
+
         try? save(refreshed)
+    }
+
+    /*
+     * Installs a freshly redeemed sign-in, then revokes the session it
+     * replaced, as signOut() would have. Shared by every way a link is
+     * redeemed -- a tapped universal link and the Account sheet's paste
+     * field -- so that switching accounts from either leaves no live session
+     * behind. Revoking is best effort: the local switch has already happened,
+     * and a session nothing holds any more is only a dead row server-side.
+     *
+     * Revoking is also why the previous account's in-flight requests start
+     * answering 401 a moment later; handleUnauthorized(token:) and
+     * UploadQueueStore's background-completion path both check whose request
+     * it was, so those do not sign this new session out.
+     */
+    func replaceCredential(
+        with newCredential: SessionCredential
+    ) async throws {
+        /*
+         * A credential saved before accounts were recorded may still not
+         * know its own account, and the moment it is replaced is the last
+         * chance to ask -- after this its work could only be claimed by the
+         * account replacing it (see onAccountIdentified). Best effort, and
+         * normally a no-op: refreshSession() has usually filled it in at
+         * launch.
+         */
+        if credential?.accountID == nil {
+            await refreshSession()
+        }
+
+        let previousCredential = credential
+
+        try save(newCredential)
+
+        if let previousCredential,
+           previousCredential.token != newCredential.token {
+            try? await makeAuthClient().signOut(previousCredential)
+        }
     }
 
     func save(_ credential: SessionCredential) throws {
@@ -152,7 +313,16 @@ final class APIConfigurationStore: ObservableObject {
 
         self.credential = credential
         signInRequiredMessage = nil
+
+        notifyAccountIdentified()
+
         revision += 1
+    }
+
+    private func notifyAccountIdentified() {
+        if let accountID {
+            onAccountIdentified?(accountID)
+        }
     }
 
     /*
@@ -184,6 +354,22 @@ final class APIConfigurationStore: ObservableObject {
         clearCredential(
             message: APIClientError.signInRequiredMessage
         )
+    }
+
+    /*
+     * A 401 says the session that sent the request is dead, which is only
+     * this store's credential if the request carried it. Since accounts can
+     * be switched, a request still in flight from the previous session --
+     * revoked by the switch itself -- routinely comes back 401 after the new
+     * one is installed, and clearing on it would sign the new account out
+     * seconds after it signed in.
+     */
+    func handleUnauthorized(token: String) {
+        guard credential?.token == token else {
+            return
+        }
+
+        handleUnauthorized()
     }
 
     func dismissSignInRequiredMessage() {

@@ -847,7 +847,8 @@ struct EventDetailView: View {
         do {
             let job =
             try importModel.makeUploadJob(
-                for: event
+                for: event,
+                accountID: configuration.accountID
             )
 
             try eventFolders.save(job: job)
@@ -1271,11 +1272,15 @@ struct EventDetailView: View {
         do {
             let client =
             try configuration.makeClient()
-            
-            try await client.deleteEvent(
-                eventID: event.id
-            )
-            
+
+            do {
+                try await client.deleteEvent(
+                    eventID: event.id
+                )
+            } catch where event.isDeleted(despite: error) {
+                // Already absent server-side; finish the local half below.
+            }
+
             let jobIDs = Set(
                 eventJobs.map(\.id)
             )

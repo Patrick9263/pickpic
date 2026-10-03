@@ -35,14 +35,31 @@ struct SessionCredential: Codable, Hashable, Sendable {
     let accountName: String?
     let email: String?
 
+    /*
+     * What everything stored per account on this iPad -- the cached event
+     * list, the upload queue's jobs -- is keyed by, so that switching
+     * accounts can neither show nor upload one account's work under another.
+     *
+     * Optional, and decoded leniently by the synthesized Codable, because a
+     * credential saved before this field existed has to keep loading out of
+     * the Keychain: failing to decode it would sign the iPad out on upgrade.
+     * Such a credential is backfilled by APIConfigurationStore.refreshSession()
+     * the first time GET /api/auth/session answers. It can also be nil on a
+     * fresh sign-in whose follow-up describe() failed (see consume()), which
+     * the same refresh repairs.
+     */
+    let accountID: String?
+
     init(
         token: String,
         expiresAt: Date,
+        accountID: String? = nil,
         accountName: String? = nil,
         email: String? = nil
     ) {
         self.token = token
         self.expiresAt = expiresAt
+        self.accountID = accountID
         self.accountName = accountName
         self.email = email
     }
@@ -67,12 +84,14 @@ struct SessionCredential: Codable, Hashable, Sendable {
     }
 
     func withAccountDetails(
+        accountID: String?,
         accountName: String?,
         email: String?
     ) -> SessionCredential {
         SessionCredential(
             token: token,
             expiresAt: expiresAt,
+            accountID: accountID,
             accountName: accountName,
             email: email
         )
@@ -82,6 +101,7 @@ struct SessionCredential: Codable, Hashable, Sendable {
         SessionCredential(
             token: token,
             expiresAt: expiresAt,
+            accountID: accountID,
             accountName: accountName,
             email: email
         )
@@ -459,6 +479,7 @@ struct AuthClient {
             of: credential,
             from: response
         ).withAccountDetails(
+            accountID: body.account.id,
             accountName: body.account.name,
             email: body.user.email
         )
