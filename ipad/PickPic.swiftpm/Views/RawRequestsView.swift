@@ -27,10 +27,10 @@ struct RawRequestsView: View {
 
     /*
      * A singleton rather than an @EnvironmentObject (#268): the one thing
-     * that writes it, RawRequestSyncService.sync, is only ever invoked
-     * from App.swift's automatic sweep, several layers away from this
-     * view, and threading a new environment object through there just to
-     * read it back here would be a bigger diff for no behavioral gain.
+     * that writes it, RawRequestSyncService.sync, is mostly invoked from
+     * App.swift's automatic sweep, several layers away from this view, and
+     * threading a new environment object through there just to read it
+     * back here would be a bigger diff for no behavioral gain.
      */
     @ObservedObject private var rawDeliveryProgress =
     RawDeliveryProgress.shared
@@ -157,10 +157,95 @@ struct RawRequestsView: View {
     }
 
     private func load() async {
-        await viewModel.load(
-            eventID: event.id,
-            using: configuration
-        )
+        let deliveryBeforeFetch =
+        rawDeliveryProgress.lastDelivery
+
+        guard
+            let photos = await viewModel.load(
+                eventID: event.id,
+                using: configuration
+            )
+        else {
+            return
+        }
+
+        switch RawRequestLoadFollowUp.after(
+            loading: photos,
+            eventStatus: event.status,
+            deliveryBeforeFetch: deliveryBeforeFetch,
+            deliveryAfterFetch: rawDeliveryProgress.lastDelivery
+        ) {
+        case .none:
+            break
+
+        case .reload:
+            await load()
+
+        case .startDelivery:
+            startDelivery(of: photos)
+        }
+    }
+
+    /*
+     * Starts delivering the requests a load just found instead of leaving
+     * them for the sweep's next pass, which can be up to 30 seconds away.
+     * The sweep stays the backstop: anything skipped here -- no folder
+     * linked, a bookmark that no longer resolves, another pass already
+     * running -- is quietly left on "Waiting" for it, exactly as before.
+     */
+    private func startDelivery(
+        of photos: [ServerPhotoRecord]
+    ) {
+        guard
+            let reference =
+                eventFolders.reference(for: event.id),
+            FolderBookmarkService.canAccessFolder(
+                using: reference.bookmarkData
+            ),
+            let client =
+                try? configuration.makeClient()
+        else {
+            return
+        }
+
+        let eventID = event.id
+        let rawRequestStatus = rawRequestStatus
+
+        /*
+         * An unstructured Task rather than the view's own .task, so it is
+         * not cancelled when the photographer leaves this screen. sync()
+         * stops between files on cancellation and the retry backoff inside
+         * deliver() throws on it, so tying it to the view would turn
+         * "navigated away mid-upload" into a reported failure and a re-send
+         * from scratch on the next pass. Left running, the transfer
+         * finishes and is recorded as it would have been from the sweep.
+         */
+        Task {
+            do {
+                guard
+                    let result =
+                        try await RawRequestSyncService.sync(
+                            eventID: eventID,
+                            reference: reference,
+                            using: client,
+                            photos: photos
+                        )
+                else {
+                    return
+                }
+
+                rawRequestStatus.record(
+                    eventID: eventID,
+                    missingFilenames: result.missingFilenames,
+                    failedFilenames: result.failures
+                )
+            } catch {
+                print(
+                    "RAW delivery from RAW Requests failed for event \(eventID):",
+                    error
+                )
+            }
+        }
     }
 
     // MARK: - Controls
