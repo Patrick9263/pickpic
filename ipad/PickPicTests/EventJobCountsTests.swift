@@ -3,6 +3,72 @@ import Testing
 
 @testable import PickPic
 
+/*
+ * When a failed server delete still means the event is gone. Getting this
+ * wrong in one direction leaves an offline-created event undeletable (the
+ * server has never heard of it); in the other, it drops the local copy of a
+ * synced event whose server copy may still exist.
+ */
+struct EventDeletionTests {
+    private static func makeEvent(
+        isPendingCreation: Bool? = nil
+    ) -> PickPicEvent {
+        PickPicEvent(
+            id: "evt-1",
+            title: "Event",
+            shareToken: "",
+            status: .draft,
+            createdAt: Date(),
+            updatedAt: Date(),
+            isPendingCreation: isPendingCreation
+        )
+    }
+
+    @Test(arguments: [nil, true] as [Bool?])
+    func aNotFoundMeansDeleted(isPendingCreation: Bool?) {
+        let event = Self.makeEvent(
+            isPendingCreation: isPendingCreation
+        )
+
+        #expect(
+            event.isDeleted(
+                despite: APIClientError.server(
+                    statusCode: 404,
+                    message: "Event not found."
+                )
+            )
+        )
+    }
+
+    @Test
+    func aNeverSyncedEventIsDeletableOffline() {
+        #expect(
+            Self.makeEvent(isPendingCreation: true)
+                .isDeleted(despite: URLError(.notConnectedToInternet))
+        )
+    }
+
+    @Test
+    func aSyncedEventWaitsForAConnection() {
+        #expect(
+            !Self.makeEvent()
+                .isDeleted(despite: URLError(.notConnectedToInternet))
+        )
+    }
+
+    @Test
+    func anyOtherServerErrorIsAFailure() {
+        #expect(
+            !Self.makeEvent(isPendingCreation: true).isDeleted(
+                despite: APIClientError.server(
+                    statusCode: 500,
+                    message: "Oops."
+                )
+            )
+        )
+    }
+}
+
 struct EventJobCountsTests {
     private static func makeJob(
         stage: UploadStage,
