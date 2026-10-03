@@ -261,9 +261,10 @@ extension RawDeliveryProgress.Phase {
  * has asked for and that has not been delivered yet (issue #205).
  *
  * The RAW-request twin of RequestedPhotoSyncService: same polling entry point,
- * same reentrancy guard, but where that one copies a hearted photo's RAW into
- * the local To Edit folder, this one sends the bytes to the server. This is
- * the only path on which a full original leaves the device.
+ * a stricter reentrancy guard (see isSyncing), but where that one copies a
+ * hearted photo's RAW into the local To Edit folder, this one sends the bytes
+ * to the server. This is the only path on which a full original leaves the
+ * device.
  *
  * Firing it automatically is safe because the pass is idempotent by
  * construction. A failed or interrupted upload leaves
@@ -276,7 +277,18 @@ extension RawDeliveryProgress.Phase {
  */
 @MainActor
 enum RawRequestSyncService {
-    private static var activeEventIDs: Set<String> = []
+    /*
+     * One pass at a time across every event, not just per event. Two
+     * callers can now reach this concurrently -- App.swift's sweep and
+     * RawRequestsView starting delivery the moment it sees a request -- and
+     * RawDeliveryProgress tracks a single file: a sweep pass over an event
+     * with nothing pending ends in reset(), which would blank the progress
+     * bar of an upload running for another event, and two events'
+     * transfers would also split one connection between them. A skipped
+     * pass returns nil and the caller tries again on its next turn, which
+     * for the sweep is at most 30 seconds away.
+     */
+    private static var isSyncing = false
 
     static func sync(
         eventID: String,
@@ -284,12 +296,14 @@ enum RawRequestSyncService {
         using client: APIClient,
         photos: [ServerPhotoRecord]? = nil
     ) async throws -> RawRequestSyncResult? {
-        guard activeEventIDs.insert(eventID).inserted else {
+        guard !isSyncing else {
             return nil
         }
 
+        isSyncing = true
+
         defer {
-            activeEventIDs.remove(eventID)
+            isSyncing = false
         }
 
         let currentPhotos:

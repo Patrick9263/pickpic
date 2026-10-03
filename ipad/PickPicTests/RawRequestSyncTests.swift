@@ -776,3 +776,139 @@ struct RawRequestListTests {
         )
     }
 }
+
+// RawRequestsView starts delivery from its own load instead of waiting up to
+// 30 s for App.swift's sweep -- but only when the sweep itself would act,
+// and never on a list that may predate a delivery landing mid-fetch.
+struct RawRequestLoadFollowUpTests {
+    private static func photo(
+        pendingRawRequestCount: Int,
+        hasRawPhoto: Bool = false
+    ) throws -> ServerPhotoRecord {
+        let rawPhoto =
+        hasRawPhoto
+        ? """
+        {
+            "originalFilename": "DSC01015.ARW",
+            "byteSize": 74000000,
+            "uploadedAt": "2026-09-09T00:00:00.000Z"
+        }
+        """
+        : "null"
+
+        let json = """
+            {
+                "id": "photo-\(UUID().uuidString)",
+                "originalFilename": "DSC01015.ARW",
+                "heartCount": 0,
+                "workflowStatus": "idle",
+                "variants": {},
+                "finalPhoto": null,
+                "capturedAt": null,
+                "pendingRawRequestCount": \(pendingRawRequestCount),
+                "rawPhoto": \(rawPhoto)
+            }
+            """
+
+        return try JSONDecoder().decode(
+            ServerPhotoRecord.self,
+            from: Data(json.utf8)
+        )
+    }
+
+    private static func delivery(
+        sequence: Int
+    ) -> RawDeliveryProgress.Delivery {
+        RawDeliveryProgress.Delivery(
+            eventID: "event-1",
+            photoID: "photo-1",
+            sequence: sequence
+        )
+    }
+
+    @Test
+    func aPendingRequestStartsDelivery() throws {
+        #expect(
+            RawRequestLoadFollowUp.after(
+                loading: [
+                    try Self.photo(pendingRawRequestCount: 1)
+                ],
+                eventStatus: .ready,
+                deliveryBeforeFetch: Self.delivery(sequence: 3),
+                deliveryAfterFetch: Self.delivery(sequence: 3)
+            )
+            == .startDelivery
+        )
+    }
+
+    @Test
+    func nothingPendingStartsNothing() throws {
+        #expect(
+            RawRequestLoadFollowUp.after(
+                loading: [
+                    try Self.photo(pendingRawRequestCount: 0),
+                    // Delivered, so re-requesting it is not pending either.
+                    try Self.photo(
+                        pendingRawRequestCount: 1,
+                        hasRawPhoto: true
+                    )
+                ],
+                eventStatus: .ready,
+                deliveryBeforeFetch: nil,
+                deliveryAfterFetch: nil
+            )
+            == RawRequestLoadFollowUp.none
+        )
+    }
+
+    @Test
+    func followsTheSweepsStatusEligibility() throws {
+        let photos = [
+            try Self.photo(pendingRawRequestCount: 1)
+        ]
+
+        for status in PickPicEvent.Status.allCases {
+            let expected: RawRequestLoadFollowUp =
+            status.mayHavePendingGalleryWork
+            ? .startDelivery
+            : .none
+
+            #expect(
+                RawRequestLoadFollowUp.after(
+                    loading: photos,
+                    eventStatus: status,
+                    deliveryBeforeFetch: nil,
+                    deliveryAfterFetch: nil
+                )
+                == expected
+            )
+        }
+    }
+
+    @Test
+    func aDeliveryDuringTheFetchReloadsInsteadOfResending() throws {
+        let photos = [
+            try Self.photo(pendingRawRequestCount: 1)
+        ]
+
+        #expect(
+            RawRequestLoadFollowUp.after(
+                loading: photos,
+                eventStatus: .ready,
+                deliveryBeforeFetch: nil,
+                deliveryAfterFetch: Self.delivery(sequence: 1)
+            )
+            == .reload
+        )
+
+        #expect(
+            RawRequestLoadFollowUp.after(
+                loading: photos,
+                eventStatus: .ready,
+                deliveryBeforeFetch: Self.delivery(sequence: 1),
+                deliveryAfterFetch: Self.delivery(sequence: 2)
+            )
+            == .reload
+        )
+    }
+}
