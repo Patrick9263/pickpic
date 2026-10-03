@@ -398,6 +398,9 @@ struct RawUploadProgressTallyTests {
         #expect(tally.sentBytes == 8)
         #expect(tally.totalBytes == 20)
 
+        // A first sample of 0 sets an identity baseline, so later counts
+        // read at face value.
+        tally.recordSent(0, forPart: 2)
         tally.recordSent(3, forPart: 2)
         #expect(tally.sentBytes == 11)
 
@@ -445,6 +448,142 @@ struct RawUploadProgressTallyTests {
         tally.recordSent(8, forPart: 1)
 
         #expect(tally.sentBytes == 8)
+    }
+
+    // #374: every part's first didSendBodyData reported exactly 2 MiB
+    // within 0.18 s -- the send buffer filling, not the network. That first
+    // sample must not move the bar.
+    @Test func aPartsFirstBufferedSampleDoesNotJumpTheBar() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: []
+        )
+
+        tally.recordSent(2, forPart: 1)
+        tally.recordSent(2, forPart: 2)
+
+        #expect(tally.sentBytes == 0)
+    }
+
+    @Test func aBaselinedPartStillReachesFullSizeOnItsLastByte() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: []
+        )
+
+        tally.recordSent(2, forPart: 1)
+        tally.recordSent(5, forPart: 1)
+        // (5 - 2) * 8 / (8 - 2)
+        #expect(tally.sentBytes == 4)
+
+        tally.recordSent(8, forPart: 1)
+        #expect(tally.sentBytes == 8)
+
+        tally.markLanded(1)
+        #expect(tally.sentBytes == 8)
+        #expect(tally.inFlightBaselines.isEmpty)
+    }
+
+    // The small last part is buffered whole on its first sample; rescaling
+    // it would only move the jump to its end, so it counts as before.
+    @Test func aFullyBufferedSmallPartCountsAtFaceValue() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: []
+        )
+
+        tally.recordSent(4, forPart: 3)
+
+        #expect(tally.sentBytes == 4)
+        #expect(tally.inFlightBaselines.isEmpty)
+    }
+
+    // A retry re-fills the send buffer, so its baseline is taken afresh.
+    @Test func aFailedPartTakesANewBaselineOnRetry() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: []
+        )
+
+        tally.recordSent(2, forPart: 1)
+        tally.recordSent(5, forPart: 1)
+        tally.markFailed(1)
+
+        #expect(tally.sentBytes == 0)
+        #expect(tally.inFlightBaselines.isEmpty)
+
+        tally.recordSent(3, forPart: 1)
+        #expect(tally.sentBytes == 0)
+
+        tally.recordSent(8, forPart: 1)
+        #expect(tally.sentBytes == 8)
+    }
+
+    // After a relaunch, reattach builds a fresh tally and a running part's
+    // first sample lands mid-part. It becomes the baseline, so the part
+    // reads 0 -- as it did before the sample -- rather than going backwards.
+    @Test func aReattachedPartsMidwaySampleNeverMovesTheBarBackwards() {
+        var tally = RawUploadProgressTally(
+            plan: Self.plan,
+            landedParts: [1]
+        )
+
+        #expect(tally.sentBytes == 8)
+
+        tally.recordSent(5, forPart: 2)
+        #expect(tally.sentBytes == 8)
+
+        tally.recordSent(8, forPart: 2)
+        #expect(tally.sentBytes == 16)
+    }
+
+    // The shape measured on device: a 77 MB ARW in 10 parts, every part
+    // first reporting 2 MiB at once, then advancing one at a time in 1 MiB
+    // steps, with an over-reported count at each part's completion.
+    @Test func sentBytesNeverDecreasesNorExceedsTheFile() {
+        let mebibyte: Int64 = 1_024 * 1_024
+        let plan = RawUploadPartPlan(
+            byteSize: 77_000_000,
+            partSize: RawUploadPartPlan.defaultPartSize
+        )
+        var tally = RawUploadProgressTally(plan: plan, landedParts: [])
+        var previous = tally.sentBytes
+
+        func check() {
+            let sent = tally.sentBytes
+            #expect(sent >= previous)
+            #expect(sent <= plan.byteSize)
+            previous = sent
+        }
+
+        let parts = plan.partNumbers.map(Array.init) ?? []
+        #expect(parts.count == 10)
+
+        for partNumber in parts {
+            tally.recordSent(2 * mebibyte, forPart: partNumber)
+            check()
+        }
+
+        #expect(tally.sentBytes == plan.size(ofPart: 10))
+
+        for partNumber in parts {
+            let partSize = plan.size(ofPart: partNumber) ?? 0
+            var sent = 2 * mebibyte
+
+            while sent < partSize {
+                sent = min(sent + mebibyte, partSize)
+                tally.recordSent(sent, forPart: partNumber)
+                check()
+            }
+
+            tally.recordSent(partSize + 100, forPart: partNumber)
+            check()
+
+            tally.markLanded(partNumber)
+            check()
+        }
+
+        #expect(tally.sentBytes == plan.byteSize)
     }
 }
 
