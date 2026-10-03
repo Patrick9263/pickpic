@@ -227,23 +227,13 @@ extension AuthLink {
     func accountSwitchMessage(
         currentAccount: String?,
         currentEmail: String?,
-        unfinishedUploads: Int
+        unfinishedUploads: Int,
+        uploadsInProgress: Int
     ) -> String {
-        let current: String
-
-        switch (currentAccount, currentEmail) {
-        case let (name?, email?):
-            current = "\(name) (\(email))"
-
-        case let (name?, nil):
-            current = name
-
-        case let (nil, email?):
-            current = email
-
-        case (nil, nil):
-            current = "a PickPic account"
-        }
+        let current = Self.accountDescription(
+            name: currentAccount,
+            email: currentEmail
+        )
 
         let action: String
 
@@ -257,14 +247,72 @@ extension AuthLink {
 
         var message = "This iPad is signed in to \(current). \(action)"
 
-        if unfinishedUploads > 0 {
-            let uploads = unfinishedUploads == 1
-                ? "1 unfinished upload belongs"
-                : "\(unfinishedUploads) unfinished uploads belong"
-
-            message += " \(uploads) to \(current) and can't upload while this iPad is signed in to another account. They can upload again once you sign back in to \(current)."
+        if let warning = Self.unfinishedWorkWarning(
+            currentAccount: current,
+            unfinishedUploads: unfinishedUploads,
+            uploadsInProgress: uploadsInProgress
+        ) {
+            message += " \(warning)"
         }
 
         return message
+    }
+
+    static func accountDescription(
+        name: String?,
+        email: String?
+    ) -> String {
+        switch (name, email) {
+        case let (name?, email?):
+            return "\(name) (\(email))"
+
+        case let (name?, nil):
+            return name
+
+        case let (nil, email?):
+            return email
+
+        case (nil, nil):
+            return "a PickPic account"
+        }
+    }
+
+    /*
+     * What switching does to the current account's queue. Shared by the
+     * switch alert and the Account sheet's "Sign In to Another Account", so
+     * the warning reads the same whichever way the switch starts -- and the
+     * sheet shows it before a link has even been requested.
+     *
+     * A warning, not a gate. Links expire in 15 or 30 minutes and a shoot can
+     * take hours to upload on a poor connection, so "finish first" would
+     * mostly mean "the link has expired"; and some work cannot finish at
+     * all without help (offline events, failed frames, a full storage cap).
+     *
+     * An upload running right now is called out separately because it is
+     * the one immediate effect: the switch revokes this account's session,
+     * so the transfer stops partway. Photos already sent stay sent.
+     */
+    static func unfinishedWorkWarning(
+        currentAccount: String,
+        unfinishedUploads: Int,
+        uploadsInProgress: Int
+    ) -> String? {
+        guard unfinishedUploads > 0 else {
+            return nil
+        }
+
+        let uploads = unfinishedUploads == 1
+            ? "1 unfinished upload belongs"
+            : "\(unfinishedUploads) unfinished uploads belong"
+
+        var warning = "\(uploads) to \(currentAccount) and can't upload while this iPad is signed in to another account."
+
+        if uploadsInProgress > 0 {
+            warning += " Uploading stops when you switch; photos already uploaded are kept."
+        }
+
+        warning += " They can upload again once you sign back in to \(currentAccount)."
+
+        return warning
     }
 }

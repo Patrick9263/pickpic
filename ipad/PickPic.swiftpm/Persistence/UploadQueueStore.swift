@@ -1579,6 +1579,34 @@ final class UploadQueueStore: ObservableObject {
         }
     }
 
+    /*
+     * The signed-in account's share of the queue, for the warnings shown
+     * before switching away from it. Another account's parked jobs are not
+     * counted: switching cannot make them any less able to upload.
+     */
+    func unfinishedJobCount(
+        using configuration: APIConfigurationStore
+    ) -> Int {
+        jobs.filter { job in
+            job.stage != .completed
+            && configuration.owns(job)
+        }.count
+    }
+
+    /*
+     * Only .uploading, deliberately rather than isActiveOperation: preparing
+     * and converting are local and carry on through a switch, while an
+     * upload is the one thing the switch's revoked session cuts off.
+     */
+    func uploadingJobCount(
+        using configuration: APIConfigurationStore
+    ) -> Int {
+        jobs.filter { job in
+            job.stage == .uploading
+            && configuration.owns(job)
+        }.count
+    }
+
     func add(
         _ job: UploadJob
     ) throws {

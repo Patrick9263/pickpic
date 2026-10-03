@@ -31,6 +31,8 @@ struct ConnectionSettingsView: View {
 
     @EnvironmentObject private var feedback: AppFeedbackStore
 
+    @EnvironmentObject private var uploadQueue: UploadQueueStore
+
     @Environment(\.dismiss) private var dismiss
 
     private enum Mode: Hashable {
@@ -197,12 +199,32 @@ struct ConnectionSettingsView: View {
                     """
                     This iPad stays signed in to this account until the new \
                     link is used. After the switch, this account's events \
-                    and unfinished uploads stay on this iPad, and can \
-                    upload again once you sign back in to it.
+                    stay on this iPad for when you sign back in to it.
                     """
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+
+                // The same words the switch alert uses (AuthLink).
+                if let warning = AuthLink.unfinishedWorkWarning(
+                    currentAccount: AuthLink.accountDescription(
+                        name: configuration.credential?.accountName,
+                        email: configuration.credential?.email
+                    ),
+                    unfinishedUploads: uploadQueue.unfinishedJobCount(
+                        using: configuration
+                    ),
+                    uploadsInProgress: uploadQueue.uploadingJobCount(
+                        using: configuration
+                    )
+                ) {
+                    Label(
+                        warning,
+                        systemImage: "arrow.up.circle"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                }
 
                 Button("Cancel") {
                     isAddingAccount = false

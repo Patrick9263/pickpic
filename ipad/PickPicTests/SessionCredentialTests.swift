@@ -223,7 +223,8 @@ struct SessionCredentialTests {
         let message = link.accountSwitchMessage(
             currentAccount: "Studio A",
             currentEmail: "a@example.com",
-            unfinishedUploads: 3
+            unfinishedUploads: 3,
+            uploadsInProgress: 0
         )
 
         #expect(message.contains("signed in to Studio A (a@example.com)."))
@@ -234,14 +235,16 @@ struct SessionCredentialTests {
             link.accountSwitchMessage(
                 currentAccount: "Studio A",
                 currentEmail: nil,
-                unfinishedUploads: 1
+                unfinishedUploads: 1,
+                uploadsInProgress: 0
             ).contains("1 unfinished upload belongs to Studio A and")
         )
 
         let signIn = AuthLink(token: "abc", kind: .signIn).accountSwitchMessage(
             currentAccount: nil,
             currentEmail: nil,
-            unfinishedUploads: 0
+            unfinishedUploads: 0,
+            uploadsInProgress: 0
         )
 
         #expect(!signIn.contains("upload"))
@@ -259,7 +262,8 @@ struct SessionCredentialTests {
             .accountSwitchMessage(
                 currentAccount: "PickPic",
                 currentEmail: "p@example.com",
-                unfinishedUploads: 0
+                unfinishedUploads: 0,
+                uploadsInProgress: 0
             )
 
         #expect(
@@ -433,6 +437,66 @@ struct SessionCredentialTests {
         )
 
         #expect(slid.accountID == "acct-1")
+    }
+
+    // MARK: - Switch warning
+
+    @Test
+    func noWarningWithNothingUnfinished() {
+        #expect(
+            AuthLink.unfinishedWorkWarning(
+                currentAccount: "PickPic",
+                unfinishedUploads: 0,
+                uploadsInProgress: 0
+            ) == nil
+        )
+    }
+
+    @Test
+    func warnsThatUnfinishedUploadsWaitForTheAccount() throws {
+        let warning = try #require(
+            AuthLink.unfinishedWorkWarning(
+                currentAccount: "PickPic",
+                unfinishedUploads: 2,
+                uploadsInProgress: 0
+            )
+        )
+
+        #expect(warning.contains("2 unfinished uploads belong to PickPic"))
+        #expect(warning.contains("once you sign back in to PickPic"))
+        #expect(!warning.contains("Uploading stops"))
+    }
+
+    /*
+     * The switch revokes this account's session, so a running transfer is
+     * the one thing that visibly stops -- it has to be said up front.
+     */
+    @Test
+    func warnsThatARunningUploadStops() throws {
+        let warning = try #require(
+            AuthLink.unfinishedWorkWarning(
+                currentAccount: "PickPic",
+                unfinishedUploads: 1,
+                uploadsInProgress: 1
+            )
+        )
+
+        #expect(warning.contains("1 unfinished upload belongs"))
+        #expect(warning.contains("Uploading stops when you switch"))
+    }
+
+    @Test
+    func describesAnAccountByNameAndEmail() {
+        #expect(
+            AuthLink.accountDescription(
+                name: "PickPic",
+                email: "photographer@example.com"
+            ) == "PickPic (photographer@example.com)"
+        )
+        #expect(
+            AuthLink.accountDescription(name: nil, email: nil)
+                == "a PickPic account"
+        )
     }
 
     // MARK: - AccountScope

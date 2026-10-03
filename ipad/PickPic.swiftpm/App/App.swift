@@ -280,10 +280,13 @@ struct PickPicApp: App {
                             currentEmail:
                                 configuration.credential?.email,
                             unfinishedUploads:
-                                uploadQueue.jobs.filter { job in
-                                    job.stage != .completed
-                                    && configuration.owns(job)
-                                }.count
+                                uploadQueue.unfinishedJobCount(
+                                    using: configuration
+                                ),
+                            uploadsInProgress:
+                                uploadQueue.uploadingJobCount(
+                                    using: configuration
+                                )
                         )
                     )
                 }
