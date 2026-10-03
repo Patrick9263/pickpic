@@ -96,6 +96,21 @@ struct RawUploadProgressTally: Equatable, Sendable {
 
     private(set) var inFlightSentBytes: [Int: Int64] = [:]
 
+    /*
+     * Each in-flight part's first reported sent count, when that is short of
+     * the part's size (#374). Measured on device, every part's first
+     * didSendBodyData arrives within 0.18 s and reports exactly 2 MiB: that
+     * is URLSession filling its send buffer, not bytes on the network. Ten
+     * parts of a 77 MB ARW did it at once, so the bar leapt ~20 MB the
+     * moment the upload began and then sat there.
+     *
+     * A part whose first sample is already its whole size -- the small last
+     * part, buffered in one go -- gets no baseline and counts as today. That
+     * is at most a part's worth (~2% of a typical file), and rescaling it
+     * would only move the jump to its end.
+     */
+    private(set) var inFlightBaselines: [Int: Int64] = [:]
+
     init(plan: RawUploadPartPlan, landedParts: some Sequence<Int>) {
         self.plan = plan
         self.landedParts = Set(
@@ -118,7 +133,13 @@ struct RawUploadProgressTally: Equatable, Sendable {
             return
         }
 
-        inFlightSentBytes[partNumber] = min(max(sentBytes, 0), partSize)
+        let clamped = min(max(sentBytes, 0), partSize)
+
+        if inFlightSentBytes[partNumber] == nil, clamped < partSize {
+            inFlightBaselines[partNumber] = clamped
+        }
+
+        inFlightSentBytes[partNumber] = clamped
     }
 
     mutating func markLanded(_ partNumber: Int) {
@@ -127,12 +148,43 @@ struct RawUploadProgressTally: Equatable, Sendable {
         }
 
         inFlightSentBytes.removeValue(forKey: partNumber)
+        inFlightBaselines.removeValue(forKey: partNumber)
         landedParts.insert(partNumber)
     }
 
-    /* A retried part is re-sent from its first byte, so its count restarts. */
+    /*
+     * A retried part is re-sent from its first byte, so its count restarts
+     * -- and it re-fills the send buffer, so its baseline must be taken
+     * afresh from the retry's first sample.
+     */
     mutating func markFailed(_ partNumber: Int) {
         inFlightSentBytes.removeValue(forKey: partNumber)
+        inFlightBaselines.removeValue(forKey: partNumber)
+    }
+
+    /*
+     * A part's sent count stretched from (baseline...size) onto (0...size),
+     * so it starts at 0 and still reaches its full size on the last byte:
+     * the start jump goes away without adding one at the end. Each part
+     * already reads full for ~1.3 s before it lands (the buffer draining,
+     * plus the server's work), and that is unchanged.
+     *
+     * After a relaunch, RawDeliveryProgress.reattach builds a fresh tally,
+     * so a running part's first sample lands mid-part and becomes its
+     * baseline. The part then reads 0 -- which is what it read before that
+     * sample arrived -- and climbs from there, so the bar never goes
+     * backwards; it only under-counts that part's bytes until it lands.
+     */
+    private func displayedBytes(ofPart partNumber: Int, sent: Int64) -> Int64 {
+        guard
+            let partSize = plan.size(ofPart: partNumber),
+            let baseline = inFlightBaselines[partNumber],
+            baseline > 0
+        else {
+            return sent
+        }
+
+        return max(sent - baseline, 0) * partSize / (partSize - baseline)
     }
 
     var sentBytes: Int64 {
@@ -140,7 +192,10 @@ struct RawUploadProgressTally: Equatable, Sendable {
             total + (plan.size(ofPart: partNumber) ?? 0)
         }
 
-        let inFlightBytes = inFlightSentBytes.values.reduce(0, +)
+        let inFlightBytes = inFlightSentBytes.reduce(Int64(0)) {
+            total, entry in
+            total + displayedBytes(ofPart: entry.key, sent: entry.value)
+        }
 
         return min(landedBytes + inFlightBytes, plan.byteSize)
     }
