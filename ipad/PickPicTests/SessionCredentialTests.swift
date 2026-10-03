@@ -691,6 +691,59 @@ struct SessionCredentialTests {
         #expect(refreshed == credential)
     }
 
+    /*
+     * refreshSession() skips its save on equivalence, and every save restarts
+     * App.swift's automatic sync task (#384), so these pin both directions:
+     * read-to-read jitter must not count as a change, and a real slide or a
+     * newly learned account must.
+     */
+    private static let refreshBase = SessionCredential(
+        token: token,
+        expiresAt: Date(timeIntervalSince1970: 2_000_000_000),
+        accountID: "account-1",
+        accountName: "Studio",
+        email: "studio@example.test"
+    )
+
+    @Test
+    func treatsExpiryJitterAsEquivalent() {
+        let reread = Self.refreshBase.withRefreshedExpiry(
+            Self.refreshBase.expiresAt.addingTimeInterval(-42)
+        )
+
+        #expect(Self.refreshBase.isEquivalent(to: reread))
+    }
+
+    @Test
+    func treatsADaySlideAsAChange() {
+        let slid = Self.refreshBase.withRefreshedExpiry(
+            Self.refreshBase.expiresAt.addingTimeInterval(24 * 60 * 60)
+        )
+
+        #expect(!Self.refreshBase.isEquivalent(to: slid))
+    }
+
+    @Test
+    func treatsANewlyLearnedAccountAsAChange() {
+        let unknown = SessionCredential(
+            token: Self.token,
+            expiresAt: Self.refreshBase.expiresAt
+        )
+
+        #expect(!unknown.isEquivalent(to: Self.refreshBase))
+    }
+
+    @Test
+    func treatsARenamedAccountAsAChange() {
+        let renamed = Self.refreshBase.withAccountDetails(
+            accountID: "account-1",
+            accountName: "Renamed Studio",
+            email: "studio@example.test"
+        )
+
+        #expect(!Self.refreshBase.isEquivalent(to: renamed))
+    }
+
     private func makeResponse(
         setCookie: String?
     ) throws -> HTTPURLResponse {
