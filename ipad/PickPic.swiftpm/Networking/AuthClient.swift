@@ -106,6 +106,34 @@ struct SessionCredential: Codable, Hashable, Sendable {
             email: email
         )
     }
+
+    /*
+     * Expiry is derived as receivedAt + Max-Age (see
+     * credential(fromSetCookieHeader:)), so two reads of a session that has
+     * not moved still disagree by the request's latency plus Max-Age's
+     * whole-second rounding -- and on a poor connection that latency can be
+     * long. A real slide is never this small: worker/auth.ts throttles the
+     * bump to once a day, so the session either jumps by at least a day or,
+     * once capped at its maximum lifetime, does not move at all.
+     */
+    static let expiryComparisonTolerance: TimeInterval = 60 * 60
+
+    /*
+     * Whether storing `other` in place of this credential would change
+     * anything worth keeping. APIConfigurationStore.refreshSession() asks
+     * before saving, because every save bumps the store's revision, and
+     * App.swift's automatic sync task is keyed on it -- an unconditional
+     * save restarted that task on every foreground and cancelled the fetch
+     * it had just begun (#384).
+     */
+    func isEquivalent(to other: SessionCredential) -> Bool {
+        token == other.token
+            && accountID == other.accountID
+            && accountName == other.accountName
+            && email == other.email
+            && abs(expiresAt.timeIntervalSince(other.expiresAt))
+                < Self.expiryComparisonTolerance
+    }
 }
 
 extension SessionCredential {

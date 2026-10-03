@@ -261,6 +261,15 @@ final class APIConfigurationStore: ObservableObject {
             return
         }
 
+        /*
+         * Usually nothing has changed -- the slide moves at most once a day
+         * -- and saving anyway would bump revision for nothing, restarting
+         * every task keyed on it (#384).
+         */
+        guard !credential.isEquivalent(to: refreshed) else {
+            return
+        }
+
         try? save(refreshed)
     }
 
