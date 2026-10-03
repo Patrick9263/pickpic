@@ -94,6 +94,34 @@ struct PickPicEvent: Identifiable, Hashable, Codable {
         !needsRemoteCreation
             && !shareToken.isEmpty
     }
+
+    /*
+     * Whether a failed server delete still leaves the event deleted, so
+     * the local copy -- list entry, queued jobs, folder reference -- should
+     * go too.
+     *
+     * A 404 always does: the server not having the event is exactly what
+     * deleting asks for. Without this, an event created offline and never
+     * synced could not be deleted at all, because the server has never
+     * heard of it.
+     *
+     * Being offline does too, but only for an event still marked as never
+     * synced; a synced event's server copy cannot be confirmed gone, so
+     * that delete has to wait for a connection. The marker can lag a sync
+     * by moments (ContentView clears it once a job's upload starts), so a
+     * server copy can occasionally survive this. That copy reappears on the
+     * next refresh, where it can be deleted again -- recoverable, unlike
+     * leaving the photographer unable to delete the event.
+     */
+    func isDeleted(
+        despite error: Error
+    ) -> Bool {
+        if case APIClientError.server(404, _) = error {
+            return true
+        }
+
+        return needsRemoteCreation && error is URLError
+    }
 }
 
 extension PickPicEvent {
