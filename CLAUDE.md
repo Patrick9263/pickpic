@@ -456,6 +456,8 @@ Sign in with Apple (`/api/auth/apple/start` → `/api/auth/apple/callback`, [wor
 
 Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex matches, each delegating to a dedicated async handler defined in the same 4,000-line file. Add endpoints in that style; don't introduce a router library.
 
+**One deployment runs the Cron Trigger** (#184): the default `pickpic` worker, hourly at :17, into `runScheduledJobs` in `worker/index.ts`. `triggers` is an _inheritable_ wrangler key, so `admin` and `app` declare `"crons": []` explicitly. Remove those overrides and all three workers run every job against the one shared database. Jobs today are a RAW-reclaim sweep across every event and a retry of Telegram notifications left unsent; the purge (#185) and expiry reminders (#186) go there too. Every job must be idempotent and safe to overlap with request traffic. This is application logic on a schedule, not migrations, which still stay manual.
+
 ### One SPA, two faces
 
 [src/App.tsx](src/App.tsx) is the only router — it reads `window.location.pathname` and renders `DashboardPage` (`/admin`), `GalleryPage` (`/g/:shareToken`), or the home page. The same bundle ships to both origins; which face a visitor sees depends on hostname and path, not a build flag. Cross-origin links use `VITE_ADMIN_APP_ORIGIN` / `VITE_PUBLIC_APP_ORIGIN` from `.env.production`.
