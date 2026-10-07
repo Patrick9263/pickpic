@@ -19,11 +19,14 @@
 # and the key itself at ~/.appstoreconnect/private_keys/AuthKey_<ASC_KEY_ID>.p8 (the path xcodebuild
 # and altool both search).
 #
-# The key must have the Admin role, even for a local export. This Mac holds no Apple Distribution
-# certificate -- Xcode's Distribute App flow signs with Apple's cloud-managed one -- and xcodebuild
-# refuses cloud signing to any API key below Admin ("Cloud signing permission error"); App Store
-# Connect offers no narrower permission for keys. The alternative, a locally installed distribution
-# certificate, would be one more secret to back up and rotate, for no gain on a one-person team.
+# It must be a Team key (Users and Access > Integrations > App Store Connect API > Team Keys) with
+# the Admin role, even for a local export. An Individual key can't reach the provisioning API at
+# all. And this Mac holds no Apple Distribution certificate -- Xcode's Distribute App flow signs
+# with Apple's cloud-managed one -- while xcodebuild refuses cloud signing to any API key below
+# Admin ("Cloud signing permission error"); App Store Connect offers no narrower permission for
+# keys. The alternative, a locally installed distribution certificate, would be one more secret to
+# back up and rotate, for no gain on a one-person team. Xcode's own signed-in Apple ID is no
+# fallback either: xcodebuild run from a script reports "No Accounts".
 #
 # Set BUILD_NUMBER to override the generated build number.
 
@@ -87,8 +90,12 @@ AUTH_ARGS=(
 # Xcode would silently clobber (CLAUDE.md trap 4) -- the number is passed as a build-setting
 # override; GENERATE_INFOPLIST_FILE turns it into CFBundleVersion. A UTC timestamp is monotonic
 # across branches, which a commit count is not, and two components keep each one inside a 32-bit
-# integer. manageAppVersionAndBuildNumber is off below so Xcode doesn't silently replace it.
-BUILD_NUMBER="${BUILD_NUMBER:-$(date -u +%Y%m%d).$(date -u +%H%M%S)}"
+# integer. manageAppVersionAndBuildNumber is off below so Xcode doesn't silently replace it. Both
+# halves come from one clock reading so a run straddling midnight can't pair the wrong date with
+# the time, and 10# drops the time's leading zeros, which keeps it a plain integer without changing
+# its order.
+NOW="$(date -u +%s)"
+BUILD_NUMBER="${BUILD_NUMBER:-$(date -u -r "$NOW" +%Y%m%d).$((10#$(date -u -r "$NOW" +%H%M%S)))}"
 
 WORK_DIR="/tmp/pickpic-testflight/$BUILD_NUMBER"
 ARCHIVE_PATH="$WORK_DIR/PickPic.xcarchive"
@@ -112,6 +119,11 @@ run_logged() {
 
 echo "PickPic build $BUILD_NUMBER from $COMMIT"
 
+# ITSAppUsesNonExemptEncryption=NO is Patrick's export-compliance declaration: the app's only
+# encryption is the OS's own HTTPS, plus SHA-256 hashing, which is not encryption at all. Without it
+# every build sits at "Missing Compliance" in TestFlight until someone answers the question by hand.
+# Revisit it if the app ever ships its own cryptography.
+
 run_logged archive xcodebuild archive \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
@@ -121,12 +133,13 @@ run_logged archive xcodebuild archive \
   -derivedDataPath "/tmp/pickpic-testflight/DerivedData" \
   -allowProvisioningUpdates \
   "${AUTH_ARGS[@]}" \
-  CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+  INFOPLIST_KEY_ITSAppUsesNonExemptEncryption=NO
 
 # destination=upload has xcodebuild sign and send the build to App Store Connect in one step, with
 # the same API key used for signing -- no separate altool invocation or second credential.
-DESTINATION=export
-[[ "$UPLOAD" -eq 1 ]] && DESTINATION=upload
+DESTINATION="export"
+[[ "$UPLOAD" -eq 1 ]] && DESTINATION="upload"
 EXPORT_OPTIONS="$WORK_DIR/ExportOptions.plist"
 cat >"$EXPORT_OPTIONS" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
