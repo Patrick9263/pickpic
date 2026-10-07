@@ -79,6 +79,8 @@ xcodebuild -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug 
 
 Use a scratch `-derivedDataPath` rather than wiping the shared DerivedData Xcode is using.
 
+TestFlight builds go out through `scripts/testflight-deploy.sh`, run by hand on Patrick's Mac — never from CI (GitHub's macOS runners lack Xcode 27, #363) and never automatically, since an upload is visible to testers and burns a build number. Without flags it only archives and exports an `.ipa` to `/tmp/pickpic-testflight/<build>/`; `--upload` sends it. The build number defaults to `git rev-list --count HEAD` and is passed as a `CURRENT_PROJECT_VERSION=` override, so `project.pbxproj` is never edited. It authenticates with an App Store Connect API key kept outside the repo: `~/.appstoreconnect/private_keys/AuthKey_<id>.p8` plus `~/.appstoreconnect/pickpic.env` (`ASC_KEY_ID`, `ASC_ISSUER_ID`). The archive is signed from the login keychain, so it fails with `errSecInternalComponent` whenever that keychain is locked (`security show-keychain-info ~/Library/Keychains/login.keychain-db` exits 36) — which it is overnight or with the Mac locked.
+
 If `xcodebuild` ever reports that the active developer directory is `/Library/Developer/CommandLineTools`, `xcode-select` is pointed at the wrong place. Check with `xcode-select -p`; the fix needs sudo, so ask rather than working around it — `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` as a command prefix is a stopgap only.
 
 Debug builds put the app's code in `PickPic.app/PickPic.debug.dylib`, not the `PickPic` stub binary. When checking whether a change actually made it into a build, run `strings` against the dylib.
