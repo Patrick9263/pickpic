@@ -64,6 +64,15 @@ ASC_ISSUER_ID="${env_issuer_id:-${ASC_ISSUER_ID:-}}"
 key_path="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 [ -f "$key_path" ] || die "API key not found at $key_path"
 
+# The archive is signed with the Apple Development identity in the login keychain. Over SSH -- how
+# Patrick drives this Mac from the iPad -- every session sees that keychain as locked, whatever its
+# state on the Mac's own screen, and codesign then fails only after a full compile with a bare
+# errSecInternalComponent. Check up front instead. Exit 36 is errSecInteractionNotAllowed.
+login_keychain="$HOME/Library/Keychains/login.keychain-db"
+if ! security show-keychain-info "$login_keychain" >/dev/null 2>&1; then
+  die "login keychain is locked in this session; run: security unlock-keychain $login_keychain"
+fi
+
 auth_args=(
   -allowProvisioningUpdates
   -authenticationKeyPath "$key_path"
