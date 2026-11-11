@@ -912,11 +912,12 @@ $XCODE_NOTE"
   DID_IMPLEMENT="yes"
 fi
 
-# New-issue discovery (the weekday follow-on analysis and the surplus sweep) was paused in #332 until
-# the ready-issue backlog caught up; that condition has been met, so it defaults on again. The switch
-# stays as an env override: FIND_NEW_ISSUES=no pauses it, and scripts/review/tests/run-review.bats
-# uses it to exercise the paused state.
-FIND_NEW_ISSUES="${FIND_NEW_ISSUES:-yes}"
+# Temporary: new-issue discovery (the weekday follow-on analysis and the surplus sweep) stays paused
+# for another week even though #332's backlog condition has been met, so the first runs after the
+# /usage auth fix only implement ready issues. Flip the default below back to "yes" to resume;
+# overridable via env so scripts/review/tests/run-review.bats can still exercise the analyse/sweep
+# logic underneath.
+FIND_NEW_ISSUES="${FIND_NEW_ISSUES:-no}"
 if [[ "$FIND_NEW_ISSUES" != "yes" ]]; then
   [[ "${DID_IMPLEMENT:-no}" != "yes" ]] && RUN_OUTCOME="skip-new-issues-paused"
   log "SKIP: new-issue discovery (analysis/sweep) is paused (FIND_NEW_ISSUES=no)"
