@@ -340,7 +340,9 @@ sweeps are getting more expensive and how much of the weekly window this job rea
 Logs are in `~/Library/Logs/claude-review-*.log` and `~/.claude/pickpic-review/logs/`; reports are
 kept in `~/.claude/pickpic-review/reports/`. An unparseable `/usage` aborts the run and logs loudly
 — **if reports stop arriving, read that log first**, because a silent parser break looks exactly
-like "nothing worth reporting".
+like "nothing worth reporting". A `/usage` that prints a `Total cost:` summary instead of
+percentages (outcome `abort-no-subscription-auth`) is not a format change: `claude` is signed out in
+that context, so re-login with `claude-relogin`.
 
 The versioned plists live in `scripts/review/launchd/`; the loaded copies are in
 `~/Library/LaunchAgents/`. Edit the versioned ones, copy them across, then

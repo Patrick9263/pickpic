@@ -284,6 +284,16 @@ read_usage() {
 # identical to "nothing worth reporting" from the outside. If reports stop arriving, read this log.
 require_budget() {
   if [[ -z "${SESSION_PCT:-}" || -z "${WEEK_PCT:-}" ]]; then
+    # `/usage` prints a "Total cost" API-billing summary instead of the subscription percentages when
+    # `claude` is not authenticated with the subscription login -- which is what a launchd run gets
+    # when the token is not in a keychain it can read (see the claude-relogin note in CLAUDE.md's
+    # memory). The format has not changed; the run is simply signed out.
+    if [[ "$USAGE_RAW" == *"Total cost:"* ]]; then
+      RUN_OUTCOME="abort-no-subscription-auth"
+      log "ABORT: /usage returned an API cost summary, not subscription limits -- claude is not signed in with the subscription in this context. Re-login with claude-relogin. Raw output follows:"
+      printf '%s\n' "$USAGE_RAW" | tee -a "$LOG_FILE"
+      exit 1
+    fi
     RUN_OUTCOME="abort-unparseable-usage"
     log "ABORT: could not parse /usage output -- the format may have changed. Raw output follows:"
     printf '%s\n' "$USAGE_RAW" | tee -a "$LOG_FILE"
@@ -902,15 +912,15 @@ $XCODE_NOTE"
   DID_IMPLEMENT="yes"
 fi
 
-# Temporary: Patrick asked to pause new-issue discovery -- both the weekday follow-on analysis and
-# the surplus sweep -- until the existing ready-issue backlog is caught up and core functionality
-# ships. Ready-issue implementation above is unaffected; this only stops the job from adding more to
-# the pile. Flip the default below back to "yes" to resume; overridable via env so
-# scripts/review/tests/run-review.bats can still exercise the analyse/sweep logic underneath.
+# Temporary: new-issue discovery (the weekday follow-on analysis and the surplus sweep) stays paused
+# for another week even though #332's backlog condition has been met, so the first runs after the
+# /usage auth fix only implement ready issues. Flip the default below back to "yes" to resume;
+# overridable via env so scripts/review/tests/run-review.bats can still exercise the analyse/sweep
+# logic underneath.
 FIND_NEW_ISSUES="${FIND_NEW_ISSUES:-no}"
 if [[ "$FIND_NEW_ISSUES" != "yes" ]]; then
   [[ "${DID_IMPLEMENT:-no}" != "yes" ]] && RUN_OUTCOME="skip-new-issues-paused"
-  log "SKIP: new-issue discovery (analysis/sweep) is paused for now -- set FIND_NEW_ISSUES=yes above to resume"
+  log "SKIP: new-issue discovery (analysis/sweep) is paused (FIND_NEW_ISSUES=no)"
   exit 0
 fi
 
