@@ -26,6 +26,7 @@ import {
 } from "./access.ts";
 import { handleOperatorRequest, requireOperatorPrincipal } from "./operator.ts";
 import {
+  drainTelegramNotifications,
   scheduleUploadStartedNotification,
   scheduleRawRequestNotification,
 } from "./telegram.ts";
@@ -2885,12 +2886,11 @@ async function listPhotos(
   }
 
   /*
-   * The only heartbeat this project has. There is no cron (CLAUDE.md keeps
-   * scheduled work out of the deployment), so the TTL half of the RAW reclaim
-   * policy needs some request to advance it -- and the iPad polls this route
-   * for every event on each activation sweep, which is the one thing that
-   * keeps happening whether or not anybody opens the gallery. A shoot whose
-   * requester never came back is collected here.
+   * The TTL half of the RAW reclaim policy, advanced on the request that most
+   * reliably keeps arriving: the iPad polls this route for every event on each
+   * activation sweep. The hourly cron (#184) sweeps every event as well, so
+   * this is no longer the only heartbeat -- it just collects an abandoned RAW
+   * sooner for an event the photographer is actively working.
    *
    * Off the response path: the poll already runs a correlated subquery per
    * photo and should not also wait on R2 deletes.
@@ -4978,11 +4978,10 @@ function isRawReclaimable(row: RawReclaimRow, now: number): boolean {
  * filter narrows to one photo or one event, and the row itself names which
  * account's counter to move. It also keeps the aggregate off the whole table.
  *
- * There is no cron in this project (deliberately -- see CLAUDE.md on
- * migrations and workflows), so the TTL half of the policy only advances when
- * one of those callers runs. The iPad's per-event photo poll is the reliable
- * one: a gallery nobody ever opens again still has its abandoned requests
- * swept, because the photographer's app keeps asking about the event.
+ * The TTL half of the policy advances when one of those callers runs, and on
+ * the hourly cron (#184) via reclaimRawPhotosEverywhere -- which is what
+ * collects a gallery nobody opens again from an iPad that has stopped asking
+ * about the event.
  *
  * Failure here is deliberately silent. A reclaim that half-fails leaves bytes
  * in R2 that the database no longer counts, which the dashboard's
@@ -8214,7 +8213,64 @@ export default {
       return jsonResponse({ error: "Internal server error." }, 500);
     }
   },
+
+  async scheduled(_controller, env, _ctx): Promise<void> {
+    await runScheduledJobs(env);
+  },
 } satisfies ExportedHandler<Env>;
+
+/*
+ * Everything the Cron Trigger (#184) drives. The schedule is declared on the
+ * default (public) deployment only -- wrangler.jsonc explains why the other
+ * two declare an empty one -- because all three share pickpic-db and R2, and
+ * three workers sweeping the same rows would just race each other. The public
+ * worker is also the one carrying the Telegram secrets the drain needs.
+ *
+ * Every job must be idempotent and safe to overlap with request traffic: a
+ * cron run can fire while the iPad is polling the same event, or while a
+ * request is mid-way through the very notification the drain wants to retry.
+ *
+ * Expiry itself needs no job: isEventExpired is evaluated on every request
+ * against expires_at, so there is no "mark expired" state to advance. What
+ * expiry eventually acts on -- the purge (#185) and the 14-day / 24-hour
+ * reminders (#186) -- belongs here when it lands.
+ *
+ * allSettled rather than a sequence, so one job throwing cannot starve the
+ * others; each already logs its own failures in detail.
+ */
+async function runScheduledJobs(env: Env): Promise<void> {
+  const results = await Promise.allSettled([
+    reclaimRawPhotosEverywhere(env),
+    drainTelegramNotifications(env.DB, env),
+  ]);
+
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error("A scheduled job failed:", result.reason);
+    }
+  }
+}
+
+/*
+ * The cron's RAW reclaim pass, one event at a time so it reuses
+ * reclaimRawPhotos's existing per-event filter rather than growing a second,
+ * unfiltered form of that query. Only events with a delivered RAW are
+ * visited, and the reclaim clears raw_storage_key as it goes, so the set stays
+ * as small as the number of RAWs currently waiting to be collected.
+ */
+async function reclaimRawPhotosEverywhere(env: Env): Promise<void> {
+  const events = await env.DB.prepare(
+    `
+      SELECT DISTINCT event_id AS eventId
+      FROM photos
+      WHERE raw_storage_key IS NOT NULL
+    `,
+  ).all<{ eventId: string }>();
+
+  for (const { eventId } of events.results) {
+    await reclaimRawPhotos(env.DB, env, "p.event_id = ?", eventId);
+  }
+}
 
 async function routeRequest(
   request: Request,

@@ -26,6 +26,15 @@
   "observability": {
     "enabled": true,
   },
+
+  // Hourly, at :17 rather than :00 to stay off the top-of-the-hour pile-up.
+  // Drives runScheduledJobs in worker/index.ts (#184). `triggers` is one of
+  // wrangler's *inheritable* keys, so without the empty overrides under
+  // `admin` and `app` below all three workers would run the same jobs against
+  // the one shared database. Keep it on exactly one deployment.
+  "triggers": {
+    "crons": ["17 * * * *"],
+  },
   "upload_source_maps": true,
   "compatibility_flags": ["nodejs_compat"],
   "d1_databases": [
@@ -49,6 +58,11 @@
           "custom_domain": true,
         },
       ],
+
+      // Not inherited from the top level -- see the comment there.
+      "triggers": {
+        "crons": [],
+      },
 
       "vars": {
         "TEAM_DOMAIN": "https://pickpic.cloudflareaccess.com",
@@ -78,6 +92,11 @@
           "custom_domain": true,
         },
       ],
+
+      // Not inherited from the top level -- see the comment there.
+      "triggers": {
+        "crons": [],
+      },
 
       "vars": {
         "AUTH_MODE": "session",
