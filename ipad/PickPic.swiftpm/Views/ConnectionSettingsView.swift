@@ -57,6 +57,9 @@ struct ConnectionSettingsView: View {
      */
     @State private var isAddingAccount = false
 
+    @State private var pendingDiscard: ParkedAccountWork?
+    @State private var discardErrorMessage: String?
+
     private var showsSignInSteps: Bool {
         !configuration.isConfigured || isAddingAccount
     }
@@ -80,6 +83,8 @@ struct ConnectionSettingsView: View {
 
                 if configuration.isConfigured {
                     signedInSection
+
+                    parkedImportsSection
                 }
 
                 if showsSignInSteps {
@@ -248,6 +253,132 @@ struct ConnectionSettingsView: View {
                     isWorking = false
                 }
             }
+        }
+    }
+
+    /*
+     * Another account's unfinished imports (#382). They stay queued so they
+     * upload when that account signs back in, but nothing else on screen
+     * shows them while this one is signed in, and their converted proofs
+     * keep holding storage meanwhile. Lives here because the Account sheet
+     * is where switching happens, and the only place both accounts are a
+     * meaningful idea.
+     */
+    @ViewBuilder
+    private var parkedImportsSection: some View {
+        let parkedWork = AccountScope.parkedWork(
+            in: uploadQueue.jobs,
+            currentAccountID: configuration.accountID
+        )
+
+        if !parkedWork.isEmpty {
+            Section {
+                ForEach(parkedWork) { work in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(waitingDescription(for: work))
+
+                        Text(
+                            work.eventTitles
+                                .joined(separator: ", ")
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    if work.isDiscardable {
+                        Button(
+                            work.jobs.count == 1
+                                ? "Discard Import…"
+                                : "Discard Imports…",
+                            role: .destructive
+                        ) {
+                            discardErrorMessage = nil
+                            pendingDiscard = work
+                        }
+                    } else {
+                        Text(
+                            """
+                            Still being prepared or converted. It can be \
+                            discarded once that finishes.
+                            """
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let discardErrorMessage {
+                    Label(
+                        discardErrorMessage,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Imports From Other Accounts")
+            } footer: {
+                Text(
+                    """
+                    These upload when you sign back in to the account they \
+                    were imported under. Discarding removes them from this \
+                    iPad only: the original files in their folders, and \
+                    anything already uploaded, are not touched.
+                    """
+                )
+            }
+            .confirmationDialog(
+                "Discard these imports?",
+                isPresented: Binding(
+                    get: { pendingDiscard != nil },
+                    set: { isPresented in
+                        if !isPresented {
+                            pendingDiscard = nil
+                        }
+                    }
+                ),
+                titleVisibility: .visible,
+                presenting: pendingDiscard
+            ) { work in
+                Button("Discard", role: .destructive) {
+                    discard(work)
+                }
+            } message: { work in
+                Text(
+                    """
+                    \(waitingDescription(for: work)). Their converted \
+                    proofs and upload progress are removed from this iPad, \
+                    and importing them again means converting them again.
+                    """
+                )
+            }
+        }
+    }
+
+    private func waitingDescription(
+        for work: ParkedAccountWork
+    ) -> String {
+        let imports = work.jobs.count == 1
+            ? "1 import"
+            : "\(work.jobs.count) imports"
+
+        let account = configuration.knownDescription(
+            forAccountID: work.accountID
+        ) ?? "another account"
+
+        return "\(imports) waiting for \(account)"
+    }
+
+    private func discard(
+        _ work: ParkedAccountWork
+    ) {
+        do {
+            try uploadQueue.discardParkedJobs(
+                for: work.accountID,
+                using: configuration
+            )
+        } catch {
+            discardErrorMessage = error.localizedDescription
         }
     }
 

@@ -67,6 +67,14 @@ enum UploadAccountMismatchError: LocalizedError, Sendable {
     }
 }
 
+enum ParkedWorkDiscardError: LocalizedError, Sendable {
+    case operationInProgress
+
+    var errorDescription: String? {
+        "One of these imports is still being prepared or converted. Discard them once it finishes."
+    }
+}
+
 private enum UploadFolderRelinkError: LocalizedError, Sendable {
     case jobNotFound
     case operationInProgress
@@ -1605,6 +1613,36 @@ final class UploadQueueStore: ObservableObject {
             job.stage == .uploading
             && configuration.owns(job)
         }.count
+    }
+
+    /*
+     * Removes another account's parked jobs from this iPad (#382). Local
+     * only, by construction: remove(jobIDs:) deletes queue state and the
+     * converted files, and the account that could ask the server for
+     * anything is not the one signed in. Re-derived here rather than taken
+     * from the caller, so a job that started converting while the
+     * confirmation was on screen is refused instead of removed under it.
+     */
+    func discardParkedJobs(
+        for accountID: String,
+        using configuration: APIConfigurationStore
+    ) throws {
+        guard let work = AccountScope.parkedWork(
+            in: jobs,
+            currentAccountID: configuration.accountID
+        ).first(where: { work in
+            work.accountID == accountID
+        }) else {
+            return
+        }
+
+        guard work.isDiscardable else {
+            throw ParkedWorkDiscardError.operationInProgress
+        }
+
+        try remove(
+            jobIDs: Set(work.jobs.map(\.id))
+        )
     }
 
     func add(
