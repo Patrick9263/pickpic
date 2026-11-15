@@ -1258,25 +1258,31 @@
  * Edit and Delete sit side by side inside a phone-sized lightbox. Previous design
  * had ~18px-tall targets at 2px of padding, just 10px from each other -- small
  * enough that a thumb aiming at Edit could land on the destructive one.
- * min-width and min-height now enforce 44px tap-target minimum. min-width rather
- * than horizontal padding so the wider Delete label stays flush with the card edge,
- * while the narrow Edit label grows a hit area around itself. Row is centre-aligned,
- * so the extra height only makes the comment heading slightly taller.
+ * min-width and min-height enforce the 44px tap-target minimum around each icon,
+ * so swapping the text labels for pencil/trash glyphs did not shrink the targets.
+ * Row is centre-aligned, so the extra height only makes the comment heading
+ * slightly taller.
  */
 .comment-actions button {
+  align-items: center;
   background: transparent;
   border: 0;
   color: var(--color-accent);
-  font-size: 0.72rem;
+  display: inline-flex;
+  justify-content: center;
   min-height: 44px;
   min-width: 44px;
   padding: 2px;
 }
 
+.comment-actions svg {
+  height: 18px;
+  width: 18px;
+}
+
 .comment-actions button:hover:not(:disabled) {
   background: transparent;
   color: var(--color-accent-hover);
-  text-decoration: underline;
 }
 
 .comment-form {
