@@ -1,5 +1,6 @@
 import type { GalleryPhotoRecord, ViewerPhotoCommentRecord } from "../../types";
 import type { Dispatch, FormEvent, SetStateAction } from "react";
+import { formatCommentAge } from "../../pages/galleryHelpers";
 
 type GalleryCommentsProps = {
   selectedPhoto: GalleryPhotoRecord;
@@ -12,6 +13,16 @@ type GalleryCommentsProps = {
   submitComment: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   interactionsEnabled: boolean;
 };
+
+function CommentAge({ createdAt }: { createdAt: string }) {
+  const age = formatCommentAge(createdAt);
+
+  return age ? (
+    <time dateTime={createdAt} title={new Date(createdAt).toLocaleString()}>
+      {age}
+    </time>
+  ) : null;
+}
 
 function GalleryComments({
   selectedPhoto,
@@ -35,7 +46,15 @@ function GalleryComments({
           {selectedPhoto.comments.map((comment) => (
             <article key={comment.id}>
               <div className="comment-heading">
-                <strong>{comment.displayName}</strong>
+                <div className="comment-meta">
+                  <strong>{comment.displayName}</strong>
+
+                  <CommentAge createdAt={comment.createdAt} />
+
+                  {comment.updatedAt !== comment.createdAt && (
+                    <small>Edited</small>
+                  )}
+                </div>
 
                 {comment.viewerOwned && interactionsEnabled && (
                   <div className="comment-actions">
@@ -81,8 +100,6 @@ function GalleryComments({
               </div>
 
               <p>{comment.body}</p>
-
-              {comment.updatedAt !== comment.createdAt && <small>Edited</small>}
             </article>
           ))}
         </div>

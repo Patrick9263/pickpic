@@ -7,6 +7,7 @@ import {
   createUniqueDownloadNames,
   encodePendingRawBatch,
   formatApproximateByteSize,
+  formatCommentAge,
   formatDayGroupLabel,
   formatZipDownloadNotice,
   getDefaultPreviewUrl,
@@ -684,5 +685,32 @@ describe("encodePendingRawBatch / parsePendingRawBatch", () => {
         "share-1",
       ),
     ).toBeNull();
+  });
+});
+
+describe("formatCommentAge", () => {
+  const now = Date.parse("2026-06-15T12:00:00.000Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  const minute = 60_000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+
+  it("labels anything under a minute as just now, including clock skew", () => {
+    expect(formatCommentAge(ago(30_000), now)).toBe("just now");
+    expect(formatCommentAge(ago(-5_000), now)).toBe("just now");
+  });
+
+  it("uses minutes, hours, then days", () => {
+    expect(formatCommentAge(ago(5 * minute), now)).toBe("5m ago");
+    expect(formatCommentAge(ago(3 * hour), now)).toBe("3h ago");
+    expect(formatCommentAge(ago(3 * day), now)).toBe("3d ago");
+  });
+
+  it("falls back to a date after a month", () => {
+    expect(formatCommentAge(ago(45 * day), now)).not.toMatch(/ago$/);
+  });
+
+  it("returns an empty string for an unparseable timestamp", () => {
+    expect(formatCommentAge("not a date", now)).toBe("");
   });
 });

@@ -303,6 +303,43 @@ export function formatDayGroupLabel(dayKey: string): string {
   }).format(new Date(year, month - 1, day));
 }
 
+/*
+ * Short relative label for a comment's age ("just now", "5m ago", "3d ago"),
+ * falling back to a plain date after a month. `now` is a parameter so tests
+ * need no fake timers. An unparseable timestamp yields "" so the caller can
+ * simply omit the label rather than render "Invalid Date".
+ */
+export function formatCommentAge(
+  timestamp: string,
+  now: number = Date.now(),
+): string {
+  const time = Date.parse(timestamp);
+  if (Number.isNaN(time)) {
+    return "";
+  }
+
+  const seconds = Math.max(0, Math.floor((now - time) / 1000));
+  if (seconds < 60) {
+    return "just now";
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 30) {
+    return `${days}d ago`;
+  }
+
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+    new Date(time),
+  );
+}
+
 export function comparePhotos(
   first: GalleryPhotoRecord,
   second: GalleryPhotoRecord,
