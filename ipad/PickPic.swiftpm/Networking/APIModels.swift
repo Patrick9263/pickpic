@@ -385,7 +385,10 @@ struct EventPhotoStatistics:
                     + statistics.missingVariantPhotoCount,
                 pendingRawRequestCount:
                     result.pendingRawRequestCount
-                    + statistics.pendingRawRequestCount
+                    + statistics.pendingRawRequestCount,
+                commentCount:
+                    result.commentCount
+                    + statistics.commentCount
             )
         }
     }
@@ -406,6 +409,13 @@ struct EventPhotoStatistics:
      */
     let pendingRawRequestCount: Int
 
+    /*
+     * Every comment, not photos-with-comments: a second comment on an
+     * already-commented photo is new information the photographer has
+     * not read yet, and counting photos would hide it.
+     */
+    let commentCount: Int
+
     static let empty = EventPhotoStatistics(
         uploadedProofCount: 0,
         likedPhotoCount: 0,
@@ -413,7 +423,8 @@ struct EventPhotoStatistics:
         editingPhotoCount: 0,
         uploadedFinalCount: 0,
         missingVariantPhotoCount: 0,
-        pendingRawRequestCount: 0
+        pendingRawRequestCount: 0,
+        commentCount: 0
     )
 
     init(
@@ -423,7 +434,8 @@ struct EventPhotoStatistics:
         editingPhotoCount: Int,
         uploadedFinalCount: Int,
         missingVariantPhotoCount: Int,
-        pendingRawRequestCount: Int
+        pendingRawRequestCount: Int,
+        commentCount: Int
     ) {
         self.uploadedProofCount =
         uploadedProofCount
@@ -439,6 +451,8 @@ struct EventPhotoStatistics:
         missingVariantPhotoCount
         self.pendingRawRequestCount =
         pendingRawRequestCount
+        self.commentCount =
+        commentCount
     }
 
     init(photos: [ServerPhotoRecord]) {
@@ -481,6 +495,11 @@ struct EventPhotoStatistics:
         pendingRawRequestCount =
         photos.reduce(0) { total, photo in
             total + photo.pendingRawRequests
+        }
+
+        commentCount =
+        photos.reduce(0) { total, photo in
+            total + photo.photoComments.count
         }
     }
 }

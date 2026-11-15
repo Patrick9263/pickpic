@@ -107,6 +107,53 @@ struct ServerPhotoRecordCommentTests {
         #expect(photo.hasViewerRequest)
     }
 
+    // Counts comments rather than commented photos, so a second comment
+    // on the same photo still moves the sidebar number.
+    @Test
+    func statisticsCountEveryCommentAcrossPhotosAndEvents() throws {
+        let first = Self.comment(
+            id: "c1",
+            body: "Brighten her face",
+            createdAt: "2026-11-14T18:01:00.000Z"
+        )
+        let second = Self.comment(
+            id: "c2",
+            body: "And crop out the sign",
+            createdAt: "2026-11-14T18:05:00.000Z"
+        )
+
+        let statistics = EventPhotoStatistics(
+            photos: [
+                try Self.decode(commentsJSON: "[\(first), \(second)]"),
+                try Self.decode(commentsJSON: "[\(first)]"),
+                try Self.decode(commentsJSON: nil),
+            ]
+        )
+
+        #expect(statistics.commentCount == 3)
+
+        let events = ["a", "b", "c"].map { id in
+            PickPicEvent(
+                id: id,
+                title: id,
+                shareToken: "token-\(id)",
+                status: .ready,
+                createdAt: Date(),
+                updatedAt: Date()
+            )
+        }
+
+        let total = EventPhotoStatistics.total(
+            for: events,
+            statisticsByEventID: [
+                "a": statistics,
+                "b": statistics,
+            ]
+        )
+
+        #expect(total.commentCount == 6)
+    }
+
     @Test
     func createdAtParsesWithAndWithoutMilliseconds() {
         let withMilliseconds = ServerPhotoComment(
