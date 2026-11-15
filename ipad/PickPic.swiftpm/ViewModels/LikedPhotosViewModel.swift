@@ -29,10 +29,15 @@ final class LikedPhotosViewModel:
     @Published private(set)
     var lastCheckedAt: Date?
 
-    var likedPhotos: [ServerPhotoRecord] {
+    /*
+     * Hearted photos plus any a viewer commented on without hearting, so
+     * a request written only as a comment is not missed. Only hearted
+     * photos are synced into To Edit; see editingLikedPhotoCount.
+     */
+    var requestedPhotos: [ServerPhotoRecord] {
         photos
             .filter { photo in
-                photo.heartCount > 0
+                photo.hasViewerRequest
             }
             .sorted { first, second in
                 first.originalFilename
@@ -44,8 +49,16 @@ final class LikedPhotosViewModel:
     }
 
     var editingLikedPhotoCount: Int {
-        likedPhotos.filter { photo in
-            photo.workflowStatus == .editing
+        requestedPhotos.filter { photo in
+            photo.heartCount > 0
+                && photo.workflowStatus == .editing
+        }
+        .count
+    }
+
+    var commentOnlyPhotoCount: Int {
+        requestedPhotos.filter { photo in
+            photo.heartCount == 0
         }
         .count
     }

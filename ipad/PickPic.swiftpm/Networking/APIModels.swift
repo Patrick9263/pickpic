@@ -132,6 +132,43 @@ struct ServerFinalPhotoSummary:
     let variants: ServerImageVariantSet
 }
 
+/*
+ * A gallery viewer's comment on a photo. Only the fields the iPad shows
+ * are decoded, so a field added to the worker's record later cannot
+ * break this.
+ *
+ * createdAt stays a string, like the other server timestamps in this
+ * file; createdAtDate parses it for display and drops only the date,
+ * never the comment, if the format ever changes.
+ */
+struct ServerPhotoComment:
+    Identifiable,
+    Decodable,
+    Hashable,
+    Sendable
+{
+    let id: String
+    let displayName: String
+    let body: String
+    let createdAt: String
+
+    var createdAtDate: Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [
+            .withInternetDateTime,
+            .withFractionalSeconds,
+        ]
+
+        if let date = formatter.date(from: createdAt) {
+            return date
+        }
+
+        formatter.formatOptions = [.withInternetDateTime]
+
+        return formatter.date(from: createdAt)
+    }
+}
+
 struct FinalVariantUploadResponse:
     Decodable,
     Sendable
@@ -216,6 +253,40 @@ struct ServerPhotoRecord:
      */
     var needsRawUpload: Bool {
         pendingRawRequests > 0 && rawPhoto == nil
+    }
+
+    /*
+     * Optional for the same reason as the two fields above: createPhoto's
+     * 201 body is built with an empty list today, but nothing guarantees
+     * every route keeps sending the key, and a missing one must cost the
+     * comments rather than the whole photo list. Read through
+     * photoComments instead.
+     */
+    let comments: [ServerPhotoComment]?
+
+    /*
+     * Oldest first, which is the order a conversation reads in. The
+     * server already sorts this way; sorting again keeps the order from
+     * depending on a query clause on the other side of the network.
+     * ISO 8601 strings from toISOString() compare correctly as text.
+     */
+    var photoComments: [ServerPhotoComment] {
+        (comments ?? []).sorted { first, second in
+            first.createdAt < second.createdAt
+        }
+    }
+
+    var latestComment: ServerPhotoComment? {
+        photoComments.last
+    }
+
+    /*
+     * A heart is the edit request; a comment is often the detail of it
+     * ("brighten her face"), and a viewer can leave one without hearting
+     * at all. Either is something the photographer has to see.
+     */
+    var hasViewerRequest: Bool {
+        heartCount > 0 || !photoComments.isEmpty
     }
 
     /*
