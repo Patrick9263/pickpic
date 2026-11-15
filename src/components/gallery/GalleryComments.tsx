@@ -43,16 +43,38 @@ function GalleryComments({
                       type="button"
                       disabled={commentActionId === comment.id}
                       onClick={() => void editComment(comment)}
+                      aria-label="Edit comment"
+                      title="Edit comment"
                     >
-                      Edit
+                      <svg aria-hidden="true" viewBox="0 0 24 24">
+                        <path
+                          d="M21.17 6.81a2.82 2.82 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5zM15 5l4 4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                        />
+                      </svg>
                     </button>
 
                     <button
                       type="button"
                       disabled={commentActionId === comment.id}
                       onClick={() => void deleteComment(comment)}
+                      aria-label="Delete comment"
+                      title="Delete comment"
                     >
-                      Delete
+                      <svg aria-hidden="true" viewBox="0 0 24 24">
+                        <path
+                          d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="2"
+                        />
+                      </svg>
                     </button>
                   </div>
                 )}
