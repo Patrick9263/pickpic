@@ -118,13 +118,15 @@ jobs:
           if ! SIMULATOR=$(xcrun simctl list devices available -j | jq -ce --arg target "$TARGET" --arg sdk "$SDK" '
             def version: split(".") | map(tonumber) | (. + [0, 0])[:3];
             [.devices | to_entries[]
-              | select(.key | startswith("com.apple.CoreSimulator.SimRuntime.iOS-"))
-              | (.key | split(".iOS-")[1] | gsub("-"; ".")) as $runtime
+              # Take only the leading numeric version: the image also carries
+              # runtimes like iOS-27-1-iPhone19..., which `tonumber` rejects.
+              | (.key | capture("\\.iOS-(?<v>[0-9]+(?:-[0-9]+)*)") | .v | gsub("-"; ".")) as $runtime
               | select(($runtime | version) >= ($target | version) and ($runtime | version) <= ($sdk | version))
               | .value[] | select(.name | startswith("iPad"))
               | {name, udid, runtime: $runtime}]
             | sort_by(.runtime | version) | last'); then
             echo "::error::No available iPad simulator between iOS $TARGET and SDK $SDK."
+            xcrun simctl list devices available
             exit 1
           fi
           echo "Using $(jq -r '.name + " (iOS " + .runtime + ")"' <<< "$SIMULATOR")"
