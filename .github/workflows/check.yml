@@ -49,9 +49,47 @@ jobs:
       - name: Run checks
         run: npm run check
 
+  # Top-level `paths:` filters gate the whole workflow, but `check` above must
+  # still run for every PR — so decide here, on a cheap Ubuntu runner, whether
+  # the macOS job below is needed at all. Gating that job's steps instead would
+  # make every PR wait for an `xcode-27` runner just to run this diff, and that
+  # image's capacity is thin enough that a job has gone unacquired for 15
+  # minutes and been cancelled. Diff the PR's actual base/head SHAs (stable
+  # under force-pushes, unlike branch names) from their merge base, so commits
+  # that landed on `main` after the PR branched don't count as its changes.
+  ipad-changes:
+    name: Detect iPad changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.changed }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check for iPad or workflow changes
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
+          if grep -Eq '^(ipad/|\.github/workflows/check\.yml$)' <<< "$CHANGED"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   ipad-build:
     name: Verify iPad app builds
-    if: github.event_name == 'pull_request'
+    needs: ipad-changes
+    # A skipped job satisfies a required status check, and a job whose `needs`
+    # failed is skipped by default — so without `!cancelled()` a broken change
+    # detector would quietly pass this check. Instead, run the full build
+    # whenever detection didn't succeed, and skip only on a clean "no changes".
+    if: >-
+      github.event_name == 'pull_request' && !cancelled() &&
+      (needs.ipad-changes.result != 'success' || needs.ipad-changes.outputs.changed == 'true')
     # `macos-latest` carries no Xcode 27, so the build used to skip with a
     # warning. `xcode-27` is GitHub's dedicated hosted image for it (see
     # actions/runner-images); it is not a self-hosted runner.
@@ -60,28 +98,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      # Top-level `paths:` filters gate the whole workflow, but `check` above must
-      # still run for every PR — so gate this job at the step level instead, by
-      # diffing against the PR's actual base/head SHAs (stable under force-pushes,
-      # unlike branch names) rather than relying on a shallow default checkout.
-      - name: Check for iPad or workflow changes
-        id: filter
-        run: |
-          CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}")
-          if grep -Eq '^(ipad/|\.github/workflows/check\.yml$)' <<< "$CHANGED"; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
 
       # Use the dedicated image's stable default rather than picking a newer
       # beta from /Applications. Missing prerequisites fail an eligible check.
       - name: Verify the default Xcode supports the deployment target
         id: xcode
-        if: steps.filter.outputs.changed == 'true'
         run: |
           TARGET=$(sed -nE 's/^[[:space:]]*IPHONEOS_DEPLOYMENT_TARGET = ([0-9.]+);/\1/p' ipad/PickPic.xcodeproj/project.pbxproj | sort -V | tail -1)
           SDK=$(xcrun --sdk iphonesimulator --show-sdk-version)
@@ -95,7 +116,6 @@ jobs:
           echo "sdk=$SDK" >> "$GITHUB_OUTPUT"
 
       - name: Build iPad app
-        if: steps.filter.outputs.changed == 'true'
         run: |
           set -o pipefail
           xcodebuild -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
@@ -110,7 +130,6 @@ jobs:
       # could disappear from a future runner image and silently break CI.
       - name: Find an available iPad simulator
         id: simulator
-        if: steps.filter.outputs.changed == 'true'
         env:
           TARGET: ${{ steps.xcode.outputs.target }}
           SDK: ${{ steps.xcode.outputs.sdk }}
@@ -132,14 +151,16 @@ jobs:
           echo "Using $(jq -r '.name + " (iOS " + .runtime + ")"' <<< "$SIMULATOR")"
           echo "udid=$(jq -r '.udid' <<< "$SIMULATOR")" >> "$GITHUB_OUTPUT"
 
+      # Swift Testing reports a failing expectation as "✘ Test foo() recorded
+      # an issue at File.swift:…", which carries neither "error:" nor "Suite" —
+      # match it explicitly, or a red run shows which suite failed but not why.
       - name: Run PickPicTests
-        if: steps.filter.outputs.changed == 'true'
         run: |
           set -o pipefail
           xcodebuild test -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
             -derivedDataPath /tmp/pickpic-build \
-            2>&1 | grep -E "error:|Test Suite|Suite .* (started|passed|failed)|TEST SUCCEEDED|TEST FAILED"
+            2>&1 | grep -E "error:|Test Suite|Suite .* (started|passed|failed)|recorded an issue|TEST SUCCEEDED|TEST FAILED"
 
   deploy:
     name: Deploy production
