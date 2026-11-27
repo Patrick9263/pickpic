@@ -49,10 +49,20 @@ jobs:
       - name: Run checks
         run: npm run check
 
-  ipad-build:
-    name: Verify iPad app builds
+  # Top-level `paths:` filters gate the whole workflow, but `check` above must
+  # still run for every PR — so decide here, on a cheap Ubuntu runner, whether
+  # the macOS job below is needed at all. Gating that job's steps instead would
+  # make every PR wait for an `xcode-27` runner just to run this diff, and that
+  # image's capacity is thin enough that a job has gone unacquired for 15
+  # minutes and been cancelled. Diff the PR's actual base/head SHAs (stable
+  # under force-pushes, unlike branch names) from their merge base, so commits
+  # that landed on `main` after the PR branched don't count as its changes.
+  ipad-changes:
+    name: Detect iPad changes
     if: github.event_name == 'pull_request'
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.filter.outputs.changed }}
 
     steps:
       - name: Check out repository
@@ -60,49 +70,52 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Top-level `paths:` filters gate the whole workflow, but `check` above must
-      # still run for every PR — so gate this job at the step level instead, by
-      # diffing against the PR's actual base/head SHAs (stable under force-pushes,
-      # unlike branch names) rather than relying on a shallow default checkout.
-      - name: Check for ipad/ changes
+      - name: Check for iPad or workflow changes
         id: filter
         run: |
-          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -q '^ipad/'; then
+          CHANGED=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
+          if grep -Eq '^(ipad/|\.github/workflows/check\.yml$)' <<< "$CHANGED"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # The app's deployment target can run ahead of the Xcode GitHub installs
-      # on its hosted images -- iOS 27 shipped weeks before any runner carried
-      # Xcode 27, and the default Xcode then fails on APIs its older SDK lacks.
-      # So select the newest installed Xcode whose simulator SDK meets the
-      # project's own deployment target (read from project.pbxproj rather than
-      # hardcoded, so the next bump needs no edit here). If none does, skip
-      # the build and tests with a visible warning instead of failing: the
-      # red job would only be runner lag, and it clears itself once the image
-      # catches up. Locally, CLAUDE.md's xcodebuild gate still applies.
-      - name: Select an Xcode that supports the deployment target
+  ipad-build:
+    name: Verify iPad app builds
+    needs: ipad-changes
+    # A skipped job satisfies a required status check, and a job whose `needs`
+    # failed is skipped by default — so without `!cancelled()` a broken change
+    # detector would quietly pass this check. Instead, run the full build
+    # whenever detection didn't succeed, and skip only on a clean "no changes".
+    if: >-
+      github.event_name == 'pull_request' && !cancelled() &&
+      (needs.ipad-changes.result != 'success' || needs.ipad-changes.outputs.changed == 'true')
+    # `macos-latest` carries no Xcode 27, so the build used to skip with a
+    # warning. `xcode-27` is GitHub's dedicated hosted image for it (see
+    # actions/runner-images); it is not a self-hosted runner.
+    runs-on: xcode-27
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      # Use the dedicated image's stable default rather than picking a newer
+      # beta from /Applications. Missing prerequisites fail an eligible check.
+      - name: Verify the default Xcode supports the deployment target
         id: xcode
-        if: steps.filter.outputs.changed == 'true'
         run: |
-          TARGET=$(grep -m1 -oE 'IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+' ipad/PickPic.xcodeproj/project.pbxproj | grep -oE '[0-9.]+$')
-
-          for XCODE in $(ls -d /Applications/Xcode*.app | sort -rV); do
-            SDK=$(DEVELOPER_DIR="$XCODE/Contents/Developer" xcrun --sdk iphonesimulator --show-sdk-version 2>/dev/null) || continue
-            if [ "$(printf '%s\n%s\n' "$TARGET" "$SDK" | sort -V | head -1)" = "$TARGET" ]; then
-              sudo xcode-select -s "$XCODE/Contents/Developer"
-              echo "Using $XCODE (iOS Simulator SDK $SDK) for deployment target $TARGET"
-              echo "ready=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-
-          echo "::warning::No Xcode on this runner has an iOS SDK for deployment target $TARGET; skipping the iPad build and tests. Run the xcodebuild gate locally."
-          echo "ready=false" >> "$GITHUB_OUTPUT"
+          TARGET=$(sed -nE 's/^[[:space:]]*IPHONEOS_DEPLOYMENT_TARGET = ([0-9.]+);/\1/p' ipad/PickPic.xcodeproj/project.pbxproj | sort -V | tail -1)
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          xcodebuild -version
+          echo "iOS Simulator SDK $SDK; deployment target $TARGET"
+          if [ -z "$TARGET" ] || [ "$(printf '%s\n%s\n' "$TARGET" "$SDK" | sort -V | head -1)" != "$TARGET" ]; then
+            echo "::error::The default Xcode simulator SDK does not meet the PickPic deployment target."
+            exit 1
+          fi
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "sdk=$SDK" >> "$GITHUB_OUTPUT"
 
       - name: Build iPad app
-        if: steps.xcode.outputs.ready == 'true'
         run: |
           set -o pipefail
           xcodebuild -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
@@ -117,26 +130,37 @@ jobs:
       # could disappear from a future runner image and silently break CI.
       - name: Find an available iPad simulator
         id: simulator
-        if: steps.xcode.outputs.ready == 'true'
+        env:
+          TARGET: ${{ steps.xcode.outputs.target }}
+          SDK: ${{ steps.xcode.outputs.sdk }}
         run: |
-          UDID=$(xcrun simctl list devices available -j \
-            | jq -r '[.devices[][] | select(.name | test("^iPad"))][0].udid')
-
-          if [ -z "$UDID" ] || [ "$UDID" = "null" ]; then
-            echo "::error::No available iPad simulator found on this runner."
+          if ! SIMULATOR=$(xcrun simctl list devices available -j | jq -ce --arg target "$TARGET" --arg sdk "$SDK" '
+            def version: split(".") | map(tonumber) | (. + [0, 0])[:3];
+            [.devices | to_entries[]
+              # Take only the leading numeric version: the image also carries
+              # runtimes like iOS-27-1-iPhone19..., which `tonumber` rejects.
+              | (.key | capture("\\.iOS-(?<v>[0-9]+(?:-[0-9]+)*)") | .v | gsub("-"; ".")) as $runtime
+              | select(($runtime | version) >= ($target | version) and ($runtime | version) <= ($sdk | version))
+              | .value[] | select(.name | startswith("iPad"))
+              | {name, udid, runtime: $runtime}]
+            | sort_by(.runtime | version) | last'); then
+            echo "::error::No available iPad simulator between iOS $TARGET and SDK $SDK."
+            xcrun simctl list devices available
             exit 1
           fi
+          echo "Using $(jq -r '.name + " (iOS " + .runtime + ")"' <<< "$SIMULATOR")"
+          echo "udid=$(jq -r '.udid' <<< "$SIMULATOR")" >> "$GITHUB_OUTPUT"
 
-          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
-
+      # Swift Testing reports a failing expectation as "✘ Test foo() recorded
+      # an issue at File.swift:…", which carries neither "error:" nor "Suite" —
+      # match it explicitly, or a red run shows which suite failed but not why.
       - name: Run PickPicTests
-        if: steps.xcode.outputs.ready == 'true'
         run: |
           set -o pipefail
           xcodebuild test -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug \
             -destination 'platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}' \
             -derivedDataPath /tmp/pickpic-build \
-            | grep -E "error:|Test Suite 'All|TEST SUCCEEDED|TEST FAILED"
+            2>&1 | grep -E "error:|Test Suite|Suite .* (started|passed|failed)|recorded an issue|TEST SUCCEEDED|TEST FAILED"
 
   deploy:
     name: Deploy production
