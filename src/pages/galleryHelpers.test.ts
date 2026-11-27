@@ -14,14 +14,22 @@ import {
   getOrCreateVisitorToken,
   getRawRequestState,
   isLikelyInAppBrowser,
+  MAX_RECENT_GALLERIES,
   parsePendingRawBatch,
+  parseRecentGalleries,
+  readRecentGalleries,
   readStorageItem,
+  RECENT_GALLERIES_KEY,
+  removeRecentGallery,
   removeStorageItem,
   sanitizeDownloadFilename,
   selectPhotosById,
   selectReadyRawPhotos,
   selectRequestableRawPhotos,
+  upsertRecentGallery,
+  writeRecentGalleries,
   writeStorageItem,
+  type RecentGallery,
 } from "./galleryHelpers";
 import { makeGalleryPhoto as makePhoto } from "../testing/factories";
 
@@ -712,5 +720,109 @@ describe("formatCommentAge", () => {
 
   it("returns an empty string for an unparseable timestamp", () => {
     expect(formatCommentAge("not a date", now)).toBe("");
+  });
+});
+
+function makeRecent(shareToken: string, lastOpenedAt: string): RecentGallery {
+  return {
+    shareToken,
+    title: `Gallery ${shareToken}`,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    lastOpenedAt,
+  };
+}
+
+describe("parseRecentGalleries", () => {
+  it("treats missing, corrupt, or non-array storage as empty", () => {
+    expect(parseRecentGalleries(null)).toEqual([]);
+    expect(parseRecentGalleries("{not json")).toEqual([]);
+    expect(parseRecentGalleries(JSON.stringify({ shareToken: "a" }))).toEqual(
+      [],
+    );
+  });
+
+  it("keeps valid entries and drops malformed ones", () => {
+    const valid = makeRecent("a", "2026-02-01T00:00:00.000Z");
+
+    expect(
+      parseRecentGalleries(
+        JSON.stringify([
+          valid,
+          null,
+          "x",
+          { shareToken: "b" },
+          { ...valid, shareToken: "" },
+        ]),
+      ),
+    ).toEqual([valid]);
+  });
+});
+
+describe("upsertRecentGallery", () => {
+  it("puts the newest entry first", () => {
+    const older = makeRecent("a", "2026-02-01T00:00:00.000Z");
+    const newer = makeRecent("b", "2026-03-01T00:00:00.000Z");
+
+    expect(upsertRecentGallery([older], newer)).toEqual([newer, older]);
+  });
+
+  it("replaces an existing share token instead of duplicating it", () => {
+    const first = makeRecent("a", "2026-02-01T00:00:00.000Z");
+    const other = makeRecent("b", "2026-03-01T00:00:00.000Z");
+    const reopened = {
+      ...makeRecent("a", "2026-04-01T00:00:00.000Z"),
+      title: "Renamed",
+    };
+
+    expect(upsertRecentGallery([other, first], reopened)).toEqual([
+      reopened,
+      other,
+    ]);
+  });
+
+  it("drops the oldest entries past the cap", () => {
+    const existing = Array.from({ length: MAX_RECENT_GALLERIES }, (_, index) =>
+      makeRecent(
+        `t${index}`,
+        new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+      ),
+    ).reverse();
+    const next = makeRecent("new", "2026-06-01T00:00:00.000Z");
+    const result = upsertRecentGallery(existing, next);
+
+    expect(result).toHaveLength(MAX_RECENT_GALLERIES);
+    expect(result[0]).toEqual(next);
+    expect(result.some((gallery) => gallery.shareToken === "t0")).toBe(false);
+  });
+});
+
+describe("removeRecentGallery", () => {
+  it("removes only the matching share token", () => {
+    const a = makeRecent("a", "2026-02-01T00:00:00.000Z");
+    const b = makeRecent("b", "2026-03-01T00:00:00.000Z");
+
+    expect(removeRecentGallery([b, a], "a")).toEqual([b]);
+  });
+});
+
+describe("readRecentGalleries / writeRecentGalleries", () => {
+  it("round-trips through storage, newest first", () => {
+    const older = makeRecent("a", "2026-02-01T00:00:00.000Z");
+    const newer = makeRecent("b", "2026-03-01T00:00:00.000Z");
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => void values.set(key, value),
+    };
+
+    writeRecentGalleries(() => storage, [older, newer]);
+
+    expect(values.has(RECENT_GALLERIES_KEY)).toBe(true);
+    expect(readRecentGalleries(() => storage)).toEqual([newer, older]);
+  });
+
+  it("reads as empty and writes without throwing when storage is blocked", () => {
+    expect(readRecentGalleries(blockedStorageAccess)).toEqual([]);
+    expect(() => writeRecentGalleries(blockedStorageAccess, [])).not.toThrow();
   });
 });

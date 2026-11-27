@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchJson, getErrorMessage } from "./api";
+import { ApiError, fetchJson, getErrorMessage } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -68,5 +68,24 @@ describe("fetchJson", () => {
     await fetchJson("/api/events", { method: "POST" });
 
     expect(fetchMock).toHaveBeenCalledWith("/api/events", { method: "POST" });
+  });
+
+  it("exposes the HTTP status on the thrown ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "Gallery not found." }), {
+          status: 404,
+        }),
+      ),
+    );
+
+    const error = await fetchJson("/api/galleries/x").catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(404);
+    expect((error as ApiError).message).toBe("Gallery not found.");
   });
 });
