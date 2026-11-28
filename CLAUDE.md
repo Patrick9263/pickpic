@@ -79,6 +79,8 @@ xcodebuild -project ipad/PickPic.xcodeproj -scheme PickPic -configuration Debug 
 
 Use a scratch `-derivedDataPath` rather than wiping the shared DerivedData Xcode is using.
 
+TestFlight builds go out through `scripts/testflight-deploy.sh`, run by hand on Patrick's Mac — never from CI and never automatically, since an upload is visible to testers and burns a build number. Without flags it only archives and exports an `.ipa` to `/tmp/pickpic-testflight/<build>/`; `--upload` sends it. The build number defaults to `git rev-list --count HEAD` and is passed as a `CURRENT_PROJECT_VERSION=` override, so `project.pbxproj` is never edited. It authenticates with an App Store Connect API key kept outside the repo: `~/.appstoreconnect/private_keys/AuthKey_<id>.p8` plus `~/.appstoreconnect/pickpic.env` (`ASC_KEY_ID`, `ASC_ISSUER_ID`). The archive is signed from the login keychain, which every SSH session (Patrick drives the Mac from Termius on the iPad) sees as locked regardless of its state on screen — codesign fails with `errSecInternalComponent`. Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` in the SSH session before launching `claude`, so everything it runs inherits the unlocked keychain; the script checks for this before compiling. `git` and `gh` do not use the keychain: `gh auth setup-git` makes git fetch github.com credentials from `gh auth git-credential` (token in `~/.config/gh/hosts.yml`), because the osxkeychain helper hung pushes indefinitely over SSH and in the scheduled review job even with the keychain reported unlocked. A push that hangs or 401s means that config is missing — check `git config --global --get-regexp credential` rather than unlocking the keychain.
+
 If `xcodebuild` ever reports that the active developer directory is `/Library/Developer/CommandLineTools`, `xcode-select` is pointed at the wrong place. Check with `xcode-select -p`; the fix needs sudo, so ask rather than working around it — `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` as a command prefix is a stopgap only.
 
 Debug builds put the app's code in `PickPic.app/PickPic.debug.dylib`, not the `PickPic` stub binary. When checking whether a change actually made it into a build, run `strings` against the dylib.
@@ -338,7 +340,9 @@ sweeps are getting more expensive and how much of the weekly window this job rea
 Logs are in `~/Library/Logs/claude-review-*.log` and `~/.claude/pickpic-review/logs/`; reports are
 kept in `~/.claude/pickpic-review/reports/`. An unparseable `/usage` aborts the run and logs loudly
 — **if reports stop arriving, read that log first**, because a silent parser break looks exactly
-like "nothing worth reporting".
+like "nothing worth reporting". A `/usage` that prints a `Total cost:` summary instead of
+percentages (outcome `abort-no-subscription-auth`) is not a format change: `claude` is signed out in
+that context, so re-login with `claude-relogin`.
 
 The versioned plists live in `scripts/review/launchd/`; the loaded copies are in
 `~/Library/LaunchAgents/`. Edit the versioned ones, copy them across, then
@@ -456,6 +460,8 @@ Sign in with Apple (`/api/auth/apple/start` → `/api/auth/apple/callback`, [wor
 
 Routing inside `fetch` is manual: an ordered chain of `url.pathname` regex matches, each delegating to a dedicated async handler defined in the same 4,000-line file. Add endpoints in that style; don't introduce a router library.
 
+**One deployment runs the Cron Trigger** (#184): the default `pickpic` worker, hourly at :17, into `runScheduledJobs` in `worker/index.ts`. `triggers` is an _inheritable_ wrangler key, so `admin` and `app` declare `"crons": []` explicitly. Remove those overrides and all three workers run every job against the one shared database. Jobs today are a RAW-reclaim sweep across every event and a retry of Telegram notifications left unsent; the purge (#185) and expiry reminders (#186) go there too. Every job must be idempotent and safe to overlap with request traffic. This is application logic on a schedule, not migrations, which still stay manual.
+
 ### One SPA, two faces
 
 [src/App.tsx](src/App.tsx) is the only router — it reads `window.location.pathname` and renders `DashboardPage` (`/admin`), `GalleryPage` (`/g/:shareToken`), or the home page. The same bundle ships to both origins; which face a visitor sees depends on hostname and path, not a build flag. Cross-origin links use `VITE_ADMIN_APP_ORIGIN` / `VITE_PUBLIC_APP_ORIGIN` from `.env.production`.
@@ -488,7 +494,7 @@ The app polls for newly-hearted photos and copies matching RAW files into a loca
 
 ### CI/CD
 
-[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. A PR that touches `ipad/**` also runs a `macos-latest` job building the app and running `PickPicTests` — gated to only fire on `ipad/` changes, since macOS runners are slower/pricier than the Ubuntu one and most PRs don't touch Swift. Pushes to `main` additionally deploy all three workers (`npm run deploy`, then `npm run deploy:admin`, then `npm run deploy:app`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
+[.github/workflows/check.yml](.github/workflows/check.yml): every PR and push to `main` runs `npm run check`. A PR that touches `ipad/**` or `check.yml` also runs a job on GitHub's `xcode-27` hosted image (`macos-latest` has no Xcode 27) building the app and running `PickPicTests`. A small Ubuntu job decides that from the PR's diff, so every other PR reports the iPad job as skipped without ever waiting for a macOS runner — `xcode-27` capacity is thin enough that a job has gone unacquired for 15 minutes. If that detection job fails, the iPad job runs rather than skips, so a broken detector can't pass the check by default. The iPad job fails, rather than skips, if the image's default Xcode can't meet `IPHONEOS_DEPLOYMENT_TARGET`, and tests on an iPad from the newest simulator runtime between the deployment target and the SDK. **The `xcode-27` image will never carry Xcode 28**, so raising the deployment target to iOS 28 fails this job until `runs-on` moves to the next image's label (check `actions/runner-images`); if GitHub retires `xcode-27` outright, the job stops running at all. Pushes to `main` additionally deploy all three workers (`npm run deploy`, then `npm run deploy:admin`, then `npm run deploy:app`) using `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets, with a `concurrency` group preventing overlapping production deploys.
 
 ## Conventions
 

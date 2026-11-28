@@ -1274,6 +1274,21 @@ private struct EventRow: View {
                     name: "liked"
                 )
 
+                /*
+                 * Conditional like the RAW-request metric below: most
+                 * events have no comments, and a permanent zero would
+                 * crowd the row for nothing.
+                 */
+                if statistics.commentCount > 0 {
+                    EventRowMetric(
+                        value:
+                            statistics.commentCount,
+                        systemImage:
+                            "text.bubble.fill",
+                        name: "comments"
+                    )
+                }
+
                 EventRowMetric(
                     value:
                         statistics.uploadedFinalCount,

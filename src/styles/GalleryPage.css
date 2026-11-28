@@ -1223,23 +1223,44 @@
   padding: 10px 12px;
 }
 
+/*
+ * Hierarchy: the body is the content, so it is the largest and brightest thing
+ * on the card; the name, age and "Edited" are metadata and stay small and muted.
+ */
 .comment-list strong {
-  color: var(--color-text);
-  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 650;
 }
 
 .comment-list p {
   color: var(--color-text);
+  font-size: 0.95rem;
   line-height: 1.45;
-  margin: 4px 0 0;
+  margin: 6px 0 0;
   text-align: left;
 }
 
-.comment-list small {
+.comment-meta {
+  align-items: baseline;
   color: var(--color-text-subtle);
-  display: block;
-  font-size: 0.68rem;
-  margin-top: 5px;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  gap: 0 6px;
+  min-width: 0;
+}
+
+/* Dot separators; the second `content` value is the (empty) alt text, so screen readers skip them. */
+.comment-meta time::before,
+.comment-meta small::before {
+  content: "·";
+  content: "·" / "";
+  margin-right: 6px;
+}
+
+.comment-meta small {
+  font-size: inherit;
 }
 
 .comment-heading {
@@ -1251,32 +1272,47 @@
 
 .comment-actions {
   display: flex;
-  gap: 12px;
+  flex-shrink: 0;
 }
 
 /*
  * Edit and Delete sit side by side inside a phone-sized lightbox. Previous design
  * had ~18px-tall targets at 2px of padding, just 10px from each other -- small
  * enough that a thumb aiming at Edit could land on the destructive one.
- * min-width and min-height now enforce 44px tap-target minimum. min-width rather
- * than horizontal padding so the wider Delete label stays flush with the card edge,
- * while the narrow Edit label grows a hit area around itself. Row is centre-aligned,
- * so the extra height only makes the comment heading slightly taller.
+ * min-width and min-height enforce the 44px tap-target minimum around each icon,
+ * so swapping the text labels for pencil/trash glyphs did not shrink the targets.
+ * The 44px box is centred on an 18px glyph, leaving 13px of empty hit area on
+ * every side. The negative margins pull that empty area outside the layout
+ * (and, on the last button, out over the card padding) so the visible icons line up
+ * with the card's content edge and the heading row is only as tall as its text
+ * rather than as tall as the tap target. Don't shrink the box to fix spacing.
  */
 .comment-actions button {
+  margin: -13px 0;
+  align-items: center;
   background: transparent;
   border: 0;
   color: var(--color-accent);
-  font-size: 0.72rem;
+  display: inline-flex;
+  justify-content: center;
   min-height: 44px;
   min-width: 44px;
   padding: 2px;
 }
 
+/* Only the last button hangs over the card padding; the two boxes themselves must never overlap. */
+.comment-actions button:last-child {
+  margin-right: -12px;
+}
+
+.comment-actions svg {
+  height: 18px;
+  width: 18px;
+}
+
 .comment-actions button:hover:not(:disabled) {
   background: transparent;
   color: var(--color-accent-hover);
-  text-decoration: underline;
 }
 
 .comment-form {

@@ -497,3 +497,121 @@ export function scheduleRawRequestNotification(
     notifyRawRequested(database, photoId, visitorId, botToken, chatId),
   );
 }
+
+/*
+ * How far the cron (#184) chases a notification that never went out. Both
+ * notify functions above already retry three times inside one attempt, so a
+ * row that reaches the cron has failed in earnest or was stranded by an
+ * isolate that died mid-send. Five more attempts covers a Telegram outage of
+ * a few hours without hammering a bot token that is simply wrong, and a day
+ * is the point past which "upload started" or "RAW requested" is history
+ * rather than news.
+ */
+const DRAIN_MAX_ATTEMPTS = 5;
+const DRAIN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const DRAIN_BATCH_LIMIT = 25;
+
+export interface UndeliveredTelegramNotifications {
+  uploadStartedEventIds: string[];
+  rawRequests: { photoId: string; visitorId: string }[];
+}
+
+/*
+ * Every row the request path left unsent, for whatever reason: 'failed', a
+ * 'sending' lease that outlived its isolate, or a 'pending' row whose claim
+ * never ran. They collapse into one test -- not 'sent', untouched for longer
+ * than the lease -- which also keeps the cron from racing a request that is
+ * sending right now. The notify functions' own atomic claim would settle that
+ * race anyway; skipping it just avoids the wasted query.
+ *
+ * A RAW request that has since been fulfilled is skipped: the iPad has already
+ * acted on it, so telling the photographer about it would be noise.
+ */
+export async function findUndeliveredTelegramNotifications(
+  database: D1Database,
+  now: number = Date.now(),
+): Promise<UndeliveredTelegramNotifications> {
+  const staleBefore = new Date(now - NOTIFICATION_LEASE_MS).toISOString();
+  const createdAfter = new Date(now - DRAIN_MAX_AGE_MS).toISOString();
+
+  const uploadStarted = await database
+    .prepare(
+      `
+      SELECT event_id AS eventId
+      FROM event_notifications
+      WHERE
+        notification_type = ?
+        AND status <> 'sent'
+        AND updated_at < ?
+        AND created_at >= ?
+        AND attempt_count < ?
+      ORDER BY created_at
+      LIMIT ?
+    `,
+    )
+    .bind(
+      UPLOAD_STARTED_NOTIFICATION,
+      staleBefore,
+      createdAfter,
+      DRAIN_MAX_ATTEMPTS,
+      DRAIN_BATCH_LIMIT,
+    )
+    .all<{ eventId: string }>();
+
+  const rawRequests = await database
+    .prepare(
+      `
+      SELECT
+        photo_id AS photoId,
+        visitor_id AS visitorId
+      FROM raw_requests
+      WHERE
+        notification_status <> 'sent'
+        AND fulfilled_at IS NULL
+        AND COALESCE(notification_last_attempt_at, created_at) < ?
+        AND created_at >= ?
+        AND notification_attempt_count < ?
+      ORDER BY created_at
+      LIMIT ?
+    `,
+    )
+    .bind(staleBefore, createdAfter, DRAIN_MAX_ATTEMPTS, DRAIN_BATCH_LIMIT)
+    .all<{ photoId: string; visitorId: string }>();
+
+  return {
+    uploadStartedEventIds: uploadStarted.results.map((row) => row.eventId),
+    rawRequests: rawRequests.results,
+  };
+}
+
+/*
+ * The cron's pass over both queues. Sequential rather than concurrent: each
+ * send can sit through RETRY_DELAYS_MS, and a burst of parallel sends after a
+ * Telegram outage is exactly what its rate limit punishes.
+ *
+ * Quiet when unconfigured, unlike the request-path schedulers: those already
+ * warn once per isolate, and an hourly copy of the same warning would add
+ * nothing. The deployment that runs the cron carries the secrets anyway.
+ */
+export async function drainTelegramNotifications(
+  database: D1Database,
+  env: TenantEnv,
+): Promise<void> {
+  const telegramEnv = env as TelegramEnvironment;
+  const botToken = telegramEnv.TELEGRAM_BOT_TOKEN?.trim();
+  const chatId = telegramEnv.TELEGRAM_CHAT_ID?.trim();
+
+  if (!botToken || !chatId) {
+    return;
+  }
+
+  const undelivered = await findUndeliveredTelegramNotifications(database);
+
+  for (const eventId of undelivered.uploadStartedEventIds) {
+    await notifyUploadStarted(database, eventId, botToken, chatId);
+  }
+
+  for (const { photoId, visitorId } of undelivered.rawRequests) {
+    await notifyRawRequested(database, photoId, visitorId, botToken, chatId);
+  }
+}

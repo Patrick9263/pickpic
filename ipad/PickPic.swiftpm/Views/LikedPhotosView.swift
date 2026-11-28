@@ -322,6 +322,17 @@ struct LikedPhotosView: View {
         }
     }
 
+    private var likedPhotosHeader: String {
+        let total = viewModel.requestedPhotos.count
+        let commentOnly = viewModel.commentOnlyPhotoCount
+
+        guard commentOnly > 0 else {
+            return "Liked Photos (\(total))"
+        }
+
+        return "Liked Photos (\(total - commentOnly)) · Comment Only (\(commentOnly))"
+    }
+
     private var likedPhotosSection: some View {
         Section {
             if
@@ -333,16 +344,16 @@ struct LikedPhotosView: View {
                     ProgressView()
                     Spacer()
                 }
-            } else if viewModel.likedPhotos.isEmpty {
+            } else if viewModel.requestedPhotos.isEmpty {
                 Text(
                     """
-                    No photos currently have any likes.
+                    No photos currently have any likes or comments.
                     """
                 )
                 .foregroundStyle(.secondary)
             } else {
                 ForEach(
-                    viewModel.likedPhotos
+                    viewModel.requestedPhotos
                 ) { photo in
                     /*
                      * Only a row backed by an event folder is
@@ -350,8 +361,15 @@ struct LikedPhotosView: View {
                      * the row lift while carrying an empty provider,
                      * which reads as the drop target silently refusing
                      * a perfectly good file.
+                     *
+                     * The same goes for a photo that was only commented
+                     * on: sync moves hearted RAWs into To Edit, so a
+                     * comment-only photo has nothing there to drag.
                      */
-                    if folderReference != nil {
+                    if
+                        folderReference != nil,
+                        photo.heartCount > 0
+                    {
                         LikedPhotoRow(
                             photo: photo,
                             isDraggable: true,
@@ -374,11 +392,9 @@ struct LikedPhotosView: View {
                 }
             }
         } header: {
-            Text(
-                "Liked Photos (\(viewModel.likedPhotos.count))"
-            )
+            Text(likedPhotosHeader)
         } footer: {
-            if !viewModel.likedPhotos.isEmpty {
+            if !viewModel.requestedPhotos.isEmpty {
                 if folderReference == nil {
                     Text(
                         """
@@ -1108,17 +1124,37 @@ private struct LikedPhotoRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+
+                /*
+                 * Inline rather than behind a tap, because this is the
+                 * list the photographer drags from: a request like
+                 * "crop out the sign" has to be visible at that moment.
+                 */
+                PhotoCommentsButton(
+                    photo: photo,
+                    style: .preview
+                )
             }
 
             Spacer()
 
-            Label(
-                "\(photo.heartCount)",
-                systemImage: "heart.fill"
-            )
-            .font(.subheadline)
-            .foregroundStyle(.red)
-            .labelStyle(.titleAndIcon)
+            if photo.heartCount > 0 {
+                Label(
+                    "\(photo.heartCount)",
+                    systemImage: "heart.fill"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.red)
+                .labelStyle(.titleAndIcon)
+            } else {
+                Label(
+                    "Comment only",
+                    systemImage: "heart.slash"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .labelStyle(.titleAndIcon)
+            }
 
             Button(action: onCopyName) {
                 Label(

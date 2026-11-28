@@ -97,7 +97,8 @@ These are **noncanonical summaries**, not substitutes for the linked sections.
   manual and stay out of CI. A migration must be applied before
   its PR merges, from a checkout containing the new file. All three Workers share
   the database, and a push to `main` deploys all three. A green check is not
-  authorization to run those operations.
+  authorization to run those operations, nor
+  `scripts/testflight-deploy.sh --upload`, which publishes a TestFlight build.
 - [Conventions](CLAUDE.md#conventions): the web app is dark-themed and every
   colour comes from the custom properties in `src/index.css`; never write a
   literal hex value into a new stylesheet, and do not copy colours out of the

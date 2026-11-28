@@ -468,6 +468,22 @@ struct RawRequestsView: View {
     private func pendingRow(
         for photo: ServerPhotoRecord
     ) -> some View {
+        HStack {
+            pendingRowDetails(for: photo)
+
+            Spacer()
+
+            PhotoCommentsButton(
+                photo: photo,
+                style: .badge
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func pendingRowDetails(
+        for photo: ServerPhotoRecord
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(photo.originalFilename)
 
@@ -549,16 +565,25 @@ struct RawRequestsView: View {
     private func deliveredRow(
         for photo: ServerPhotoRecord
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(photo.originalFilename)
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(photo.originalFilename)
 
-            if let rawPhoto = photo.rawPhoto {
-                Text(
-                    deliveredDescription(for: rawPhoto)
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                if let rawPhoto = photo.rawPhoto {
+                    Text(
+                        deliveredDescription(for: rawPhoto)
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
+
+            Spacer()
+
+            PhotoCommentsButton(
+                photo: photo,
+                style: .badge
+            )
         }
     }
 

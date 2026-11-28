@@ -58,6 +58,7 @@
 		CD5F4D40301C80320048327C /* EventListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D0E301C80320048327C /* EventListView.swift */; };
 		CD5F4D41301C80320048327C /* LikedPhotosView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D11301C80320048327C /* LikedPhotosView.swift */; };
 		CDCC00040000000000000000 /* RawRequestsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDCC00030000000000000000 /* RawRequestsView.swift */; };
+		CDCC00120000000000000000 /* PhotoCommentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDCC00110000000000000000 /* PhotoCommentsView.swift */; };
 		CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D43301C80320048327C /* BackgroundUploadSession.swift */; };
 		CDAA00010000000000000000 /* RawUploadSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAA00020000000000000000 /* RawUploadSession.swift */; };
 		CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD5F4D44301C80320048327C /* ContinuedProcessingState.swift */; };
@@ -67,6 +68,7 @@
 		CDFF00050000000000000000 /* StorageHeadroomService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00040000000000000000 /* StorageHeadroomService.swift */; };
 		CDFF00120000000000000000 /* UploadStageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00110000000000000000 /* UploadStageTests.swift */; };
 		CDAA00070000000000000000 /* RawRequestSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAA00080000000000000000 /* RawRequestSyncTests.swift */; };
+		CDCC00140000000000000000 /* PhotoCommentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDCC00130000000000000000 /* PhotoCommentTests.swift */; };
 		CDFF001E0000000000000000 /* SessionCredentialTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF001D0000000000000000 /* SessionCredentialTests.swift */; };
 		CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00130000000000000000 /* UploadJobDecodingTests.swift */; };
 		CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFF00150000000000000000 /* HashingServiceTests.swift */; };
@@ -135,6 +137,7 @@
 		CD5F4D10301C80320048327C /* FinalUploadsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinalUploadsView.swift; sourceTree = "<group>"; };
 		CD5F4D11301C80320048327C /* LikedPhotosView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LikedPhotosView.swift; sourceTree = "<group>"; };
 		CDCC00030000000000000000 /* RawRequestsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawRequestsView.swift; sourceTree = "<group>"; };
+		CDCC00110000000000000000 /* PhotoCommentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCommentsView.swift; sourceTree = "<group>"; };
 		CD5F4D12301C80320048327C /* PhotoImportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoImportView.swift; sourceTree = "<group>"; };
 		CD5F4D13301C80320048327C /* PublishGalleryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PublishGalleryView.swift; sourceTree = "<group>"; };
 		CD5F4D14301C80320048327C /* UploadQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadQueueView.swift; sourceTree = "<group>"; };
@@ -148,6 +151,7 @@
 		CDFF00060000000000000000 /* PickPicTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PickPicTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CDFF00110000000000000000 /* UploadStageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadStageTests.swift; sourceTree = "<group>"; };
 		CDAA00080000000000000000 /* RawRequestSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RawRequestSyncTests.swift; sourceTree = "<group>"; };
+		CDCC00130000000000000000 /* PhotoCommentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCommentTests.swift; sourceTree = "<group>"; };
 		CDFF001D0000000000000000 /* SessionCredentialTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCredentialTests.swift; sourceTree = "<group>"; };
 		CDFF00130000000000000000 /* UploadJobDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UploadJobDecodingTests.swift; sourceTree = "<group>"; };
 		CDFF00150000000000000000 /* HashingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HashingServiceTests.swift; sourceTree = "<group>"; };
@@ -239,6 +243,7 @@
 			children = (
 				CDFF00110000000000000000 /* UploadStageTests.swift */,
 				CDAA00080000000000000000 /* RawRequestSyncTests.swift */,
+				CDCC00130000000000000000 /* PhotoCommentTests.swift */,
 				CDFF001D0000000000000000 /* SessionCredentialTests.swift */,
 				CDFF00130000000000000000 /* UploadJobDecodingTests.swift */,
 				CDFF00150000000000000000 /* HashingServiceTests.swift */,
@@ -379,6 +384,7 @@
 				CD5F4D10301C80320048327C /* FinalUploadsView.swift */,
 				CD5F4D11301C80320048327C /* LikedPhotosView.swift */,
 				CDCC00030000000000000000 /* RawRequestsView.swift */,
+				CDCC00110000000000000000 /* PhotoCommentsView.swift */,
 				CD5F4D12301C80320048327C /* PhotoImportView.swift */,
 				CD5F4D13301C80320048327C /* PublishGalleryView.swift */,
 				CD5F4D14301C80320048327C /* UploadQueueView.swift */,
@@ -561,6 +567,7 @@
 				CD5F4D40301C80320048327C /* EventListView.swift in Sources */,
 				CD5F4D41301C80320048327C /* LikedPhotosView.swift in Sources */,
 				CDCC00040000000000000000 /* RawRequestsView.swift in Sources */,
+				CDCC00120000000000000000 /* PhotoCommentsView.swift in Sources */,
 				CD5F4D42301C80320048327C /* BackgroundUploadSession.swift in Sources */,
 				CDAA00010000000000000000 /* RawUploadSession.swift in Sources */,
 				CD5F4D46301C80320048327C /* ContinuedProcessingState.swift in Sources */,
@@ -574,6 +581,7 @@
 			files = (
 				CDFF00120000000000000000 /* UploadStageTests.swift in Sources */,
 				CDAA00070000000000000000 /* RawRequestSyncTests.swift in Sources */,
+				CDCC00140000000000000000 /* PhotoCommentTests.swift in Sources */,
 				CDFF001E0000000000000000 /* SessionCredentialTests.swift in Sources */,
 				CDFF00140000000000000000 /* UploadJobDecodingTests.swift in Sources */,
 				CDFF00160000000000000000 /* HashingServiceTests.swift in Sources */,
@@ -732,6 +740,7 @@
 				INFOPLIST_FILE = PickPic/Info.plist;
 				INFOPLIST_KEY_BGTaskSchedulerPermittedIdentifiers = "photos.pickpic.app.processing.*";
 				INFOPLIST_KEY_CFBundleDisplayName = PickPic;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -773,6 +782,7 @@
 				INFOPLIST_FILE = PickPic/Info.plist;
 				INFOPLIST_KEY_BGTaskSchedulerPermittedIdentifiers = "photos.pickpic.app.processing.*";
 				INFOPLIST_KEY_CFBundleDisplayName = PickPic;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
