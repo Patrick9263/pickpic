@@ -33,6 +33,79 @@ enum AccountScope {
     }
 
     /*
+     * Unfinished jobs parked under other accounts, one entry per account in
+     * queue order, for the Account sheet (#382). Nothing else shows them:
+     * every screen lists the signed-in account's events, and a parked job's
+     * event is not among them.
+     *
+     * Empty unless the signed-in account is known. Without one, owns()
+     * claims no tagged work at all, so everything would read as parked --
+     * including the account that is about to be identified, whose work this
+     * would then offer to throw away. Completed jobs are left out: they are
+     * not waiting for anything, and their account clears them as usual.
+     */
+    static func parkedWork(
+        in jobs: [UploadJob],
+        currentAccountID: String?
+    ) -> [ParkedAccountWork] {
+        guard currentAccountID != nil else {
+            return []
+        }
+
+        var groups: [ParkedAccountWork] = []
+
+        for job in jobs {
+            guard
+                job.stage != .completed,
+                let accountID = job.accountID,
+                !owns(
+                    currentAccountID: currentAccountID,
+                    workAccountID: accountID
+                )
+            else {
+                continue
+            }
+
+            if let index = groups.firstIndex(where: { group in
+                group.accountID == accountID
+            }) {
+                groups[index].jobs.append(job)
+            } else {
+                groups.append(
+                    ParkedAccountWork(
+                        accountID: accountID,
+                        jobs: [job]
+                    )
+                )
+            }
+        }
+
+        return groups
+    }
+
+    /*
+     * Whose remembered name is still worth keeping: the signed-in account,
+     * and any account with unfinished work in the queue -- exactly the
+     * accounts the Account sheet could ever need to name. Everything else
+     * is a name (possibly an email address) left on a shared iPad for no
+     * purpose, so APIConfigurationStore.forgetDescriptions drops it.
+     */
+    static func describedAccountIDs(
+        in jobs: [UploadJob],
+        currentAccountID: String
+    ) -> Set<String> {
+        var accountIDs: Set<String> = [currentAccountID]
+
+        for job in jobs where job.stage != .completed {
+            if let accountID = job.accountID {
+                accountIDs.insert(accountID)
+            }
+        }
+
+        return accountIDs
+    }
+
+    /*
      * The single, unscoped file every build before #376 wrote. It is still
      * read while the signed-in account is unknown, so an upgrade launched
      * offline shows the same list it always did, and it is handed to the
@@ -78,6 +151,37 @@ enum AccountScope {
                 String(format: "%02x", byte)
             }
             .joined()
+    }
+}
+
+struct ParkedAccountWork: Identifiable {
+    let accountID: String
+    var jobs: [UploadJob]
+
+    var id: String {
+        accountID
+    }
+
+    // Once each, in queue order: one event can hold several imports.
+    var eventTitles: [String] {
+        var seen = Set<String>()
+
+        return jobs.map(\.eventTitle).filter { title in
+            seen.insert(title).inserted
+        }
+    }
+
+    /*
+     * Preparing and converting are local, so they carry on through an
+     * account switch (UploadQueueStore.uploadingJobCount), and removing a
+     * job under a running conversion or a scheduled continued-processing
+     * task is what the queue screen's own delete already refuses.
+     */
+    var isDiscardable: Bool {
+        !jobs.contains { job in
+            job.stage.isActiveOperation
+            || job.continuedProcessing?.isScheduledOrActive == true
+        }
     }
 }
 
@@ -330,8 +434,91 @@ final class APIConfigurationStore: ObservableObject {
 
     private func notifyAccountIdentified() {
         if let accountID {
+            rememberDescription(for: accountID)
+
             onAccountIdentified?(accountID)
         }
+    }
+
+    /*
+     * Jobs carry only an account id, and once another account is signed in
+     * this store no longer holds a credential that could name it. So every
+     * account this iPad identifies leaves its name behind, for the Account
+     * sheet to say whose parked imports it is offering to discard (#382).
+     * Accounts last seen before this existed have no entry; callers fall
+     * back to a generic description. Entries are pruned to the accounts
+     * that can still be named (forgetDescriptions), so a discarded or
+     * finished account's name does not outlive its work here.
+     */
+    private static let knownAccountDescriptionsKey =
+        "knownAccountDescriptions"
+
+    func knownDescription(
+        forAccountID accountID: String
+    ) -> String? {
+        UserDefaults.standard
+            .dictionary(forKey: Self.knownAccountDescriptionsKey)?[
+                accountID
+            ] as? String
+    }
+
+    private func rememberDescription(
+        for accountID: String
+    ) {
+        guard
+            let description = accountDescription,
+            knownDescription(forAccountID: accountID) != description
+        else {
+            return
+        }
+
+        var descriptions =
+            UserDefaults.standard.dictionary(
+                forKey: Self.knownAccountDescriptionsKey
+            ) ?? [:]
+        descriptions[accountID] = description
+
+        UserDefaults.standard.set(
+            descriptions,
+            forKey: Self.knownAccountDescriptionsKey
+        )
+    }
+
+    /*
+     * Called on every identification and after a discard. Does nothing
+     * while the signed-in account is unknown: without it there is no way
+     * to tell whose work is parked, and guessing would drop the name of an
+     * account whose imports are still waiting.
+     */
+    func forgetDescriptions(
+        notNeededBy jobs: [UploadJob]
+    ) {
+        guard
+            let accountID,
+            let descriptions = UserDefaults.standard.dictionary(
+                forKey: Self.knownAccountDescriptionsKey
+            )
+        else {
+            return
+        }
+
+        let keptAccountIDs = AccountScope.describedAccountIDs(
+            in: jobs,
+            currentAccountID: accountID
+        )
+
+        let keptDescriptions = descriptions.filter { entry in
+            keptAccountIDs.contains(entry.key)
+        }
+
+        guard keptDescriptions.count != descriptions.count else {
+            return
+        }
+
+        UserDefaults.standard.set(
+            keptDescriptions,
+            forKey: Self.knownAccountDescriptionsKey
+        )
     }
 
     /*

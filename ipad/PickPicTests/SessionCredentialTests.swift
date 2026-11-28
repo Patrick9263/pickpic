@@ -538,6 +538,156 @@ struct SessionCredentialTests {
         )
     }
 
+    private static func makeJob(
+        accountID: String?,
+        eventTitle: String = "Event",
+        stage: UploadStage = .readyToUpload,
+        continuedProcessing: ContinuedProcessingState? = nil
+    ) -> UploadJob {
+        UploadJob(
+            id: UUID(),
+            eventID: "evt-\(eventTitle)",
+            eventTitle: eventTitle,
+            accountID: accountID,
+            folderName: "Folder",
+            folderBookmarkData: Data([0x01]),
+            photos: [],
+            stage: stage,
+            createdAt: Date(timeIntervalSinceReferenceDate: 0),
+            updatedAt: Date(timeIntervalSinceReferenceDate: 0),
+            continuedProcessing: continuedProcessing
+        )
+    }
+
+    @Test
+    func parkedWorkGroupsOtherAccountsUnfinishedJobsInQueueOrder() {
+        let jobs = [
+            Self.makeJob(accountID: "acct-b", eventTitle: "B1"),
+            Self.makeJob(accountID: "acct-a", eventTitle: "A1"),
+            Self.makeJob(accountID: "acct-c", eventTitle: "C1"),
+            Self.makeJob(accountID: nil, eventTitle: "Untagged"),
+            Self.makeJob(accountID: "acct-b", eventTitle: "B2"),
+            Self.makeJob(
+                accountID: "acct-b",
+                eventTitle: "B done",
+                stage: .completed
+            ),
+        ]
+
+        let parked = AccountScope.parkedWork(
+            in: jobs,
+            currentAccountID: "acct-a"
+        )
+
+        #expect(parked.map(\.accountID) == ["acct-b", "acct-c"])
+        #expect(parked[0].eventTitles == ["B1", "B2"])
+        #expect(parked[1].eventTitles == ["C1"])
+    }
+
+    /*
+     * Signed out, or signed in before the account is known: owns() claims
+     * no tagged work then, and offering to discard all of it would include
+     * the account about to be identified.
+     */
+    @Test
+    func nothingIsParkedWhileTheSignedInAccountIsUnknown() {
+        let parked = AccountScope.parkedWork(
+            in: [Self.makeJob(accountID: "acct-b")],
+            currentAccountID: nil
+        )
+
+        #expect(parked.isEmpty)
+    }
+
+    @Test
+    func parkedEventTitlesAreListedOnce() {
+        let work = ParkedAccountWork(
+            accountID: "acct-b",
+            jobs: [
+                Self.makeJob(accountID: "acct-b", eventTitle: "Wedding"),
+                Self.makeJob(accountID: "acct-b", eventTitle: "Gala"),
+                Self.makeJob(accountID: "acct-b", eventTitle: "Wedding"),
+            ]
+        )
+
+        #expect(work.eventTitles == ["Wedding", "Gala"])
+    }
+
+    @Test
+    func parkedWorkIsNotDiscardableWhileAnyJobIsBusy() {
+        let idle = Self.makeJob(accountID: "acct-b", stage: .prepared)
+        let converting = Self.makeJob(accountID: "acct-b", stage: .converting)
+        let scheduled = Self.makeJob(
+            accountID: "acct-b",
+            stage: .queued,
+            continuedProcessing: ContinuedProcessingState(
+                identifier: "task",
+                operation: .prepareConvertAndUpload,
+                requestedAt: Date(timeIntervalSinceReferenceDate: 0),
+                status: .scheduled
+            )
+        )
+
+        #expect(
+            ParkedAccountWork(accountID: "acct-b", jobs: [idle])
+                .isDiscardable
+        )
+        #expect(
+            !ParkedAccountWork(accountID: "acct-b", jobs: [idle, converting])
+                .isDiscardable
+        )
+        #expect(
+            !ParkedAccountWork(accountID: "acct-b", jobs: [idle, scheduled])
+                .isDiscardable
+        )
+    }
+
+    /*
+     * A remembered account name (possibly an email address) is kept only
+     * while the Account sheet could still need it: for the signed-in
+     * account, or one with unfinished work. Discarded or finished accounts
+     * drop out, as do untagged jobs, which name no one.
+     */
+    @Test
+    func describedAccountsAreTheCurrentOneAndThoseWithUnfinishedWork() {
+        let jobs = [
+            Self.makeJob(accountID: "acct-b", stage: .failed),
+            Self.makeJob(accountID: "acct-c", stage: .completed),
+            Self.makeJob(accountID: nil),
+            Self.makeJob(accountID: "acct-d", stage: .converting),
+        ]
+
+        #expect(
+            AccountScope.describedAccountIDs(
+                in: jobs,
+                currentAccountID: "acct-a"
+            ) == ["acct-a", "acct-b", "acct-d"]
+        )
+    }
+
+    @Test
+    func theCurrentAccountIsDescribedWithAnEmptyQueue() {
+        #expect(
+            AccountScope.describedAccountIDs(
+                in: [],
+                currentAccountID: "acct-a"
+            ) == ["acct-a"]
+        )
+    }
+
+    @Test
+    func parkedWorkIsNotDiscardableWhileUploadingOrPreflighting() {
+        for stage in [UploadStage.uploading, .preflighting, .preparing] {
+            #expect(
+                !ParkedAccountWork(
+                    accountID: "acct-b",
+                    jobs: [Self.makeJob(accountID: "acct-b", stage: stage)]
+                )
+                .isDiscardable
+            )
+        }
+    }
+
     @Test
     func anUnknownAccountUsesTheLegacyCacheFile() {
         #expect(
