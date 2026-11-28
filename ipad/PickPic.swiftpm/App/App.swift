@@ -299,14 +299,21 @@ struct PickPicApp: App {
                      * cache were per account.
                      */
                     let queue = uploadQueue
+                    let store = configuration
 
-                    configuration.onAccountIdentified = { accountID in
+                    store.onAccountIdentified = {
+                        [weak store] accountID in
                         queue.adoptUnownedJobs(
                             accountID: accountID
                         )
 
                         EventListViewModel.adoptLegacyCache(
                             into: accountID
+                        )
+
+                        // Weak: this closure is stored on configuration.
+                        store?.forgetDescriptions(
+                            notNeededBy: queue.jobs
                         )
                     }
 

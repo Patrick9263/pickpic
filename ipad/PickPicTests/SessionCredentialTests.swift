@@ -642,6 +642,52 @@ struct SessionCredentialTests {
         )
     }
 
+    /*
+     * A remembered account name (possibly an email address) is kept only
+     * while the Account sheet could still need it: for the signed-in
+     * account, or one with unfinished work. Discarded or finished accounts
+     * drop out, as do untagged jobs, which name no one.
+     */
+    @Test
+    func describedAccountsAreTheCurrentOneAndThoseWithUnfinishedWork() {
+        let jobs = [
+            Self.makeJob(accountID: "acct-b", stage: .failed),
+            Self.makeJob(accountID: "acct-c", stage: .completed),
+            Self.makeJob(accountID: nil),
+            Self.makeJob(accountID: "acct-d", stage: .converting),
+        ]
+
+        #expect(
+            AccountScope.describedAccountIDs(
+                in: jobs,
+                currentAccountID: "acct-a"
+            ) == ["acct-a", "acct-b", "acct-d"]
+        )
+    }
+
+    @Test
+    func theCurrentAccountIsDescribedWithAnEmptyQueue() {
+        #expect(
+            AccountScope.describedAccountIDs(
+                in: [],
+                currentAccountID: "acct-a"
+            ) == ["acct-a"]
+        )
+    }
+
+    @Test
+    func parkedWorkIsNotDiscardableWhileUploadingOrPreflighting() {
+        for stage in [UploadStage.uploading, .preflighting, .preparing] {
+            #expect(
+                !ParkedAccountWork(
+                    accountID: "acct-b",
+                    jobs: [Self.makeJob(accountID: "acct-b", stage: stage)]
+                )
+                .isDiscardable
+            )
+        }
+    }
+
     @Test
     func anUnknownAccountUsesTheLegacyCacheFile() {
         #expect(

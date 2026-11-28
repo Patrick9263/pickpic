@@ -297,10 +297,8 @@ struct ConnectionSettingsView: View {
                         }
                     } else {
                         Text(
-                            """
-                            Still being prepared or converted. It can be \
-                            discarded once that finishes.
-                            """
+                            ParkedWorkDiscardError.operationInProgress
+                                .localizedDescription
                         )
                         .font(.footnote)
                         .foregroundStyle(.secondary)

@@ -70,8 +70,13 @@ enum UploadAccountMismatchError: LocalizedError, Sendable {
 enum ParkedWorkDiscardError: LocalizedError, Sendable {
     case operationInProgress
 
+    /*
+     * Covers everything ParkedAccountWork.isDiscardable refuses: every
+     * isActiveOperation stage, plus a continued-processing task iPadOS has
+     * not started yet. Shown inline on the Account sheet as well.
+     */
     var errorDescription: String? {
-        "One of these imports is still being prepared or converted. Discard them once it finishes."
+        "One of these imports is still being prepared, checked for duplicates, converted or uploaded, or is waiting for iPadOS to start working on it. It can be discarded once that finishes."
     }
 }
 
@@ -1643,6 +1648,8 @@ final class UploadQueueStore: ObservableObject {
         try remove(
             jobIDs: Set(work.jobs.map(\.id))
         )
+
+        configuration.forgetDescriptions(notNeededBy: jobs)
     }
 
     func add(

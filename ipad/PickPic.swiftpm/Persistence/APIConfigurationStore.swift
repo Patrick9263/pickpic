@@ -84,6 +84,28 @@ enum AccountScope {
     }
 
     /*
+     * Whose remembered name is still worth keeping: the signed-in account,
+     * and any account with unfinished work in the queue -- exactly the
+     * accounts the Account sheet could ever need to name. Everything else
+     * is a name (possibly an email address) left on a shared iPad for no
+     * purpose, so APIConfigurationStore.forgetDescriptions drops it.
+     */
+    static func describedAccountIDs(
+        in jobs: [UploadJob],
+        currentAccountID: String
+    ) -> Set<String> {
+        var accountIDs: Set<String> = [currentAccountID]
+
+        for job in jobs where job.stage != .completed {
+            if let accountID = job.accountID {
+                accountIDs.insert(accountID)
+            }
+        }
+
+        return accountIDs
+    }
+
+    /*
      * The single, unscoped file every build before #376 wrote. It is still
      * read while the signed-in account is unknown, so an upgrade launched
      * offline shows the same list it always did, and it is handed to the
@@ -424,7 +446,9 @@ final class APIConfigurationStore: ObservableObject {
      * account this iPad identifies leaves its name behind, for the Account
      * sheet to say whose parked imports it is offering to discard (#382).
      * Accounts last seen before this existed have no entry; callers fall
-     * back to a generic description.
+     * back to a generic description. Entries are pruned to the accounts
+     * that can still be named (forgetDescriptions), so a discarded or
+     * finished account's name does not outlive its work here.
      */
     private static let knownAccountDescriptionsKey =
         "knownAccountDescriptions"
@@ -456,6 +480,43 @@ final class APIConfigurationStore: ObservableObject {
 
         UserDefaults.standard.set(
             descriptions,
+            forKey: Self.knownAccountDescriptionsKey
+        )
+    }
+
+    /*
+     * Called on every identification and after a discard. Does nothing
+     * while the signed-in account is unknown: without it there is no way
+     * to tell whose work is parked, and guessing would drop the name of an
+     * account whose imports are still waiting.
+     */
+    func forgetDescriptions(
+        notNeededBy jobs: [UploadJob]
+    ) {
+        guard
+            let accountID,
+            let descriptions = UserDefaults.standard.dictionary(
+                forKey: Self.knownAccountDescriptionsKey
+            )
+        else {
+            return
+        }
+
+        let keptAccountIDs = AccountScope.describedAccountIDs(
+            in: jobs,
+            currentAccountID: accountID
+        )
+
+        let keptDescriptions = descriptions.filter { entry in
+            keptAccountIDs.contains(entry.key)
+        }
+
+        guard keptDescriptions.count != descriptions.count else {
+            return
+        }
+
+        UserDefaults.standard.set(
+            keptDescriptions,
             forKey: Self.knownAccountDescriptionsKey
         )
     }
