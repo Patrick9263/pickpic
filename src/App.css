@@ -1419,3 +1419,60 @@ input:focus {
     display: none;
   }
 }
+
+/* Galleries this browser has opened, on the home page (#407). */
+.recent-galleries {
+  margin-top: 32px;
+  max-width: 600px;
+  width: 100%;
+}
+
+.recent-galleries h2 {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.recent-galleries ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-gallery {
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.recent-gallery-link {
+  align-items: flex-start;
+  color: var(--color-text);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 0;
+  padding: 8px 0;
+  text-decoration: none;
+}
+
+.recent-gallery-title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.recent-gallery-meta {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.recent-gallery-remove {
+  min-height: 44px;
+  min-width: 44px;
+}

@@ -13,7 +13,7 @@ import type {
   ViewerPhotoCommentRecord,
   ViewerRawDownloadRecord,
 } from "../types";
-import { fetchJson } from "../api";
+import { ApiError, fetchJson } from "../api";
 import "../styles/GalleryPage.css";
 import GalleryGrid from "../components/gallery/GalleryGrid";
 import GalleryLightbox from "../components/gallery/GalleryLightbox";
@@ -30,11 +30,15 @@ import {
   getRawRequestState,
   isLikelyInAppBrowser,
   PENDING_RAW_BATCH_KEY,
+  readRecentGalleries,
   readStorageItem,
+  removeRecentGallery,
   selectPhotosById,
   selectReadyRawPhotos,
   selectRequestableRawPhotos,
+  upsertRecentGallery,
   VISITOR_TOKEN_KEY,
+  writeRecentGalleries,
   writeStorageItem,
   type GalleryGrouping,
   type IndividualSaveEntry,
@@ -368,8 +372,36 @@ function GalleryPage({ shareToken }: GalleryPageProps) {
 
         if (galleryRequestIdRef.current === requestId) {
           setGallery(body);
+
+          // Only title and creation date -- both already on screen -- are
+          // remembered for the home page's "recently opened" list (#407).
+          writeRecentGalleries(
+            () => window.localStorage,
+            upsertRecentGallery(
+              readRecentGalleries(() => window.localStorage),
+              {
+                shareToken,
+                title: body.event.title,
+                createdAt: body.event.createdAt,
+                lastOpenedAt: new Date().toISOString(),
+              },
+            ),
+          );
         }
       } catch (caughtError) {
+        // A 404 means the link is dead for good (unpublished or deleted), so
+        // it should stop being offered on the home page. Any other failure
+        // may just be a bad connection and says nothing about the gallery.
+        if (caughtError instanceof ApiError && caughtError.status === 404) {
+          writeRecentGalleries(
+            () => window.localStorage,
+            removeRecentGallery(
+              readRecentGalleries(() => window.localStorage),
+              shareToken,
+            ),
+          );
+        }
+
         if (!options.silent && galleryRequestIdRef.current === requestId) {
           setLoadError(
             caughtError instanceof Error

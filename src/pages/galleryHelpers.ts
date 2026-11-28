@@ -596,3 +596,117 @@ export function getDefaultPreviewUrl(photo: GalleryPhotoRecord): string {
 
   return photo.variants.preview?.imageUrl ?? photo.imageUrl;
 }
+
+/*
+ * Galleries this browser has opened, newest first, so a guest can find a link
+ * again without scrolling back through a group text (#407). Per browser and
+ * per device by design -- no account, nothing sent to the worker -- and only
+ * fields the gallery already shows the guest are kept.
+ */
+export const RECENT_GALLERIES_KEY = "pickpic-recent-galleries";
+
+export const MAX_RECENT_GALLERIES = 50;
+
+export interface RecentGallery {
+  shareToken: string;
+  title: string;
+  createdAt: string;
+  lastOpenedAt: string;
+}
+
+/*
+ * Corrupt or hand-edited storage is treated as empty rather than thrown on:
+ * the list is a convenience, and a bad entry must never break the home page.
+ * Entries are validated one by one so a single bad row doesn't discard the
+ * rest.
+ */
+export function parseRecentGalleries(raw: string | null): RecentGallery[] {
+  if (raw === null) {
+    return [];
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  const galleries: RecentGallery[] = [];
+
+  for (const entry of parsed) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+
+    const candidate = entry as Partial<RecentGallery>;
+
+    if (
+      typeof candidate.shareToken !== "string" ||
+      candidate.shareToken === "" ||
+      typeof candidate.title !== "string" ||
+      typeof candidate.createdAt !== "string" ||
+      typeof candidate.lastOpenedAt !== "string"
+    ) {
+      continue;
+    }
+
+    galleries.push({
+      shareToken: candidate.shareToken,
+      title: candidate.title,
+      createdAt: candidate.createdAt,
+      lastOpenedAt: candidate.lastOpenedAt,
+    });
+  }
+
+  return galleries;
+}
+
+function sortRecentGalleries(galleries: RecentGallery[]): RecentGallery[] {
+  // ISO timestamps order correctly as strings, and the sort is stable, so
+  // ties keep their stored order.
+  return [...galleries].sort((a, b) => {
+    if (a.lastOpenedAt === b.lastOpenedAt) {
+      return 0;
+    }
+
+    return a.lastOpenedAt < b.lastOpenedAt ? 1 : -1;
+  });
+}
+
+export function upsertRecentGallery(
+  galleries: RecentGallery[],
+  entry: RecentGallery,
+): RecentGallery[] {
+  return sortRecentGalleries([
+    entry,
+    ...galleries.filter((gallery) => gallery.shareToken !== entry.shareToken),
+  ]).slice(0, MAX_RECENT_GALLERIES);
+}
+
+export function removeRecentGallery(
+  galleries: RecentGallery[],
+  shareToken: string,
+): RecentGallery[] {
+  return galleries.filter((gallery) => gallery.shareToken !== shareToken);
+}
+
+export function readRecentGalleries(
+  getStorage: () => Pick<Storage, "getItem">,
+): RecentGallery[] {
+  return sortRecentGalleries(
+    parseRecentGalleries(readStorageItem(getStorage, RECENT_GALLERIES_KEY)),
+  );
+}
+
+export function writeRecentGalleries(
+  getStorage: () => Pick<Storage, "setItem">,
+  galleries: RecentGallery[],
+): void {
+  writeStorageItem(getStorage, RECENT_GALLERIES_KEY, JSON.stringify(galleries));
+}

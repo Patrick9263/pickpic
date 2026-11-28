@@ -1,10 +1,17 @@
 import "./App.css";
 
+import { useState } from "react";
+
 import { safeDecodeShareToken } from "./appHelpers";
 import AccountSettingsPage from "./pages/AccountSettingsPage";
 import AppPage from "./pages/AppPage";
 import DashboardPage from "./pages/DashboardPage";
 import GalleryPage from "./pages/GalleryPage";
+import {
+  readRecentGalleries,
+  removeRecentGallery,
+  writeRecentGalleries,
+} from "./pages/galleryHelpers";
 import OperatorPage from "./pages/OperatorPage";
 import RawConfirmPage from "./pages/RawConfirmPage";
 import SignInPage from "./pages/SignInPage";
@@ -19,7 +26,28 @@ const ADMIN_APP_ORIGIN = (
 // stay unset rather than making every localhost path match the app shell.
 const APP_ORIGIN = import.meta.env.VITE_APP_ORIGIN || null;
 
+function formatOpenedDate(timestamp: string): string {
+  const date = new Date(timestamp);
+
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function HomePage() {
+  // Read once on mount: nothing else writes the list while this page is open,
+  // and the home page must not fetch anything to validate it (#407).
+  const [recentGalleries, setRecentGalleries] = useState(() =>
+    readRecentGalleries(() => window.localStorage),
+  );
+
+  function handleRemove(shareToken: string): void {
+    const remaining = removeRecentGallery(recentGalleries, shareToken);
+
+    setRecentGalleries(remaining);
+    writeRecentGalleries(() => window.localStorage, remaining);
+  }
+
   return (
     <main className="home-page">
       <span className="brand">PickPic</span>
@@ -32,6 +60,45 @@ function HomePage() {
         Open a shared gallery link to view photos, request edits, and leave
         comments.
       </p>
+
+      {recentGalleries.length > 0 ? (
+        <section className="recent-galleries" aria-labelledby="recent-heading">
+          <h2 id="recent-heading">Recently opened on this device</h2>
+
+          <ul>
+            {recentGalleries.map((gallery) => {
+              const openedDate = formatOpenedDate(gallery.lastOpenedAt);
+
+              return (
+                <li className="recent-gallery" key={gallery.shareToken}>
+                  <a
+                    className="recent-gallery-link"
+                    href={`/g/${encodeURIComponent(gallery.shareToken)}`}
+                  >
+                    <span className="recent-gallery-title">
+                      {gallery.title}
+                    </span>
+                    {openedDate ? (
+                      <span className="recent-gallery-meta">
+                        Opened {openedDate}
+                      </span>
+                    ) : null}
+                  </a>
+
+                  <button
+                    aria-label={`Remove ${gallery.title} from this list`}
+                    className="secondary-button recent-gallery-remove"
+                    onClick={() => handleRemove(gallery.shareToken)}
+                    type="button"
+                  >
+                    Remove
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
 
       <a className="home-admin-link" href={`${ADMIN_APP_ORIGIN}/admin`}>
         Photographer dashboard
